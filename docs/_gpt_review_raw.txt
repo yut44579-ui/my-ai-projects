@@ -1,0 +1,320 @@
+【总体判断】有条件认可。方向仍有价值，但“自然语言→Excel→定时交付”本身已不是明显空白：2026 年已有 Ilka、ConnectReport、Veezoo、Fleece AI 等产品覆盖自动 Excel 报表、定时交付、自然语言配置等能力。
+Fleece AI App
++3
+Ilka
++3
+ConnectReport
++3
+ 因此项目应从“做一个 AI 报表工具”收缩为**“可验证、可复现、可审计的报表自动化工程”**，作品集价值会更强。你们的 D2/D4/D9 是目前方案中最值得保留的核心。
+
+【方向】成立，但差异化需要重新定义。
+
+“说一次→固化→定时出报表”依然是真实需求，而且成熟产品也证明这一工作流成立。Ilka 已支持上传 XLSX/CSV、AI 构建/改造工作簿、保存方案并定时生成；ConnectReport 更直接覆盖“Excel 模板→连接数据→AI 配置→定时交付”。
+Ilka
++1
+
+Microsoft 生态也已经把 Copilot、Power BI、Excel、定时订阅结合起来，说明“大厂已经覆盖 AI+报表自动化”这一大方向。
+微软支持
++1
+
+所以不要把卖点写成“AI 自动做销售报表”，而应突出：用户确认 → 结构化报表计划 → 确定性计算 → 模板原地渲染 → 执行审计 → 可复现。
+
+这实际上是一个比“Agent 自主生成报表”更工程化的路线。
+
+【范围建议】MVP 8 项偏大，建议第一阶段只保留 3 项：
+
+数据接入 + 数据字典
+
+自然语言建报表任务 + 用户确认/固化
+
+确定性执行引擎 + Excel 模板渲染 + 执行记录
+
+暂时砍掉或延后：
+
+复杂失败处理体系
+
+多种数据源扩展
+
+完整数据映射 UI
+
+高级调度能力
+
+AI 解读的复杂能力
+
+尤其不要一开始同时做“通用报表平台”。先把一个销售周报完整跑通 20～50 次，比做 8 个模块更能证明项目成立。
+
+【技术路线建议】D2、D4、D9 基本正确，但建议把“固化”进一步升级成 Report Spec。
+
+推荐核心链路：
+
+自然语言
+   ↓
+LLM Parser
+   ↓
+Report Spec（结构化 JSON）
+   ↓
+用户确认
+   ↓
+冻结版本
+   ↓
+Deterministic Executor
+   ├─ 数据查询
+   ├─ Python 指标计算
+   ├─ 数据校验
+   └─ Excel Renderer
+   ↓
+Validation
+   ↓
+产出 + 审计记录
+
+D2 不用 Agent 框架：认可。 当前流程是有限状态工作流，不需要 LangGraph/LangChain 来制造“Agent 感”。自己实现状态机反而更能展示工程能力。
+
+D9 首次理解→固化：强烈认可。 但不要只保存 prompt；应该保存一个版本化 Report Spec，包括数据源、字段映射、时间范围、指标公式、分组、排序、模板位置、输出规则等。
+
+D4：认可，但“代码算”不等于“LLM 生成任意 Python”。 最好采用受限 DSL/JSON Schema，例如 sum/revenue/group_by/YoY/previous_period 等，再由确定性执行器解释。
+
+D6 APScheduler 可以保留；但要考虑进程重启后的任务恢复、重复执行、任务锁、执行状态，否则“定时自动”只是 demo。
+
+D7 原生 HTML/JS 可以用于 MVP，但如果目标明确是求职作品，不必为了“四个页面”强行引入 React/Vue；架构清晰比框架名更重要。
+
+【最大风险】最大的风险其实不是“AI 理解错”或“Excel 样式还原”，而是“语义正确但计算口径错误”。
+
+例如：
+
+“上周销售额”
+
+到底是：
+
+下单日期？
+
+支付日期？
+
+发货日期？
+
+Quantity × UnitPrice？
+
+是否排除 Cancelled？
+
+是否排除退货？
+
+是否含税？
+
+这类问题 AI 即使“理解了中文”，也可能得到错误业务结果。
+
+所以第一优先级应增加：
+
+Metric Definition / Business Semantics 层
+
+例如：
+
+YAML
+metric: sales_amount
+definition: quantity * unit_price
+time_field: invoice_date
+exclude:
+  - cancelled_order
+
+然后执行时做：
+
+数据 → 查询 → 计算 → 校验 → 输出
+
+而不是：
+
+数据 → LLM → Excel
+
+Excel 样式还原反而属于第二层风险。openpyxl 原地修改的路线是合理的，但需要明确模板约束，否则“任意 Excel 100% 还原”会迅速变成无底洞。
+
+【招聘价值】有，而且比普通“ChatGPT + CRUD”项目更有展示价值。
+
+它可以证明：
+
+LLM structured output / function calling
+
+Human-in-the-loop
+
+AI workflow / 状态机设计
+
+Deterministic computation
+
+数据建模与数据字典
+
+Excel 自动化
+
+定时任务
+
+失败恢复
+
+审计与可复现
+
+Evaluation / benchmark
+
+AI 与传统软件工程结合
+
+但目前还缺三个非常关键的“招聘展示点”：
+
+① Evaluation Harness
+
+不要只写：
+
+需求理解准确率 ≥85%
+
+而应该有：
+
+100 条固定测试需求
+        ↓
+LLM Parser
+        ↓
+Report Spec
+        ↓
+自动比对 Expected Spec
+        ↓
+accuracy / field accuracy / ambiguity rate
+
+② 可解释执行链
+
+让面试官能够看到：
+
+User Request
+ → Parsed Spec
+ → User Confirmation
+ → SQL
+ → Calculation
+ → Validation
+ → Excel
+
+这比一个漂亮 UI 更有价值。
+
+③ Failure Demo
+
+主动展示：
+
+“找不到销售日期字段”
+
+系统不是猜，而是：
+
+候选：
+① invoice_date
+② order_date
+③ shipped_date
+
+请确认
+
+这会非常直观地体现 AI 应用工程能力。
+
+【补充调研】有几个重要补充。
+
+Ilka：与你们的方向已经非常接近——自然语言/XLSX/CSV → Excel → 校验 → 定时报告。
+Ilka
++1
+
+→ 因此“AI 自动生成 Excel”不能作为主要创新点。
+
+ConnectReport：已经覆盖 Excel 模板、AI Agent 配置、数据连接、调度、交付，而且明确强调 deterministic/template-driven output。
+ConnectReport
+
+→ 这几乎直接验证了你们的架构方向，同时也意味着差异化必须更明确。
+
+Veezoo / Fleece AI / WorkAgent：说明“AI + 定时业务报告”已经形成独立产品方向。
+Veezoo
++2
+Fleece AI App
++2
+
+Wren AI：值得重点研究的不是它的 Agent，而是它的 semantic/context layer。它把业务定义、字段关系、指标语义、批准的 join 等作为 AI 与数据库之间的稳定上下文。
+Wren AI 文档
++2
+GitHub
++2
+
+→ 你们可以借鉴思想，但没必要引入 Wren AI。
+
+Spider 2.0：你们引用的方向是成立的。官方资料显示，在复杂企业级 text-to-SQL 场景中，GPT-4o 的成功率为 10.1%，而 Spider 1.0 为 86.6%；任务复杂度包括大型 schema、多 SQL dialect 和复杂分析。
+Spider 2.0
+
+→ 但不要把 Spider 2.0 当成“LLM 永远不能写 SQL”的证据。更准确的结论是：复杂企业数据库场景下，不能把未经验证的 LLM SQL 当作报表正确性的最终依据。
+
+【必须修改的项】
+
+P0：把“Report Spec”提升为项目核心。
+
+当前：
+
+自然语言
+→ AI理解
+→ 固化
+
+修改成：
+
+自然语言
+→ AI解析
+→ Report Spec
+→ 用户确认
+→ Spec Version 1
+→ 确定性执行
+
+并让所有执行记录绑定：
+
+report_spec_version
+data_snapshot / query
+template_version
+code_version
+execution_id
+validation_result
+
+这样项目真正形成：
+
+“AI 负责理解，人负责确认，代码负责计算，模板负责呈现，系统负责审计。”
+
+P1：MVP 缩到 3 条主链路。
+
+先只做到：
+
+上传数据 → 用一句话创建销售周报 → 确认 → 手动/定时生成正确 Excel
+
+跑通以后再扩展。
+
+P1：增加 Evaluation Harness。
+
+至少准备 50～100 条固定测试样例，分别测试：
+
+时间理解
+
+指标理解
+
+字段映射
+
+分组/排序
+
+歧义识别
+
+错误拒答
+
+Spec 一致性
+
+数字正确性
+
+P1：把“98% 数字准确率”改成更严格的测试定义。
+
+至少拆成：
+
+字段映射准确率
+指标定义准确率
+查询结果准确率
+计算结果准确率
+最终 Excel 数字准确率
+
+否则“数字准确率 98%”很难知道到底测的是什么。
+
+P2：重新定义差异化。
+
+不要宣传：
+
+“AI 自动做销售报表”
+
+建议项目定位改成：
+
+“面向固定业务报表的可确认、可复现、可审计 AI 报表自动化系统。”
+
+这会比“又一个 AI Agent”更有作品集辨识度。
+
+最终建议：可以开工，但不要按当前 8 项完整 MVP 直接开发。先把 Report Spec + 确定性执行 + Evaluation Harness 三个核心打牢，再做 Excel 模板和调度。

@@ -1,0 +1,779 @@
+{
+  "seed": 42,
+  "generated_for": "sales-report-agent / UCI Online Retail",
+  "anchor_date": "2011-12-12",
+  "anchor_note": "所有相对时间以 2011-12-12（周一，数据集最后一条记录 2011-12-09 之后的第一个周一）为基准。上周=2011-12-05~2011-12-11；上上周=2011-11-28~2011-12-04；上月=2011-11-01~2011-11-30；今年=2011-01-01~2011-12-09；去年=2010-12-01~2010-12-31。数据集范围 2010-12-01 08:26 ~ 2011-12-09 12:50，共 541,909 行。",
+  "split_rule": "分层随机，random.seed(42) 后按类型分别抽样：normal 16→dev13/holdout3，edge 16→dev13/holdout3，needs_clarification 18→dev14/holdout4；合计 dev 40 / holdout 10。holdout 编号：n01,n04,n12,e04,e09,e15,c03,c04,c05,c10。",
+  "cases": [
+    {
+      "id": "n01",
+      "type": "normal",
+      "split": "holdout",
+      "user_input": "做个上周的销售汇总",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周，周一~周日）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "大白话型，未给参考物。上周 5 个工作日（12-05~12-09，合计 17,706 行 / £300,605.22 / 632 张单）都有数据，12-10 是周六（全期周六无交易）、12-11 超出数据集末尾；报表应如实呈现，不因缺失日而报错。"
+    },
+    {
+      "id": "n02",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "照这个表做上周的，格式别动",
+      "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周，周一~周日）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "给样本型。参考物决定列结构与样式，必须 openpyxl 原地改，不得用 pandas 重建（否则丢样式）。"
+    },
+    {
+      "id": "n03",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "我想看看每个月卖了多少钱",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额"],
+        "time_range": "2010-12-01 ~ 2011-12-09（全期，按月分组，共 13 个月）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "大白话型。未给时间范围时应默认全期并按月聚合；首月（2010-12）与末月（2011-12）为不完整月，需保留。"
+    },
+    {
+      "id": "n04",
+      "type": "normal",
+      "split": "holdout",
+      "user_input": "按这个国家报表的样子，出一下上个月各个国家的销售额",
+      "reference": {"kind": "excel", "path": "templates/sample_monthly_by_country.xlsx"},
+      "expected": {
+        "metrics": ["销售额"],
+        "time_range": "2011-11-01 ~ 2011-11-30（上月）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "给样本型 + 维度已明示（Country）。2011-11 共 84,711 行，38 个国家中只有 24 个当月有订单（其余国家应不出现在结果里，或按 0 补齐——口径需固化）；'Unspecified' 为非真实国家值，应保留并可在解读中提示。"
+    },
+    {
+      "id": "n05",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "像这个周报，再加一列跟上上周比，看是涨了还是跌了",
+      "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
+      "expected": {
+        "metrics": ["销售额", "订单数", "环比（vs 上上周）"],
+        "time_range": "本周 2011-12-05 ~ 2011-12-11，对比期 2011-11-28 ~ 2011-12-04",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "混合型（样本 + 加需求）。环比须由代码计算，不得由 LLM 估；对比期口径需在方案里固化。"
+    },
+    {
+      "id": "n06",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "卖得最好的10个商品是哪些",
+      "reference": null,
+      "expected": {
+        "metrics": ["商品销售额 Top10"],
+        "time_range": "2010-12-01 ~ 2011-12-09（全期）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "大白话型，排序指标未明说（销售额 or 销量）。默认按销售额降序并在方案中写明口径。注意：按销售额排序时全期 Top1 是 'DOTCOM POSTAGE'（邮费伪商品，£206,245.48），真实商品 Top1 才是 'REGENCY CAKESTAND 3 TIER'（£164,762.19）——是否剔除邮费/费用行直接改变榜首，属必须明确的口径（见 e16）。"
+    },
+    {
+      "id": "n07",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "这个客户排行表，出一下今年的",
+      "reference": {"kind": "excel", "path": "templates/sample_customer_rank.xlsx"},
+      "expected": {
+        "metrics": ["客户销售额排行"],
+        "time_range": "2011-01-01 ~ 2011-12-09（今年）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "给样本型 + 相对时间（今年）。CustomerID 为空的行（135,080 行，占 24.9%）无客户可归，必须在方案中说明剔除规则。"
+    },
+    {
+      "id": "n08",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "上周哪个国家买得最多",
+      "reference": null,
+      "expected": {
+        "metrics": ["国家销售额排行"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "大白话型，'买得最多' 需落成销售额口径（非订单数/客户数）。预期第一为 United Kingdom。"
+    },
+    {
+      "id": "n09",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "照这个模板做上周的销售周报，但是把国家换成商品",
+      "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "混合型（沿用样式、替换维度）。维度列改为 Description 分组，表头文案与样式需与参考物保持一致。"
+    },
+    {
+      "id": "n10",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "上个月一共多少个客户下单了",
+      "reference": null,
+      "expected": {
+        "metrics": ["下单客户数"],
+        "time_range": "2011-11-01 ~ 2011-11-30（上月）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "大白话型 + 计数指标。需区分 '客户数（去重）' 与 '订单数'；CustomerID 空值行不计入客户数，规则须固化。"
+    },
+    {
+      "id": "n11",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "跟这个一样的表，时间换成去年12月",
+      "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "2010-12-01 ~ 2010-12-31（去年 12 月）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "给样本型 + 跨年相对时间。2010-12 是数据集首月：12-01 之前无数据（首周只有 12-01/02/03/05 四天），月末 12-27 ~ 12-31 也无交易（圣诞歇业，数据到 2011-01-03 才恢复）；月度汇总须能容纳不完整首尾。"
+    },
+    {
+      "id": "n12",
+      "type": "normal",
+      "split": "holdout",
+      "user_input": "统计一下每周的订单量，做个趋势，顺便说说有没有异常",
+      "reference": null,
+      "expected": {
+        "metrics": ["周订单数", "文字解读"],
+        "time_range": "2010-12-01 ~ 2011-12-09（全期，按周分组）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "大白话型 + 明确要求解读。解读由 LLM 写，但引用的数字必须来自代码算出的结果表（不得 LLM 自己算）。周分组按周一起算。"
+    },
+    {
+      "id": "n13",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "像这个周报这样，但我要按国家拆开，再算个平均每单多少钱",
+      "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
+      "expected": {
+        "metrics": ["销售额", "订单数", "客单价（销售额/订单数）"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "混合型 + 多指标 + 派生指标。'平均每单多少钱' 应固化为 销售额/去重订单数，用户已给出口径，不需追问。"
+    },
+    {
+      "id": "n14",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "2011年花钱最多的前10个客户是谁",
+      "reference": null,
+      "expected": {
+        "metrics": ["客户销售额 Top10"],
+        "time_range": "2011-01-01 ~ 2011-12-09（今年）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "大白话型 + 排行。需剔除 CustomerID 为空的 135,080 行；客户标识按 CustomerID 分组（非 Country）。"
+    },
+    {
+      "id": "n15",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "这个商品排行表，帮我做上个月的",
+      "reference": {"kind": "excel", "path": "templates/sample_product_rank.xlsx"},
+      "expected": {
+        "metrics": ["商品销售额排行"],
+        "time_range": "2011-11-01 ~ 2011-11-30（上月）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "给样本型。商品标识应按 StockCode 分组、Description 展示；同一 StockCode 存在大小写变体（如 15056BL / 15056bl），需在方案里说明是否归一。"
+    },
+    {
+      "id": "n16",
+      "type": "normal",
+      "split": "dev",
+      "user_input": "上周每天的销售额分别是多少",
+      "reference": null,
+      "expected": {
+        "metrics": ["日销售额"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周，按天分组）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "大白话型 + 日粒度。12-05~12-09 这 5 个工作日都有数据，12-10 为周六（全期无交易）、12-11 超出数据集末尾（止于 2011-12-09）；应输出 7 行（缺失日补 0 或标注无数据，规则需固化），不可只出 5 行造成误读。"
+    },
+
+    {
+      "id": "e01",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "做一下 2012 年 1 月的销售汇总",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "2012-01-01 ~ 2012-01-31（数据集范围外）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：空数据（超范围）。数据集最晚 2011-12-09，2012-01 命中 0 行。期望行为：明确报错/提示无数据，**不产出报表文件**（铁律5）。"
+    },
+    {
+      "id": "e02",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "统计一下 12 月 10 号到 11 号的销售",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "2011-12-10 ~ 2011-12-11（周六~周日）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：空数据（两日 0 行）。原因有二且不同：12-10 是周六（该数据集全期周六均无交易），12-11 已超出数据集末尾（最后一条 2011-12-09）。需与 e01 '超范围' 区分：这里应给出 0 值并说明原因，而非当作数据源故障。"
+    },
+    {
+      "id": "e03",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "用这个表做上个月的销售汇总",
+      "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "2011-11-01 ~ 2011-11-30（上月）",
+        "data_source": "Online Retail 中文改名字段变体（data/mock/orders_cn.xlsx：订单号/商品编码/商品描述/数量/单价/日期/客户ID/国家）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：字段改名（中文）。AI 需把中文列名映射到标准口径（数量×单价=销售额、订单号去重=订单数、日期=时间维度），映射结果要在方案里展示。"
+    },
+    {
+      "id": "e04",
+      "type": "edge",
+      "split": "holdout",
+      "user_input": "帮我按周汇总一下这个文件",
+      "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "2010-12-01 ~ 2011-12-09（全期，按周分组）",
+        "data_source": "Online Retail 英文改名字段变体（data/mock/orders_renamed.xlsx：Sales / OrderDate / Qty / Price / Customer / Country）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：字段改名（英文）。'Sales' 已是金额列、'Qty'×'Price' 也能算出金额，两者应一致；方案需写明选用哪一列，避免重复计算。"
+    },
+    {
+      "id": "e05",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "算一下跨年那一周的销售，就是 12 月 27 号到 1 月 2 号",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "2010-12-27 ~ 2011-01-02（跨年周）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：跨年周 + 空数据。该周在数据集中确实 0 行（圣诞歇业，数据从 2011-01-03 恢复），处理逻辑须按日期区间而非按年，避免跨年被截断成两段。"
+    },
+    {
+      "id": "e06",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "把 12 月 1 号到 1 月 2 号的销售拉出来，我做圣诞季复盘",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额", "订单数", "日销售额"],
+        "time_range": "2011-12-01 ~ 2012-01-02（终点超数据集范围，应截断到 2011-12-09 并告知）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：时间范围部分超界。起点（12-01~12-09）有数据、终点超出（数据集止于 2011-12-09）。期望：截断到可用范围 + 明确提示数据只到 12-09，不得静默少算，也不得因终点越界就整段报错。"
+    },
+    {
+      "id": "e07",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "数据集里第一周（11 月 29 号到 12 月 5 号）卖了多少钱",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额"],
+        "time_range": "2010-11-29 ~ 2010-12-05（首周，实际仅 2010-12-01 一天有数据）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：时间范围特殊（不完整首周）。该周只有 12-01、12-02、12-03、12-05 四天有交易（合计 10,144 行 / £181,847.25）：11-29、11-30 早于数据集起始（首条 2010-12-01 08:26），12-04 是周六（全期周六无交易）。不足 7 天，解读中应说明样本不完整。"
+    },
+    {
+      "id": "e08",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "上周的销售额、订单数、客单价、退货率一起给我",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额", "订单数", "客单价", "退货率"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：多指标组合。分母口径须一次说清（客单价=销售额/订单数；退货率=退货行数或退货金额占比），四个指标全部由代码计算。"
+    },
+    {
+      "id": "e09",
+      "type": "edge",
+      "split": "holdout",
+      "user_input": "上周的销售汇总，退货也算进去",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额（含退货冲减）", "订单数"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：含退货。用户明确要求含退货 → Quantity<0 的行按负值计入销售额（净额），不需追问口径；周内退货行数需在结果中可核对。"
+    },
+    {
+      "id": "e10",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "把取消的单子也算上，给我看上周的销售总额",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额（含取消单）", "订单数"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：含取消单。取消单 InvoiceNo 以 C 开头（全期 9,288 行）、Quantity 为负；'算上' 的语义需明确为按负值计入总额，而非计入订单数（取消单不应算作有效订单）。"
+    },
+    {
+      "id": "e11",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "上周有多少个客户下单，顺便看看客户都分布在哪些国家",
+      "reference": null,
+      "expected": {
+        "metrics": ["下单客户数", "客户数按国家分布"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：CustomerID 为空。全期 135,080 行无客户 ID（占 24.9%），这些行有交易但无法归属客户；须在产出中说明剔除规则与影响量，不能静默丢失也不可编造客户。"
+    },
+    {
+      "id": "e12",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "按国家和商品两个维度看 11 月的销售额",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额（Country × StockCode 交叉）"],
+        "time_range": "2011-11-01 ~ 2011-11-30（上月）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：多维交叉 + 输出规模。38 国 × 数千商品会产生大量空组合（2011-11 共 3,462 张单），需限定 Top-N 或按国家分表，规则要写进方案避免产出巨大空表。"
+    },
+    {
+      "id": "e13",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "只看周末的订单，整个数据范围都要",
+      "reference": null,
+      "expected": {
+        "metrics": ["订单数", "销售额"],
+        "time_range": "2010-12-01 ~ 2011-12-09（全期，仅周六/周日）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：时间逻辑按星期几过滤。真实数据里 **周六全期 0 行**（54 周没有一个周六有交易），**周日有 64,375 行**（占 11.9%）——'周末' 必须按周六∪周日并集处理，想当然认为'周末不发单'会得出 0 的错误结论，只判周六也一样错；正确结果约 64,375 行。"
+    },
+    {
+      "id": "e14",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "上周退货金额有多少，涉及多少张单",
+      "reference": null,
+      "expected": {
+        "metrics": ["退货金额", "退货单数"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：退货单独成指标。识别规则需固定（Quantity<0 或 InvoiceNo 以 C 开头，两者不完全重合），'退货金额' 取绝对值展示、'退货单数' 按订单号去重。"
+    },
+    {
+      "id": "e15",
+      "type": "edge",
+      "split": "holdout",
+      "user_input": "2010 年 12 月 1 号当天的销售情况",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "2010-12-01 ~ 2010-12-01（单日，数据集首日）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：极小范围（单日）。该日 3,108 行 / £58,635.56，起止同日，区间应为左闭右闭、不能漏掉当日；也是数据集边界日（最早一条 2010-12-01 08:26），易被 <= 与 < 写错。"
+    },
+    {
+      "id": "e16",
+      "type": "edge",
+      "split": "dev",
+      "user_input": "上周销售额多少？注意数据里有些不是商品的记录",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额"],
+        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
+        "output": "excel",
+        "must_ask": false
+      },
+      "notes": "边界：脏数据（非商品行）。StockCode 含 POST（1256 行，邮费）、DOT、M、D、S（手工调整）、BANK CHARGES、AMAZONFEE 等非商品行，会污染商品维度统计；须给出过滤规则（如仅保留标准商品编码）并在产出中说明影响。"
+    },
+
+    {
+      "id": "c01",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "把 CRM 系统里的客户表拉过来做个客户分析",
+      "reference": null,
+      "expected": {
+        "metrics": ["待确认"],
+        "time_range": null,
+        "data_source": "待确认（项目当前只有 Online Retail 一个数据源，无 CRM）",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "数据源不存在：需告知'当前没有 CRM 数据源'，列出可选数据源让用户选择，或引导用户上传 CRM 导出文件；禁止拿 Online Retail 冒充 CRM 表。"
+      },
+      "notes": "找不到对应表。铁律4：列候选让用户选，禁止瞎猜。"
+    },
+    {
+      "id": "c02",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "按销售区域汇总一下销售额",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额"],
+        "time_range": "待确认",
+        "data_source": "Online Retail / 字段映射待确认",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "字段缺失：数据里没有'销售区域'，只有 Country（38 个值，含 Unspecified / European Community）。需提问：是否就用 Country 代替？还是需要另建区域映射表（如把国家归到大区）？"
+      },
+      "notes": "找不到对应字段。边界场景必须提问（指标：人工确认必要性 100%）。"
+    },
+    {
+      "id": "c03",
+      "type": "needs_clarification",
+      "split": "holdout",
+      "user_input": "上周的销售额是多少",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额"],
+        "time_range": "待确认（未说明周口径）",
+        "data_source": "Online Retail",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "口径歧义两处：(1)'销售'含不含退货（Quantity<0，全期 10,624 行）与取消单（InvoiceNo 以 C 开头，9,288 行）——是净额还是仅正向销售额；(2)'上周'是自然周周一~周日还是最近 7 天。需给出候选口径让用户选，不得默认其一直接出数。"
+      },
+      "notes": "口径歧义 + 时间口径歧义，且未给参考物可参照。"
+    },
+    {
+      "id": "c04",
+      "type": "needs_clarification",
+      "split": "holdout",
+      "user_input": "算一下平均单价",
+      "reference": null,
+      "expected": {
+        "metrics": ["平均单价"],
+        "time_range": "待确认",
+        "data_source": "Online Retail",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "指标口径歧义：平均单价 = 销售额合计 / 数量合计（加权，业务常用）还是 UnitPrice 列的行均值（会被低价小单拉偏）？两者结果差异明显。另需确认时间范围与是否含退货。"
+      },
+      "notes": "口径歧义（加权 vs 简单平均）+ 时间范围缺失。"
+    },
+    {
+      "id": "c05",
+      "type": "needs_clarification",
+      "split": "holdout",
+      "user_input": "帮我做个报表",
+      "reference": null,
+      "expected": {
+        "metrics": [],
+        "time_range": null,
+        "data_source": "待确认",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "需求完全含糊：维度（按商品/客户/国家/时间？）、指标（销售额/订单数/客单价？）、时间范围（上周/上月/全期？）、数据源（用哪个文件？）四项全缺。需一次性问清，并可给出 2~3 个常见报表模板供用户选择。"
+      },
+      "notes": "需求含糊的极端情况：无维度、无指标、无时间。"
+    },
+    {
+      "id": "c06",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "看看这批数据怎么样",
+      "reference": null,
+      "expected": {
+        "metrics": ["待确认"],
+        "time_range": "待确认",
+        "data_source": "待确认（用户未指明是哪批数据）",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "目的不明且指向不明：'这批数据' 未指明文件；'怎么样' 不是可执行需求（是要数据质量体检、还是销售概览？）。需提问：看哪个文件、想回答什么问题。"
+      },
+      "notes": "需求含糊 + 数据源指向不明。"
+    },
+    {
+      "id": "c07",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "给我最近的数据",
+      "reference": null,
+      "expected": {
+        "metrics": ["待确认"],
+        "time_range": "待确认（'最近' 未定义）",
+        "data_source": "Online Retail",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "时间范围歧义：'最近' 是最近 1 周 / 1 个月 / 3 个月？且需告知数据只到 2011-12-09，'最近' 是相对数据集末尾还是相对今天。另需确认要哪些指标。"
+      },
+      "notes": "时间范围含糊 + 指标缺失。"
+    },
+    {
+      "id": "c08",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "上周的数据",
+      "reference": null,
+      "expected": {
+        "metrics": ["待确认"],
+        "time_range": "待确认（候选：自然周 2011-12-05~12-11 / 最近 7 天 2011-12-03~12-09）",
+        "data_source": "Online Retail",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "时间口径歧义：'上周' 指自然周（周一~周日）还是滚动最近 7 天；另数据实际只到 2011-12-09（周五），是否接受不完整周。同时指标未给，需问要算什么。"
+      },
+      "notes": "时间口径歧义 + 指标缺失（仅给时间不给指标）。"
+    },
+    {
+      "id": "c09",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "按客户看销售额排行，排前 20",
+      "reference": null,
+      "expected": {
+        "metrics": ["客户销售额排行 Top20"],
+        "time_range": "待确认（未给时间范围，候选：全期 / 上月 / 上周）",
+        "data_source": "Online Retail",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "空客户处理需确认：135,080 行（24.9%）CustomerID 为空，既不能归入某客户也不宜丢弃；需问用户是剔除（并在表下注明剔除行数与金额）、还是单独列一行 '未知客户'。另时间范围未给，需一并确认。"
+      },
+      "notes": "空客户 + 时间范围缺失。"
+    },
+    {
+      "id": "c10",
+      "type": "needs_clarification",
+      "split": "holdout",
+      "user_input": "从订单系统里取上个月的销售",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额"],
+        "time_range": "2011-11-01 ~ 2011-11-30（上月）",
+        "data_source": "待确认（'订单系统' 未接入；需确认改用 Online Retail 还是先配置 MySQL 数据源）",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "数据源不存在：需告知'订单系统'未接入，列候选让用户选——(a) 用现有 Online Retail 数据（可立即产出）(b) 提供 MySQL 连接信息新建数据源。不得默认用 Online Retail 顶替用户说的'订单系统'。"
+      },
+      "notes": "找不到对应表/数据源，但时间与指标清楚。"
+    },
+    {
+      "id": "c11",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "算一下上个月的利润",
+      "reference": null,
+      "expected": {
+        "metrics": ["利润"],
+        "time_range": "2011-11-01 ~ 2011-11-30（上月）",
+        "data_source": "Online Retail（缺成本数据）",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "指标不可计算：数据只有 Quantity / UnitPrice（售价），没有成本/进价/运费字段，无法算利润。需提问：是否有成本表可提供？或退而求其次用'销售额+毛利替代口径'（需用户明确认可）。禁止自行假设毛利率编数。"
+      },
+      "notes": "找不到字段导致指标不可算。"
+    },
+    {
+      "id": "c12",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "上个月的客单价是多少",
+      "reference": null,
+      "expected": {
+        "metrics": ["客单价"],
+        "time_range": "2011-11-01 ~ 2011-11-30（上月）",
+        "data_source": "Online Retail",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "口径歧义：客单价 = 销售额 / 订单数（3,462 张单）还是 销售额 / 下单客户数（1,711 人）？两者相差约一倍。需让用户选，并确认销售额是否含退货与取消单。"
+      },
+      "notes": "口径歧义（分母不同），时间范围清楚。"
+    },
+    {
+      "id": "c13",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "像上次那个表一样再做一份",
+      "reference": null,
+      "expected": {
+        "metrics": ["待确认"],
+        "time_range": "待确认",
+        "data_source": "待确认",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "参考物缺失：用户说'上次那个表'，但既未提供文件也未指明是哪次任务。需提问：请提供参考物 Excel，或从历史任务列表中指定一个任务复用其固化方案。"
+      },
+      "notes": "参考物指向缺失（有历史任务时也可从任务列表复用，属可选解法）。"
+    },
+    {
+      "id": "c14",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "按产品分类统计一下销售额",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额（按产品分类）"],
+        "time_range": "待确认",
+        "data_source": "Online Retail / 字段映射待确认",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "字段缺失：数据里没有商品分类字段，Description 也只是自由文本（无可靠品类词根）。需提问：(a) 提供分类映射表 (b) 用 StockCode 前几位粗分 (c) 改成按商品（StockCode）维度统计。另时间范围未给。"
+      },
+      "notes": "找不到对应字段 + 时间范围缺失。"
+    },
+    {
+      "id": "c15",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "算一下总销售额折合人民币是多少",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额（人民币）"],
+        "time_range": "待确认",
+        "data_source": "Online Retail（币种为英镑，无汇率数据）",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "币种/汇率缺失：原数据金额为英镑（£9,747,747.93 全期），系统没有汇率表，也不该用 LLM 猜汇率。需提问：按哪个汇率、哪一天的汇率折算？或确认直接输出英镑原值。"
+      },
+      "notes": "口径/换算依据缺失，禁止 LLM 编汇率。"
+    },
+    {
+      "id": "c16",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "以后每周一早上自动给我出一份上周的销售周报",
+      "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
+      "expected": {
+        "metrics": ["销售额", "订单数"],
+        "time_range": "每周一 08:00 触发出上周（周一~周日）",
+        "data_source": "Online Retail",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "定时任务参数待确认：具体几点执行、产出文件存哪（outputs/ 目录还是别处）、任务叫什么名字、销售额是否含退货与取消单。参考物已给，指标维度清楚，仅需确认这些执行细节后固化。"
+      },
+      "notes": "需求基本清楚但排期/口径细节待确认；确认后应固化成任务（不产出），符合'首次理解→确认→固化'流程。"
+    },
+    {
+      "id": "c17",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "按销售员统计一下业绩，看看谁卖得多",
+      "reference": null,
+      "expected": {
+        "metrics": ["销售额（按销售员）"],
+        "time_range": "待确认",
+        "data_source": "Online Retail / 字段映射待确认",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "字段缺失：数据里没有任何销售员/员工字段（只有 InvoiceNo/StockCode/Description/Quantity/InvoiceDate/UnitPrice/CustomerID/Country）。需提问：是否能提供订单-销售员对应表？或改用客户/国家维度看业绩。"
+      },
+      "notes": "找不到对应字段。"
+    },
+    {
+      "id": "c18",
+      "type": "needs_clarification",
+      "split": "dev",
+      "user_input": "帮我看看哪些商品该补货了",
+      "reference": null,
+      "expected": {
+        "metrics": ["待确认（补货指标）"],
+        "time_range": "待确认",
+        "data_source": "Online Retail（无库存数据）",
+        "output": "excel",
+        "must_ask": true,
+        "clarify_about": "目标与数据都不清：补货需要库存量/安全库存/在途/交期，本数据只有历史交易没有库存；且'该补货' 的判定口径未给（近 N 周销量超阈值？）。需提问：是否有库存表？若没有，是否退化为'近 N 周热销商品 Top N'（口径需用户确认）。"
+      },
+      "notes": "目标不明 + 关键数据缺失，禁止自造补货规则。"
+    }
+  ]
+}
