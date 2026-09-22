@@ -8,6 +8,7 @@
 |---|---|---|---|
 | TASK-001 | 写 50 条测试集 `tests/test_cases.json` | ✅ 产物已生成 | 分布 16/16/18 · dev40/holdout10；⚠️ 16 条 normal 用例日期越界待修 |
 | TASK-001-FIX | 修日期越界（挪到完整数据周） | ⏳ 待办 | 指令已写：`docs/施工指令-TASK-001-FIX.md` |
+| TASK-002A | 销售额口径（D16）+ 独立 Oracle 验证 | ✅ 完成（待门禁） | 产物：`app/engine/loader.py` `metrics.py` `executor.py` + `tests/test_executor.py`；pytest 7 passed；2011-11-21~27 销售额 **316,412.16**，与独立 Oracle 差值为 0 |
 
 ## 进行中 / 待办
 | ID | 任务 | 交付物 | 验收标准 |

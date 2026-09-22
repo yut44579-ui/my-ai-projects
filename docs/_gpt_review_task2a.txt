@@ -1,0 +1,398 @@
+结论
+
+目前不能直接交给 Claude CLI。必须先改 2 个阻塞问题；另外有 3 个强烈建议修正的问题。
+
+整体上，这版已经比普通“施工说明”严谨很多，核心口径、Oracle 独立校验、反向校验、数据哈希、Scope、验收证据链都已经基本收口。但当前文本里仍存在会导致 Claude 无法无歧义实现，甚至实现后测试逻辑自相矛盾的地方。
+
+一、必须先改的 2 个阻塞项
+BLOCKER-1：validations 的类型定义前后矛盾
+
+前面返回值写的是：
+
+Python
+运行
+"validations": list
+
+但 AC-05 又明确要求：
+
+executor 返回的 validations 必须是 dict
+
+这属于接口契约冲突。
+
+而且后面又规定：
+
+customer_id_nulls : int
+duplicate_rows    : int
+excluded_net_amount : float
+checks : list
+
+所以这里实际上已经明确了正确类型应该是：
+
+Python
+运行
+"validations": {
+    "customer_id_nulls": int,
+    "duplicate_rows": int,
+    "excluded_net_amount": float,
+    "checks": list
+}
+必须修改成
+返回：
+{
+    "amount": float,
+    "rows_in_range": int,
+    "rows_excluded": int,
+    "excluded_amount": float,
+    "excluded_detail": {
+        "cancelled": int,
+        "negative_qty": int,
+        "nonpositive_price": int,
+        "multi_rule_hit": int
+    },
+    "validations": dict,
+    "seconds": float
+}
+
+这是必须改的，否则 Claude 有合理理由选择任意一种解释。
+
+BLOCKER-2：rows_excluded / excluded_amount 在关闭规则时的语义没有完全定义
+
+你已经定义了：
+
+某条规则被关闭，其计数键置 0。
+
+但还缺一个关键问题：
+
+当某些排除规则关闭时，rows_excluded、multi_rule_hit、excluded_amount 到底统计什么？
+
+例如：
+
+Python
+运行
+exclude_cancelled=False
+exclude_negative_qty=True
+exclude_nonpositive_price=True
+
+一行同时满足：
+
+cancelled
+
+negative_qty
+
+此时：
+
+cancelled 不再排除
+
+negative_qty 仍排除
+
+那么这行：
+
+negative_qty 是否 +1？显然应该是
+
+cancelled 是否 0？已经规定是
+
+multi_rule_hit 是 0 还是 1？
+
+rows_excluded 是 1 还是其他？
+
+excluded_amount 是否包含它？应该包含，因为它最终仍被排除。
+
+尤其是 multi_rule_hit，当前定义：
+
+同时命中 ≥2 条排除规则的去重行数
+
+这里的“排除规则”究竟是原始三条规则，还是当前启用的规则？
+
+如果不写死，Claude 很容易出现两种实现。
+
+建议直接补成
+统计规则均以“当前启用的 exclude_* 规则”为准：
+
+- rows_excluded：至少命中一条“已启用排除规则”的去重行数
+- excluded_detail：仅统计已启用规则；关闭规则对应键固定为 0
+- multi_rule_hit：同时命中 ≥2 条“已启用排除规则”的去重行数
+- excluded_amount：最终因已启用规则被排除的行的 Quantity*UnitPrice 之和
+
+这样关闭规则的反向校验才真正具有确定语义。
+
+二、强烈建议修改的 3 个问题
+1. end ... 23:59:59.999 建议不要用“最后一毫秒”实现
+
+你目前写的是：
+
+end 补位为当天 23:59:59.999
+
+这本身是可以实现的，但 Excel/Pandas 的 datetime64[ns] 实际精度高于毫秒。
+
+因此严格来说：
+
+2011-11-27 23:59:59.999500
+
+是否属于当天？
+
+按照“23:59:59.999”字面定义，它不属于。
+
+但业务上的“含首尾全天”通常更稳妥的实现是：
+
+InvoiceDate >= start 00:00:00
+AND InvoiceDate < end + 1 day
+
+也就是：
+
+[2011-11-21 00:00:00, 2011-11-28 00:00:00)
+
+这才能真正表达“含 27 日全天”。
+
+**但是注意：**你已经把 D16 固化成 23:59:59.999，所以不能让 Claude 自己改口径。
+
+建议在 D16/TASK 中明确：
+
+实现允许使用等价的半开区间：
+InvoiceDate >= start_datetime
+AND InvoiceDate < end_date + 1 day
+
+其业务语义必须等价于：
+start 00:00:00 ~ end 23:59:59.999
+
+否则不要让 Claude 自行发挥。
+
+2. “完全重复行数”的定义还不够精确
+
+现在写：
+
+duplicate_rows = 完全重复行数
+
+问题是 pandas：
+
+Python
+运行
+df.duplicated().sum()
+
+统计的是重复出现的后续行数量，不是“重复组涉及的总行数”。
+
+例如：
+
+A
+A
+A
+
+duplicated().sum() = 2。
+
+但有人可能理解成：
+
+完全重复的行数量 = 3
+
+这会影响测试。
+
+建议明确：
+
+duplicate_rows：
+采用 pandas duplicated(keep="first").sum() 语义，
+即每个完全重复组保留首次出现行，其余重复出现行计数。
+本 TASK 不删除这些行。
+
+这样 Oracle 和 executor 可以严格一致。
+
+3. AC-04 的“所有行纳入”措辞有歧义
+
+目前：
+
+断言 [2011-11-21 ... 2011-11-27 ...] 内所有行纳入
+
+容易被 Claude 理解成：
+
+区间内所有原始行最终都进入 amount。
+
+但实际显然不是：
+
+时间区间内所有原始行
+    ↓
+进入 rows_in_range
+    ↓
+再应用取消单 / Quantity / UnitPrice 排除规则
+    ↓
+有效行
+    ↓
+sales_amount
+
+所以建议改成：
+
+断言时间筛选阶段完整纳入区间内所有原始行；
+rows_in_range 必须等于该时间区间内原始行数。
+随后再独立应用排除规则。
+
+这个非常重要。
+
+三、还有一个我建议补强的地方：Oracle 的“独立”目前还可以更严格
+
+你的要求：
+
+Oracle 不得 import 或复用 loader/metrics/executor
+
+这是正确的。
+
+但 Claude 很可能写出：
+
+Python
+运行
+from app.engine.loader import ...
+
+没有；这一点你已经禁止。
+
+不过还可能出现另一种“伪独立”：
+
+Python
+运行
+oracle = df[
+    ...
+]
+
+然后测试拿 executor 的某些常量，比如：
+
+Python
+运行
+START_DATE
+END_DATE
+
+这虽然没有复用函数，但实际上仍然共享被测路径的定义。
+
+建议增加一句
+Oracle 必须在测试中独立定义：
+- Excel 路径
+- InvoiceDate 时间筛选
+- 三条排除条件
+- Quantity * UnitPrice
+- 求和
+
+不得从 app.engine.* 导入常量、规则、字段定义或中间结果。
+测试仅允许使用 pandas/openpyxl 等已有依赖。
+
+这样才是真正的第二实现。
+
+四、整体结构本身是合理的
+
+这一点我认为不用推翻。
+
+特别是下面几个设计已经达到可以进入施工阶段的程度：
+
+① Executor 与 Oracle 双路径
+
+这是这份方案最大的优点。
+
+不是：
+
+代码算出来 = 测试算出来
+
+而是：
+
+                 ┌─ executor → amount
+Excel → pandas ──┤
+                 └─ Oracle   → amount
+                       ↓
+                    assert ==
+
+这避免了测试和实现共享同一 bug。
+
+② AC-03 反向校验设计是正确方向
+
+尤其你专门纠正了：
+
+不要断言“关闭排除后金额变大”
+
+这个修正是合理的。
+
+因为：
+
+excluded_amount
+=
+Quantity × UnitPrice
+
+负 Quantity 的退货行通常会贡献负金额。
+
+所以：
+
+开启排除：
+valid_amount = 原始金额 - excluded_net_amount
+
+如果 excluded_net_amount < 0：
+
+关闭排除后：
+raw_amount < valid_amount
+
+因此只断言金额发生变化，而不假设变化方向，更稳健。
+
+③ SHA256 门禁合理
+
+这个设计非常适合当前阶段。
+
+你实际上把：
+
+代码正确
++
+测试正确
++
+数据版本正确
+
+三个问题分开了。
+
+尤其对于这种固定 Excel 项目，数据漂移是很现实的问题。
+
+公开的 Online Retail 数据本身约有 541,909 条记录、8 个字段，InvoiceDate 是交易日期时间字段，InvoiceNo 以 C 开头代表取消单，这与你当前 D16 的基础数据模型是一致的。
+Datalab
++1
+
+五、我建议 Hermes 最终只做这一轮修改
+
+不要让 Hermes 再大改施工方案。
+
+只修下面 5 项：
+
+[必须]
+1. validations: list → dict
+
+[必须]
+2. 明确 exclude_* 关闭后的：
+   rows_excluded
+   multi_rule_hit
+   excluded_amount
+   均只基于“当前启用规则”
+
+[建议]
+3. 明确时间区间允许用：
+   >= start AND < end+1day
+   实现“含首尾全天”的等价语义
+
+[建议]
+4. 明确 duplicate_rows 使用：
+   duplicated(keep="first").sum()
+
+[建议]
+5. AC-04 改成：
+   “时间筛选阶段完整纳入区间内所有原始行；
+    rows_in_range = 区间原始行数；
+    再应用排除规则。”
+最终评审结论
+项目	结论
+总体方向	✅ 正确
+Scope 控制	✅ 很好
+D16 固化	✅ 已基本达到施工条件
+独立 Oracle	✅ 核心设计正确
+反向校验	✅ 正确
+数据哈希	✅ 正确
+验收证据要求	✅ 足够严格
+Claude 可直接施工	❌ 暂时不建议
+必须修改	2 项
+建议修改	3 项
+是否需要重新评审整个方案	❌ 不需要
+
+最终判定：CONDITIONAL PASS / BLOCKED BEFORE IMPLEMENTATION。
+
+也就是说：不是方案方向有问题，而是接口契约还有两个明确的歧义。把上面 2 个 BLOCKER 修掉后，就可以交 Claude CLI 写代码，不需要再做架构层面的推翻。
+
+另外有一个流程层面的关键点：Hermes 不应该把 Claude 的 COMPLETED 当成“评审通过”。 这份方案已经正确区分了：
+
+Claude：执行施工 → COMPLETED / FAIL / BLOCKED
+Hermes：验收门禁 → PASS / FAIL
+ChatGPT：施工前外部评审
+
+这个分层建议保持不变。

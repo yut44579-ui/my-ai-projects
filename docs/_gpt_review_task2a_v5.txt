@@ -1,0 +1,131 @@
+最终判定：可以交 Claude CLI 施工
+
+这版已经把上一轮的 2 个 BLOCKER + 3 个歧义点 + Oracle 独立性问题全部收口。就施工指令本身而言，没有发现必须再修改才能开工的阻塞项。
+
+评审结果
+项目	判定
+接口契约	✅ 一致
+validations 类型	✅ dict
+关闭规则语义	✅ 已定死
+时间区间	✅ 明确且允许等价半开区间
+duplicate_rows	✅ 已定死
+rows_in_range	✅ 与排除阶段分离
+Oracle 独立性	✅ 足够严格
+D16 口径	✅ 明确
+Scope	✅ 清晰
+禁止事项	✅ 清晰
+Acceptance Criteria	✅ 可执行
+真实数据 E2E	✅ 已要求
+SHA256 数据门禁	✅ 已要求
+Git Scope 检查	✅ 已要求
+Claude CLI 施工	✅ 可以
+我特别检查了 3 个容易出问题的地方
+1. 时间边界现在可以了
+
+你现在同时规定：
+
+业务口径：23:59:59.999
+
+以及：
+
+实现可以使用 < end + 1 day
+
+这是正确的工程化表达。
+
+也就是说 Claude 可以实现成：
+
+InvoiceDate >= 2011-11-21 00:00:00
+AND
+InvoiceDate < 2011-11-28 00:00:00
+
+而不会改变 D16 的业务口径。
+
+2. 关闭规则后的统计已经没有歧义
+
+你给出的例子非常关键：
+
+exclude_cancelled=False + 同时取消单/负数量
+cancelled = 0
+negative_qty = 1
+multi_rule_hit = 0
+rows_excluded = 1
+
+这已经足以约束实现。
+
+因此 Claude 不应该再有理由自行解释 multi_rule_hit。
+
+3. Oracle 现在是真正意义上的独立实现
+
+这一版已经不只是：
+
+不允许调用 executor。
+
+而是进一步禁止：
+
+从 app.engine.* 导入常量、规则、字段定义或中间结果。
+
+这很好。
+
+否则最危险的情况就是：
+
+executor 错了
+       ↓
+Oracle 复用了 executor 的规则
+       ↓
+两个结果一样
+       ↓
+测试 PASS
+
+现在这个风险基本被堵住了。
+
+唯一一个非阻塞提醒
+
+有一个地方我建议 不要再改施工方案，但让 Hermes/Claude 知道：
+
+AC-06 的 SHA256 是“当前项目预期数据版本”的固定指纹。
+
+因此如果 Claude 执行时发现：
+
+实际 SHA256 != 43465...
+
+必须按你的要求 FAIL，而不是试图重新下载、替换 Excel 或“修复”数据。
+
+你已经在 Scope 里禁止修改 data/，所以当前设计是自洽的。
+
+建议现在的执行链
+
+直接进入：
+
+Hermes
+  │
+  ├─ 当前施工方案：外部评审 → PASS
+  │
+  ↓
+Claude CLI
+  │
+  ├─ 阅读 CLAUDE.md
+  ├─ 实现 TASK-002A
+  ├─ 运行 compileall
+  ├─ 运行 pytest
+  ├─ 运行真实 Excel E2E
+  ├─ 检查 SHA256
+  ├─ 检查 git diff
+  │
+  ↓
+COMPLETED / FAIL / BLOCKED
+  │
+  ↓
+Hermes Gate
+  │
+  ├─ 验证 AC-01~07
+  ├─ 检查 Scope
+  ├─ 检查 Oracle 独立性
+  └─ 决定 PASS / FAIL
+
+不要再让 Claude 自己重新设计 TASK-002A。 当前文档已经足够作为施工契约，Claude 的职责就是实现，而不是重新评审口径。
+
+最终结论
+
+PASS：可以交 Claude CLI 施工。
+
+当前方案没有必须修改的阻塞项。建议冻结本版本，不再继续扩写需求，直接进入 TASK-002A 实现。
