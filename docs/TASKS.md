@@ -13,7 +13,7 @@
 ## 进行中 / 待办
 | ID | 任务 | 交付物 | 验收标准 |
 |---|---|---|---|
-| **TASK-002** | **Spec 核心 + 数据与执行最小闭环** | `app/spec/`（Report Spec 模型）+ `specs/metrics.yaml`（口径）+ `app/engine/loader.py` `schema.py` `executor.py` + 单测 | 能算出"上周销售额"，数字与 pandas 直算**完全一致**；pytest 通过 |
+| ~~TASK-002~~ → **002A** | 数据加载 + 固定指标计算 | `app/engine/{loader,metrics,executor}.py` + `tests/test_executor.py` | ✅ **完成**（commit 8fc01a2）：独立 Oracle 差值 0.0；区间 19950 行；销售额 £316,412.16；SHA256 校验通过 |
 | **TASK-003** | **FastAPI 接口层** | `app/api.py`：`/api/upload` `/api/schema` `/api/parse` `/api/spec/{id}` `/api/execute` `/api/tasks` | 每个端点 curl 有真实响应；上传真实 xlsx 能进库 |
 | **TASK-004** | ★ **前端（可交互，非 demo）** | `web/`（`index.html` + `app.js` + `api.js` + `style.css`，**分文件不堆单文件**） | ①上传真实 Excel ②一句话建任务 ③看到 AI 解析的 Spec 并可确认/改 ④点生成 → 下载真 Excel ⑤任务列表+执行记录；**无假数据、无 TODO 占位** |
 | TASK-005 | AI Parser（自然语言 → Spec） | `app/parser.py` | 50 条样本解析；歧义时列候选让用户确认，不猜 |

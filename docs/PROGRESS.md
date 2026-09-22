@@ -1,43 +1,29 @@
 # PROGRESS.md · sales-report-agent
 
-## 本轮（2026-09-21）
+## 2026-09-22 凌晨（用户休息，Hermes 自动执行）
 
+### 已完成
+| 时间 | 事项 | 结果 |
+|---|---|---|
+| 04:1x | ChatGPT 外部评审 R001/R002/R003 | 方向+拆解+施工方案全部通过（reviews/001-003） |
+| 04:30 | TASK-002A 施工指令 v5（含 D16 口径） | 评审 PASS，可交 Claude |
+| 05:0x | **TASK-002A 由 Claude Code 完成** | `app/engine/{loader,metrics,executor}.py` + `tests/test_executor.py` |
+| 05:1x | **Hermes 独立门禁 + 独立核对** | GATE-1/2/6 + 数据 SHA256 全过；**自写 pandas 实现 vs executor 差值 0.0** |
+| 05:2x | Git commit | `8fc01a2` |
+
+### 关键数字（可复核）
 ```
-日期：2026-09-21
-运行模式：手动（用户在场）
-完成任务：
-  · 项目立项 + 需求确认（用户五阶段流程：需求→现有方案→产品设计→技术方案）
-  · 项目目录建立（D:\sales-report-agent）+ venv（pandas 3.0.6 / openpyxl）
-  · 真实数据集就位：UCI Online Retail（541,909 行，54 周，字段 8 个）
-  · 文档：docs/requirements.md、CLAUDE.md
-  · 文档体系补齐：PROJECT_SPEC / ARCHITECTURE / ROADMAP / TASKS / DECISIONS / PROGRESS
-失败任务：无
-测试结果：数据读取验证通过（54 万行、38 国、4372 客户、£9,747,747.93）
-Git：尚未 init（待补）
-当前项目状态：阶段 1 进行中（测试集由 Claude Code 编写）
-下一任务：TASK-001 验收 → TASK-002（engine.loader）
-遇到的问题：无
-需要人工处理：ChatGPT 外部评审（规范要求：新项目需外部评审）
-```
-
-## 进度快照
-
-| 阶段 | 状态 |
-|---|---|
-| 1. 需求+数据 | 🔄 90%（差测试集验收） |
-| 2. 骨架 | ⏳ |
-| 3. 核心 | ⏳ |
-| 4. 评估 | ⏳ |
-| 5. 出口 | ⏳ |
-| 6. 复盘 | ⏳ |
-
-## 关键数字（后续评估用）
-
-```
-数据：541,909 行 / 2010-12-01 ~ 2011-12-09 / 54 周
-测试集目标：50 条（16 normal / 16 edge / 18 needs_clarification）
-成功指标目标：数字准确率 ≥98% / 理解准确率 ≥85% / 端到端 ≥80%
+区间 2011-11-21 ~ 2011-11-27：
+  原始行数 19950 / 排除 296（C开头230 + Qty≤0 260 + 单价≤0 66，多规则命中 260）
+  有效行 19654 / 销售额 £316,412.16 / 排除净额 -8,227.14
+  数据 SHA256 43465a06f2ccf7c8b5bd2892bc7defb52f97487934fe93b16ae4c3936424676d
 ```
 
----
-*本文件每轮开发结束更新（日期/模式/完成/失败/测试/Git/状态/下一任务/问题）*
+### 进行中
+- TASK-002B（Excel 渲染，openpyxl 原地改）
+- 待办：002C（API）→ 004A（★ 前端，用户最关心）
+
+### 流程（已固化）
+```
+用户提需求 → Hermes 出方案 → ChatGPT 评审 → Claude CLI 写代码 → Hermes 独立门禁验收 → git commit
+```

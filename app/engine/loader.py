@@ -119,6 +119,11 @@ def load_raw(path: str | Path = DEFAULT_DATA_PATH, verify: bool = True) -> pd.Da
         df = pd.read_excel(path, engine="openpyxl", parse_dates=PARSE_DATES)
         if df.empty:
             raise DataSourceError(f"读出的数据为空：{key}")
+        # 哈希对得上但形状不对 = 解析出问题（读少列/少行），同样必须停下（D10）
+        if df.shape != EXPECTED_SHAPE:
+            raise DataSourceError(
+                f"数据形状与预期不符，已停止计算：实际 {df.shape}，预期 {EXPECTED_SHAPE}"
+            )
         _CACHE[key] = df
 
     # 返回副本：缓存对象只读使用，避免调用方原地修改（如新增列）后再被别的调用方看到
