@@ -68,7 +68,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import api_documents, state
+from app import api_chat, api_documents, state
 from app.engine import executor, loader, renderer
 from app.engine import metrics as engine_metrics
 from app.spec.models import (
@@ -1518,6 +1518,15 @@ def _relative_output_path(path: str | Path) -> str:
 # app/api_documents.py 里，这里只把它挂上来 —— 位置必须在 mount("/") **之前**，
 # 否则 /api/documents* 会被静态目录吃掉（原因见下面那段注释）。
 app.include_router(api_documents.router)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 自然语言问答（TASK-004）—— 走**新路径** `/api/chat*` `/api/conversations*`
+# ════════════════════════════════════════════════════════════════════════
+# 同样一个字没改既有端点：LLM 只做"解析意图 + 组织语言"，数字全部由 app/ai/tools.py
+# 走既有 metrics/executor 确定性算出，`answer.py` 的数字核对闸门负责挡住 LLM 自己造的数。
+# 位置同样必须在 mount("/") **之前**。
+app.include_router(api_chat.router)
 
 
 # ════════════════════════════════════════════════════════════════════════

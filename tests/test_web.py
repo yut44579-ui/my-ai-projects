@@ -165,13 +165,23 @@ def test_five_ui_states_have_real_anchors() -> None:
 
 
 def test_disabled_controls_explain_themselves() -> None:
-    """禁用的控件必须写明"为什么禁用 / 归哪个 TASK"，且不得出现"已开启"这类假状态。"""
+    """禁用的控件必须写明"为什么禁用 / 归哪个 TASK"，且不得出现"已开启"这类假状态。
+
+    TASK-004 之后自然语言入口**已经真的接通**，所以它从"禁用名单"里出来了：
+    这里反过来断言它**不再禁用**（启用它正是那个 TASK 的交付物之一）。
+    剩下的三个企业化开关仍然必须是"禁用 + 能解释为什么"。
+    """
     html, js = read("index.html"), read("app.js")
-    for control in ("nl-input", "nl-ask", "hero-nl-input", "hero-nl-btn",
-                    "sec-rbac", "sec-acl", "sec-circuit"):
+    for control in ("sec-rbac", "sec-acl", "sec-circuit"):
         match = re.search(rf'<[^>]*id="{control}"[^>]*>', html)
         assert match, f"找不到控件 {control}"
         assert "disabled" in match.group(0), f"{control} 不是禁用状态（企业化能力尚未实现）"
+    # 自然语言入口（顶栏 + hero + 三个示例 chip）：TASK-004 已交付，必须可用
+    for control in ("nl-input", "nl-ask", "hero-nl-input", "hero-nl-btn",
+                    "chip-summary", "chip-trend", "chip-products"):
+        match = re.search(rf'<[^>]*id="{control}"[^>]*>', html)
+        assert match, f"找不到控件 {control}"
+        assert "disabled" not in match.group(0), f"{control} 还是禁用的（TASK-004 已交付，应可用）"
     assert "INERT_HINT" in js and "TASK-011" in js and "TASK-012" in js and "TASK-013" in js
     assert "已开启" not in html and "已开启" not in js
 

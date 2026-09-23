@@ -37,9 +37,9 @@
       </div>
 
       <div class="nl-entry">
-        <input id="nl-input" type="text" placeholder="用自然语言提问，例如「上周销售额是多少」" disabled>
-        <button id="nl-ask" class="btn btn-primary btn-sm" disabled>分析</button>
-        <span class="nl-note" id="nl-note">自然语言入口：TASK-004 接入（LLM 不负责算数字）</span>
+        <input id="nl-input" type="text" placeholder="用自然语言提问，例如「2011年11月卖了多少」" autocomplete="off">
+        <button id="nl-ask" class="btn btn-primary btn-sm">分析</button>
+        <span class="nl-note" id="nl-note">自然语言入口：数字全部由程序算，LLM 只负责听懂问题与组织语言</span>
       </div>
     </div>
 
@@ -87,14 +87,14 @@
           <h1 class="hero-title">你好！我是你的销售报表 Agent</h1>
           <p class="hero-sub">丢进销售数据 → 告诉我要看什么 → 我用程序算准数字，再解释发生了什么。</p>
           <div class="hero-input">
-            <input id="hero-nl-input" type="text" placeholder="例如：上周销售额是多少？" disabled>
-            <button id="hero-nl-btn" class="btn btn-primary" disabled>开始分析</button>
+            <input id="hero-nl-input" type="text" placeholder="例如：2011年11月卖得最好的5个产品" autocomplete="off">
+            <button id="hero-nl-btn" class="btn btn-primary">开始分析</button>
           </div>
           <div class="hero-quick">
-            <button class="chip-btn" disabled title="自然语言分析由 TASK-004 接入">销售汇总</button>
-            <button class="chip-btn" disabled title="自然语言分析由 TASK-004 接入">销售趋势</button>
-            <button class="chip-btn" disabled title="自然语言分析由 TASK-004 接入">产品排行</button>
-            <span class="muted-sm">以上三个意图由 TASK-004 接入；当前可用的是「数据管理」里的确定性报表链路。</span>
+            <button class="chip-btn" id="chip-summary" data-question="2011年11月一共卖了多少？">销售汇总</button>
+            <button class="chip-btn" id="chip-trend" data-question="2011年11月的销售趋势，按日看">销售趋势</button>
+            <button class="chip-btn" id="chip-products" data-question="2011年11月卖得最好的5个产品">产品排行</button>
+            <span class="muted-sm" id="hero-nl-note">本版支持三类问题（汇总 / 趋势 / 产品排行）；问数据里没有的维度（如区域）会被明确拒绝。</span>
           </div>
         </div>
         <div class="hero-facts" id="hero-facts">
@@ -103,6 +103,70 @@
           <div class="fact-row" id="fact-state">状态文件：读取中…</div>
           <div class="fact-row" id="fact-code">代码版本：读取中…</div>
         </div>
+      </div>
+
+      <!-- 区块A2 · 自然语言问答（TASK-004）：完整链路，可折叠 -->
+      <div class="card" id="chat-panel">
+        <div class="card-head">
+          <h2>自然语言问答</h2>
+          <span class="muted-sm" id="chat-source">POST /api/chat</span>
+        </div>
+
+        <div class="empty" id="chat-empty">
+          <div class="empty-ico">✦</div>
+          <div class="empty-title">还没有提问</div>
+          <div class="empty-hint">在上面任意一个输入框里用大白话提问。回答分三段：【发生了什么】是程序算出来的事实，【为什么】是推断（会标注），【建议行动】是模型生成。</div>
+        </div>
+
+        <div class="chat-state" id="chat-state" hidden></div>
+
+        <div id="chat-body" hidden>
+          <div class="chat-meta">
+            <span class="badge" id="chat-status-badge">—</span>
+            <span class="muted-sm" id="chat-created">—</span>
+            <span class="muted-sm" id="chat-llm"></span>
+          </div>
+
+          <details class="chain" id="chat-step-question" open>
+            <summary>① 用户问题</summary>
+            <div class="chain-body" id="chat-question"></div>
+          </details>
+
+          <details class="chain" id="chat-step-intent">
+            <summary>② 解析出的 Intent JSON</summary>
+            <div class="chain-body"><pre class="code" id="chat-intent"></pre></div>
+          </details>
+
+          <details class="chain" id="chat-step-tool">
+            <summary>③ 实际调用的工具</summary>
+            <div class="chain-body" id="chat-tool"></div>
+          </details>
+
+          <details class="chain" id="chat-step-facts">
+            <summary>④ 事实结果（数字的出处）</summary>
+            <div class="chain-body" id="chat-facts"></div>
+          </details>
+
+          <details class="chain" id="chat-step-answer" open>
+            <summary>⑤ 回答（分区）</summary>
+            <div class="chain-body" id="chat-answer"></div>
+          </details>
+
+          <div class="chat-notice" id="chat-notice"></div>
+        </div>
+      </div>
+
+      <!-- 区块A3 · 历史提问（刷新后仍可查） -->
+      <div class="card" id="chat-history-wrap">
+        <div class="card-head">
+          <h2>历史提问</h2>
+          <span class="muted-sm">GET /api/conversations（落盘 state/conversations.json）</span>
+        </div>
+        <div class="empty" id="chat-history-empty">
+          <div class="empty-title">还没有历史提问</div>
+          <div class="empty-hint">提过的问题会落盘，刷新页面后仍能在这里查到（含当时的 Intent 与算出来的数字）。</div>
+        </div>
+        <div class="rows" id="chat-history"></div>
       </div>
 
       <!-- 区块B · KPI 行 + 趋势图 -->
@@ -496,11 +560,17 @@
   <!-- ═══ 右侧面板 355px ══════════════════════════════════════════════ -->
   <aside class="rightpanel">
     <div class="card rp-card">
-      <div class="card-head"><h2>AI 结论</h2><span class="muted-sm">TASK-004</span></div>
-      <div class="empty">
+      <div class="card-head"><h2>AI 结论</h2><span class="muted-sm" id="ai-conclusion-source">最近一次提问</span></div>
+      <div class="empty" id="ai-conclusion-empty">
         <div class="empty-ico">✦</div>
-        <div class="empty-title">自然语言结论尚未接入</div>
-        <div class="empty-hint">结论将由 TASK-004 按「【发生了什么】程序算的事实 / 【为什么】标注推断 / 【建议行动】LLM 生成」分区输出。</div>
+        <div class="empty-title">还没有结论</div>
+        <div class="empty-hint">在顶栏的「自然语言入口」提一个问题，这里会显示最近一次回答里由**程序算出**的事实那一段。</div>
+      </div>
+      <div id="ai-conclusion-body" hidden>
+        <div class="rp-conclusion-q" id="ai-conclusion-question"></div>
+        <div class="rp-conclusion-facts" id="ai-conclusion-facts"></div>
+        <div class="rp-conclusion-why" id="ai-conclusion-why"></div>
+        <button class="btn btn-sm" id="btn-ai-conclusion">看完整链路</button>
       </div>
     </div>
 

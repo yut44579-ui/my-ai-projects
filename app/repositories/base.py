@@ -130,12 +130,41 @@ class DocumentRepository(ABC):
         """把摘要结果写回该文档记录（没有变化返回原记录，不写盘 —— 与 set_status 同一约定）。"""
 
 
+class ConversationRepository(ABC):
+    """自然语言问答记录（`state/conversations.json`）：TASK-004 的"真问真答"凭据。
+
+    为什么它值得单独一个仓库（而不是塞进 ExecutionRepository）：
+      执行记录（ExecutionRepository）回答的是"**按冻结 Spec 跑了一次报表**"，
+      而对话回答的是"**用户用大白话问了一句，Agent 解析成什么 Intent、调了哪个工具、
+      算出了什么事实、LLM 组成了什么话**"。后者的核心是**可追溯**：
+      事后要能核对"当时那个数字是哪个工具、哪个区间算出来的"。
+      两条记录的字段几乎没有交集，塞一起必然一半恒为空（理由同 DocumentRepository）。
+    """
+
+    @abstractmethod
+    def add(self, record: dict) -> dict:
+        """登记一条对话（插到最前）；返回落盘的那条。"""
+
+    @abstractmethod
+    def get(self, conversation_id: str) -> dict | None:
+        """按 conversation_id 取；不存在返回 None（由调用方决定回 404）。"""
+
+    @abstractmethod
+    def list(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+        """分页列表（新的在前）+ 总数。"""
+
+    @abstractmethod
+    def count(self) -> int:
+        """对话记录总数。"""
+
+
 # 便于测试/未来扩展统一遍历（新增仓库时记得加进来）
 REPOSITORY_INTERFACES: tuple[type, ...] = (
     UploadRepository,
     TaskRepository,
     ExecutionRepository,
     DocumentRepository,
+    ConversationRepository,
 )
 
 __all__ = [
@@ -143,6 +172,7 @@ __all__ = [
     "TaskRepository",
     "ExecutionRepository",
     "DocumentRepository",
+    "ConversationRepository",
     "REPOSITORY_INTERFACES",
     "Callable",
 ]

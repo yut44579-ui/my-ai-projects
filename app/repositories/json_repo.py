@@ -15,6 +15,7 @@ from typing import Callable
 
 from app.repositories import json_store
 from app.repositories.base import (
+    ConversationRepository,
     DocumentRepository,
     ExecutionRepository,
     TaskRepository,
@@ -168,3 +169,26 @@ class JsonDocumentRepository(_JsonRepositoryBase, DocumentRepository):
             return True
 
         return self._collection.update_first(lambda record: record.get("doc_id") == doc_id, mutate)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑤ 对话（TASK-004：自然语言问答 —— 问题 / Intent / 工具 / 事实 / 回答）
+# ════════════════════════════════════════════════════════════════════════
+class JsonConversationRepository(_JsonRepositoryBase, ConversationRepository):
+    def __init__(self, path_getter: Callable[[], Path] | None = None) -> None:
+        super().__init__(JsonCollection(path_getter or json_store.conversations_file, "conversations"))
+
+    def add(self, record: dict) -> dict:
+        return self._collection.insert_front(record)
+
+    def get(self, conversation_id: str) -> dict | None:
+        return self._collection.find(
+            lambda record: record.get("conversation_id") == conversation_id
+        )
+
+    def list(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+        records = self._collection.all()
+        return records[offset:offset + limit], len(records)
+
+    def count(self) -> int:
+        return self._collection.count()

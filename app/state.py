@@ -46,6 +46,7 @@ from pathlib import Path
 from app import repositories
 from app.repositories import json_store
 from app.repositories.json_store import (        # 对外保留原名（含私有名），调用方与测试不用改
+    CONVERSATIONS_FILE,
     DOCUMENTS_FILE,
     EXECUTIONS_FILE,
     SCHEMA_VERSION,
@@ -53,6 +54,7 @@ from app.repositories.json_store import (        # 对外保留原名（含私�
     UPLOADS_FILE,
     LOCK as _LOCK,
     StateError,
+    conversations_file,
     doc_dir,
     documents_file,
     executions_file,
@@ -333,6 +335,33 @@ def set_document_summary(doc_id: str, summary: dict) -> dict | None:
 
 
 # ════════════════════════════════════════════════════════════════════════
+# ⑤ 对话记录（TASK-004：自然语言问答的全链路留痕）
+# ════════════════════════════════════════════════════════════════════════
+def record_conversation(conversation: dict) -> dict:
+    """落盘一条对话记录并返回它。
+
+    记录的形状由 `app/ai/service.py` 的 `_record()` **一处**决定（问题 / Intent / 工具 /
+    事实 / 回答 / 闸门），这里只负责"存"。为什么不在 state.py 里再拼一遍字段：
+    那样同一个形状就有了两个定义，改一个忘一个 → 落盘的东西和页面显示的东西对不上。
+    """
+    return repositories.conversations().add(conversation)
+
+
+def get_conversation(conversation_id: str) -> dict | None:
+    """按 conversation_id 取（不存在返回 None，由调用方回 404）。"""
+    return repositories.conversations().get(conversation_id)
+
+
+def list_conversations(limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    """对话列表（新的在前）+ 总数。"""
+    return repositories.conversations().list(limit, offset)
+
+
+def count_conversations() -> int:
+    return repositories.conversations().count()
+
+
+# ════════════════════════════════════════════════════════════════════════
 # 健康检查概览
 # ════════════════════════════════════════════════════════════════════════
 def state_summary() -> dict:
@@ -357,6 +386,7 @@ __all__ = [
     "EXECUTIONS_FILE",
     "TASKS_FILE",
     "DOCUMENTS_FILE",
+    "CONVERSATIONS_FILE",
     "TASK_STATUS_CREATED",
     "TASK_STATUS_HAS_RUN",
     "TASK_STATUSES",
@@ -369,6 +399,7 @@ __all__ = [
     "executions_file",
     "tasks_file",
     "documents_file",
+    "conversations_file",
     "new_id",
     "now_iso",
     "code_version",
@@ -392,5 +423,9 @@ __all__ = [
     "list_documents",
     "count_documents",
     "set_document_summary",
+    "record_conversation",
+    "get_conversation",
+    "list_conversations",
+    "count_conversations",
     "state_summary",
 ]

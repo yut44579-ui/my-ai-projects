@@ -36,6 +36,7 @@ UPLOADS_FILE = "uploads.json"
 EXECUTIONS_FILE = "executions.json"
 TASKS_FILE = "tasks.json"
 DOCUMENTS_FILE = "documents.json"
+CONVERSATIONS_FILE = "conversations.json"
 
 # 落盘格式版本（R005 required_change #11）：三个 JSON 都写顶层 schema_version
 SCHEMA_VERSION = 1
@@ -99,6 +100,12 @@ def tasks_file() -> Path:
 
 def documents_file() -> Path:
     return state_dir() / DOCUMENTS_FILE
+
+
+def conversations_file() -> Path:
+    """自然语言对话记录（TASK-004）。落 state/ 与其它记录同级：
+    对话里带着"当时算出来的数字"，和 tasks/executions 一样是**审计凭据**，不该另起一处。"""
+    return state_dir() / CONVERSATIONS_FILE
 
 
 # ════════════════════════════════════════════════════════════════════════

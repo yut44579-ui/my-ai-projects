@@ -469,3 +469,95 @@ button { font-family: inherit; }
   .topbar-mid .search { flex: 1 1 auto; }
   .nl-entry { display: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   TASK-004 · 自然语言问答的链路展示
+   （配色/圆角/字号全部复用上面的 token 与既有组件，这里只加结构）
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 链路顶部的状态条：loading / 成功 / 数据不支持 / 失败 四种面貌 */
+.chat-state {
+  border: 1px solid var(--border); border-radius: var(--radius-ctrl);
+  padding: 10px 14px; font-size: 12px; color: var(--text-2); margin-top: 12px;
+  background: var(--bg-inset); line-height: 1.7; white-space: pre-wrap;
+}
+.chat-state[hidden] { display: none; }
+.chat-state.ok { color: #86EFAC; border-color: rgba(34, 197, 94, .45); background: rgba(34, 197, 94, .06); }
+.chat-state.warn { color: #FCD34D; border-color: rgba(245, 158, 11, .45); background: rgba(245, 158, 11, .06); }
+.chat-state.error { color: #FCA5A5; border-color: rgba(239, 68, 68, .5); background: rgba(239, 68, 68, .07); }
+.chat-state.loading { color: var(--text-2); }
+
+.chat-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 14px 0 4px; }
+
+/* 五个环节：可折叠。summary 用等宽小字，展开时给左侧一条竖线做层次 */
+.chain { border-top: 1px solid rgba(30, 41, 59, .55); padding: 4px 0; }
+.chain:first-of-type { border-top: 0; }
+.chain > summary {
+  cursor: pointer; list-style: none; padding: 9px 0;
+  font-size: 12px; color: var(--text-2); font-weight: 500;
+}
+.chain > summary::-webkit-details-marker { display: none; }
+.chain > summary::before { content: "▸ "; color: var(--text-3); }
+.chain[open] > summary::before { content: "▾ "; }
+.chain[open] > summary { color: var(--text-1); }
+.chain-body {
+  padding: 2px 0 12px 14px; border-left: 2px solid var(--border);
+  font-size: 12px; color: var(--text-1); line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word;
+}
+.chain-body .code { margin-top: 8px; max-height: 300px; }
+.chain-body .table-wrap { margin-bottom: 10px; }
+
+/* 口径说明 / 行内提示 */
+.note-line { font-size: 11.5px; color: var(--text-3); line-height: 1.7; margin-top: 6px; }
+
+/* 回答的三段：标题 + 来源标签 + 正文 */
+.answer-section { padding: 10px 0; border-top: 1px solid rgba(30, 41, 59, .55); }
+.answer-section:first-child { border-top: 0; padding-top: 2px; }
+.answer-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.answer-head b { font-size: 12px; color: var(--text-1); font-weight: 600; }
+.answer-text { font-size: 12.5px; color: var(--text-1); line-height: 1.8; }
+
+/* 段落来源标签：一眼看出哪段是程序写的、哪段是模型写的（哪段是推断） */
+.src-tag {
+  font-size: 10px; padding: 1px 7px; border-radius: var(--radius-pill);
+  border: 1px solid var(--border); color: var(--text-3); white-space: nowrap;
+}
+.src-tag.src-code { color: var(--text-2); }
+.src-tag.src-llm { color: var(--primary-hi); border-color: rgba(37, 99, 235, .45); background: rgba(37, 99, 235, .1); }
+.src-tag.src-inferred { color: var(--warning); border-color: rgba(245, 158, 11, .45); background: rgba(245, 158, 11, .1); }
+
+.chat-notice {
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(30, 41, 59, .55);
+  font-size: 11.5px; color: var(--text-3); line-height: 1.7; white-space: pre-wrap;
+}
+
+/* 历史提问列表（复用 .row 的横向布局思路，但这是列表行不是表单行，单独定义） */
+.rows { display: flex; flex-direction: column; margin-top: 10px; }
+.chat-history-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 0; border-top: 1px solid rgba(30, 41, 59, .55);
+}
+.chat-history-row:first-child { border-top: 0; }
+.row-main { min-width: 0; }
+.row-title { font-size: 12.5px; color: var(--text-1); margin-bottom: 3px; word-break: break-word; }
+.row-sub { font-size: 11px; color: var(--text-3); }
+
+/* 右面板「AI 结论」卡：最近一次问答的投影（问题 + 事实 + 推断） */
+.rp-conclusion-q {
+  font-size: 12.5px; color: var(--text-1); line-height: 1.7; margin: 12px 0 10px;
+  padding-left: 10px; border-left: 2px solid var(--primary);
+}
+.rp-conclusion-facts { display: grid; gap: 7px; margin-bottom: 10px; }
+.rp-fact { font-size: 12px; color: var(--text-2); }
+.rp-fact b { color: var(--text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
+.rp-conclusion-why {
+  font-size: 12px; color: var(--text-2); line-height: 1.75;
+  padding-top: 10px; border-top: 1px solid rgba(30, 41, 59, .55); margin-bottom: 12px;
+}
+.rp-conclusion-why .src-tag { margin-right: 6px; }
+
+@media (max-width: 860px) {
+  .chain-body { padding-left: 10px; }
+  .chat-history-row { align-items: flex-start; }
+}

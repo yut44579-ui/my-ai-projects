@@ -10,3 +10,4 @@ data/uploads/
 
 # 测试提速用的落盘缓存（tests/conftest.py 生成，可由数据文件重新生成）
 data/.cache/
+.env

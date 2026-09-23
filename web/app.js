@@ -42,6 +42,11 @@
     lastRun: null,         // POST /api/tasks/{id}/run 的响应
     documents: [],         // GET /api/documents 的列表（TASK-003）
     docViewer: null,       // 当前在正文查看器里打开的那条文档记录
+    chat: null,            // POST /api/chat 的响应 = 整条链路（TASK-004）
+    chatLoading: false,    // 提交中（三态里的 loading）
+    chatError: null,       // 提交失败（网络/HTTP 层），与"后端说自己答不了"分开
+    capabilities: null,    // GET /api/chat/capabilities（能力与数据边界）
+    conversations: [],     // GET /api/conversations 的历史列表
     search: "",
     metricsCatalog: { names: [], source: "loading" },
   };
@@ -190,10 +195,36 @@
     renderDocuments();
   }
 
+  async function loadConversations() {
+    const payload = await API.listConversations({ limit: 20 });
+    state.conversations = payload.conversations || [];
+
+    // 刷新页面后内存态没了，但"最近一次问答"必须还能看 ——
+    // 从后端把那条**完整记录**取回来（不是从列表摘要拼，摘要里没有事实表和三段回答）。
+    if (!state.chat && state.conversations.length) {
+      try {
+        state.chat = await API.getConversation(state.conversations[0].conversation_id);
+      } catch (err) {
+        // 取不回来就保持空态（页面宁可什么都不显示，也不拿摘要拼一条"看起来完整"的链路）
+        state.chat = null;
+      }
+    }
+    renderChat();
+    renderChatHistory();
+    renderAiConclusion();
+  }
+
+  async function loadCapabilities() {
+    // 能力清单与**数据边界**都来自后端（页面不写死"支持哪三类问题"这种话）
+    state.capabilities = await API.chatCapabilities();
+    renderInertControls();
+  }
+
   async function refreshAll() {
-    banner("loading", "正在读取后端状态（health / tasks / executions / documents）…");
+    banner("loading", "正在读取后端状态（health / tasks / executions / documents / conversations）…");
     const results = await Promise.allSettled([
       loadHealth(), loadTasks(), loadExecutions(), loadDocuments(),
+      loadConversations(), loadCapabilities(),
     ]);
     const failed = results.find((item) => item.status === "rejected");
     if (failed) {
@@ -967,6 +998,402 @@
   // ══════════════════════════════════════════════════════════════════════
   // 交互绑定
   // ══════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════
+  // 自然语言问答（TASK-004）
+  //
+  // 页面**不自己拼链路**：后端 POST /api/chat 回的就是那条落盘记录，
+  // 这里只是把它的五个字段分别摆到五个折叠块里。所以页面显示的东西
+  // === state/conversations.json 里存的东西 === 事后能核对的东西。
+  //
+  // 数字（销售额、行数、占比）全部直接取自响应，页面不做任何算术。
+  // ══════════════════════════════════════════════════════════════════════
+  const CHAT_STATUS_TEXT = {
+    ok: "执行成功",
+    degraded: "执行成功（LLM 未参与推断）",
+    unsupported: "数据不支持这个问题",
+    error: "未能回答",
+  };
+
+  const SECTION_SOURCE_LABEL = {
+    code: "程序生成",
+    llm: "模型生成",
+  };
+
+  // 复用既有的四种 badge 变体（success/warn/info/failed），不为聊天另造一套颜色
+  const CHAT_BADGE_CLASS = {
+    ok: "success",
+    degraded: "warn",
+    unsupported: "info",
+    error: "failed",
+  };
+
+  function fmtByStyle(value, style) {
+    if (typeof value !== "number" || !isFinite(value)) return text(value);
+    if (style === "money") return fmtMoney(value);
+    if (style === "int") return fmtInt(value);
+    if (style === "qty") return fmtInt(Math.round(value));
+    if (style === "pct") return value.toFixed(2);
+    return Number.isInteger(value) ? fmtInt(value) : String(value);
+  }
+
+  function toolLabel(tool) {
+    if (!tool) return "未调用工具";
+    if (typeof tool === "string") return `工具 ${tool}`;
+    return tool.title || tool.name || "未调用工具";
+  }
+
+  function setChatState(kind, message) {
+    const el = $("chat-state");
+    if (!el) return;
+    if (!kind) {
+      el.hidden = true;
+      el.textContent = "";
+      el.className = "chat-state";
+      return;
+    }
+    el.hidden = false;
+    el.className = `chat-state ${kind}`;
+    el.textContent = message;
+  }
+
+  async function askQuestion(question) {
+    const asked = String(question || "").trim();
+    if (!asked) {
+      setChatState("error", "请先输入一个问题。");
+      return;
+    }
+    goto("overview");
+    state.chatLoading = true;
+    state.chatError = null;
+    state.chat = null;
+    renderChat();
+    setChatState(
+      "loading",
+      `正在提问：「${asked}」—— 解析意图 → 确定性计算 → 组织回答（推理模型可能要十几秒）…`,
+    );
+
+    try {
+      state.chat = await API.chat(asked);
+    } catch (err) {
+      // 这一支是**请求本身**失败（网络/HTTP），与"后端答不了这个问题"（记录里的 status）分开
+      state.chatError = err;
+    } finally {
+      state.chatLoading = false;
+      renderChat();
+      await loadConversations().catch(() => {});
+    }
+  }
+
+  function renderChat() {
+    const body = $("chat-body");
+    const empty = $("chat-empty");
+    if (!body || !empty) return;
+
+    if (state.chatLoading) {
+      hide(body);
+      hide(empty);
+      return;
+    }
+    if (state.chatError) {
+      hide(body);
+      hide(empty);
+      const err = state.chatError;
+      setChatState("error", `提交失败（${err.code || err.name}）：${err.message}`);
+      return;
+    }
+    if (!state.chat) {
+      hide(body);
+      show(empty);
+      setChatState(null);
+      return;
+    }
+
+    hide(empty);
+    show(body);
+    const record = state.chat;
+    const status = record.status || "error";
+
+    // 顶部状态条：把"这次答成什么样"和 LLM 有没有参与都摆出来（不藏着）
+    setChatState(
+      status === "ok" || status === "degraded" ? "ok" : (status === "unsupported" ? "warn" : "error"),
+      record.notice || "",
+    );
+
+    const badge = $("chat-status-badge");
+    if (badge) {
+      badge.textContent = CHAT_STATUS_TEXT[status] || status;
+      badge.className = `badge ${CHAT_BADGE_CLASS[status] || "warn"}`;
+    }
+    setText("chat-created", fmtTime(record.created_at));
+
+    const llm = record.llm || {};
+    setText(
+      "chat-llm",
+      llm.used
+        ? `LLM：${llm.provider || ""} ${llm.model || ""}（负责解析意图与组织语言）`
+        : `LLM 未参与（${(llm.error && llm.error.code) || "未配置"}）—— 数字仍由程序算`,
+    );
+
+    setText("chat-question", record.question || "—");
+
+    const intentPre = $("chat-intent");
+    if (intentPre) {
+      intentPre.textContent = record.intent
+        ? JSON.stringify(record.intent, null, 2)
+        : `（没有解析出 Intent）\n${(record.error && record.error.message) || ""}`;
+    }
+
+    renderChatTool(record.tool);
+    renderChatFacts(record);
+    renderChatAnswer(record.answer);
+    setText("chat-notice", record.notice || "");
+
+    // 五个环节按"这一环到底有没有内容"决定展开 ——
+    // 答不了的问题（数据不支持）不该一进来就摊开四个空块，那看着像有东西其实没有。
+    const stepOpen = {
+      "chat-step-question": true,
+      "chat-step-intent": !!record.intent,
+      "chat-step-tool": !!(record.tool && record.tool.name),
+      "chat-step-facts": !!record.facts,
+      "chat-step-answer": !!(record.answer && record.answer.text),
+    };
+    Object.entries(stepOpen).forEach(([id, open]) => {
+      const el = $(id);
+      if (el) el.open = open;
+    });
+  }
+
+  function renderChatTool(tool) {
+    const box = $("chat-tool");
+    if (!box) return;
+    clear(box);
+    if (!tool || !tool.name) {
+      box.appendChild(line("本次没有调用任何工具（没解析出意图，或问题涉及数据里没有的维度）。"));
+      return;
+    }
+    box.appendChild(line(`${tool.title || ""} · 工具名 ${tool.name}（白名单里的三个之一）`));
+    const params = document.createElement("pre");
+    params.className = "code";
+    params.textContent = JSON.stringify(tool.params || {}, null, 2);
+    box.appendChild(params);
+    (tool.notes || []).forEach((note) => box.appendChild(line(note, "note-line")));
+  }
+
+  function renderChatFacts(record) {
+    const box = $("chat-facts");
+    if (!box) return;
+    clear(box);
+    const tool = record.tool;
+    if (!tool || !record.facts) {
+      box.appendChild(line("本次没有计算结果。"));
+      return;
+    }
+    const table = document.createElement("table");
+    table.className = "table";
+    const head = document.createElement("tr");
+    ["指标", "数值", "单位", "说明"].forEach((label) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      head.appendChild(th);
+    });
+    table.appendChild(head);
+    (tool.display || []).forEach((item) => {
+      const row = document.createElement("tr");
+      cell(row, item.label);
+      cell(row, fmtByStyle(item.value, item.format), "num");
+      cell(row, item.unit || "—");
+      cell(row, [item.derived ? "派生" : "", item.note || ""].filter(Boolean).join(" · ") || "—");
+      table.appendChild(row);
+    });
+    const wrap = document.createElement("div");
+    wrap.className = "table-wrap";
+    wrap.appendChild(table);
+    box.appendChild(wrap);
+
+    const raw = document.createElement("pre");
+    raw.className = "code";
+    raw.textContent = JSON.stringify({ facts: record.facts, selfcheck: tool.selfcheck }, null, 2);
+    box.appendChild(raw);
+  }
+
+  function renderChatAnswer(payload) {
+    const box = $("chat-answer");
+    if (!box) return;
+    clear(box);
+    if (!payload || !payload.sections) {
+      box.appendChild(line("本次没有生成回答。"));
+      return;
+    }
+    (payload.sections || []).forEach((section) => {
+      const wrap = document.createElement("div");
+      wrap.className = "answer-section";
+      const head = document.createElement("div");
+      head.className = "answer-head";
+      const title = document.createElement("b");
+      title.textContent = section.title || "";
+      head.appendChild(title);
+      const tag = document.createElement("span");
+      tag.className = `src-tag src-${section.source}`;
+      tag.textContent = SECTION_SOURCE_LABEL[section.source] || section.source || "";
+      head.appendChild(tag);
+      if (section.inferred) {
+        const inferred = document.createElement("span");
+        inferred.className = "src-tag src-inferred";
+        inferred.textContent = "推断";
+        head.appendChild(inferred);
+      }
+      wrap.appendChild(head);
+      const body = document.createElement("div");
+      body.className = "answer-text";
+      body.textContent = section.text || "";
+      wrap.appendChild(body);
+      box.appendChild(wrap);
+    });
+
+    // 数字闸门的报告也显示出来：这是"LLM 没自己造数"的直接证据
+    const guard = payload.guard;
+    if (guard) {
+      box.appendChild(
+        line(
+          guard.checked
+            ? `数字闸门：已核对（合法数字 ${guard.allowed_count} 个）—— ${
+              guard.passed ? "模型写的内容全部可追溯" : `拦下越界数字 ${guard.violations.join("、")}，相关段落已作废`
+            }`
+            : "数字闸门：本次 LLM 未参与，未启用核对",
+          "note-line",
+        ),
+      );
+    }
+  }
+
+  function line(content, className) {
+    const div = document.createElement("div");
+    if (className) div.className = className;
+    div.textContent = content;
+    return div;
+  }
+
+  function renderChatHistory() {
+    const box = $("chat-history");
+    const empty = $("chat-history-empty");
+    if (!box || !empty) return;
+    clear(box);
+    const items = state.conversations || [];
+    // 一次都没问过的时候把整张历史卡收起来 —— 首屏不该堆两张空卡
+    const wrap = $("chat-history-wrap");
+    if (wrap) wrap.hidden = !items.length;
+    if (!items.length) {
+      show(empty);
+      return;
+    }
+    hide(empty);
+    items.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "row chat-history-row";
+      row.dataset.conversationId = item.conversation_id;
+
+      const main = document.createElement("div");
+      main.className = "row-main";
+      const title = document.createElement("div");
+      title.className = "row-title";
+      title.textContent = item.question || "—";
+      main.appendChild(title);
+      const sub = document.createElement("div");
+      sub.className = "row-sub";
+      sub.textContent = [
+        fmtTime(item.created_at),
+        CHAT_STATUS_TEXT[item.status] || item.status,
+        item.tool ? `工具 ${item.tool}` : "未调用工具",
+        typeof item.sales_amount === "number" ? `销售额 ${fmtMoney(item.sales_amount)}` : "",
+      ].filter(Boolean).join(" · ");
+      main.appendChild(sub);
+      row.appendChild(main);
+
+      const button = document.createElement("button");
+      button.className = "btn btn-sm";
+      button.textContent = "看链路";
+      button.dataset.conversationId = item.conversation_id;
+      row.appendChild(button);
+      box.appendChild(row);
+    });
+  }
+
+  async function openConversation(conversationId) {
+    if (!conversationId) return;
+    setChatState("loading", "正在从后端读取这次问答的完整记录…");
+    try {
+      state.chatError = null;
+      state.chat = await API.getConversation(conversationId);
+    } catch (err) {
+      state.chatError = err;
+    }
+    renderChat();
+  }
+
+  function renderAiConclusion() {
+    const empty = $("ai-conclusion-empty");
+    const body = $("ai-conclusion-body");
+    if (!empty || !body) return;
+
+    // 优先显示"刚刚问的那次"（内存态就是刚落盘的整条记录）；
+    // 刷新后内存态没有了，loadConversations() 已经把最近一次从后端取回来填进 state.chat。
+    const latest = state.chat;
+    if (!latest) {
+      show(empty);
+      hide(body);
+      return;
+    }
+    hide(empty);
+    show(body);
+
+    // 这张卡是"最近一次"的投影，所以标题上写清楚它到底是哪一次（时间 + 走的哪个工具）。
+    // 注意 toolLabel()：完整记录里 tool 是对象，列表摘要里 tool 是名字符串 —— 两种都要能显示。
+    setText(
+      "ai-conclusion-source",
+      `最近一次 · ${fmtTime(latest.created_at)} · ${toolLabel(latest.tool)}`,
+    );
+    setText("ai-conclusion-question", latest.question || "—");
+
+    const factsBox = $("ai-conclusion-facts");
+    if (factsBox) {
+      clear(factsBox);
+      if (latest.tool && latest.tool.display) {
+        latest.tool.display.forEach((item) => {
+          const div = document.createElement("div");
+          div.className = "rp-fact";
+          const label = document.createElement("span");
+          label.textContent = `${item.label}：`;
+          const value = document.createElement("b");
+          value.textContent = `${fmtByStyle(item.value, item.format)}${item.unit || ""}`;
+          div.appendChild(label);
+          div.appendChild(value);
+          factsBox.appendChild(div);
+        });
+      } else {
+        // 后端说了话才写"没有事实"；否则就是记录还没取回来，别替它下结论
+        factsBox.appendChild(line(
+          latest.status === "unsupported" || latest.status === "error"
+            ? "这次没有可展示的事实（问题涉及数据里没有的维度）。"
+            : "这条记录里没有事实表。",
+        ));
+      }
+    }
+
+    const whyBox = $("ai-conclusion-why");
+    if (whyBox) {
+      clear(whyBox);
+      const sections = (latest.answer && latest.answer.sections) || [];
+      const why = sections.find((section) => section.key === "why");
+      if (why) {
+        const tag = document.createElement("span");
+        tag.className = "src-tag src-inferred";
+        tag.textContent = why.inferred ? "推断" : "程序生成";
+        whyBox.appendChild(tag);
+        whyBox.appendChild(line(why.text || ""));
+      }
+    }
+  }
+
   function bindTopbar() {
     $("global-search").addEventListener("input", (event) => {
       state.search = event.target.value.trim();
@@ -1195,10 +1622,14 @@
   const INERT_HINT = "尚未实现：自然语言分析由 TASK-004 接入（NL → Intent → 白名单 Tool → 确定性计算）";
 
   function renderInertControls() {
-    ["nl-input", "nl-ask", "hero-nl-input", "hero-nl-btn"].forEach((id) => {
+    // 自然语言入口在 TASK-004 已经**真的接通**了，不再进"未实现"名单 ——
+    // 它的可用性由后端 /api/chat/capabilities 说了算（见下面的 renderNlNote）。
+    const nlAlive = !!(state.capabilities && state.capabilities.intents);
+    ["nl-input", "hero-nl-input"].forEach((id) => {
       const el = $(id);
-      if (el) el.title = INERT_HINT;
+      if (el) el.title = nlAlive ? "自然语言提问：回车即提交" : INERT_HINT;
     });
+    renderNlNote();
     // 三个企业化开关：禁用的原因是"能力还没做"，把归口 TASK 写在 title 上（不摆假的状态标签）
     const switches = [
       ["sec-rbac", "用户与权限（RBAC）尚未实现：TASK-011 接入"],
@@ -1209,12 +1640,82 @@
       const el = $(id);
       if (el) el.title = hint;
     });
-    const note = $("nl-note");
-    if (note) note.textContent = "自然语言入口：TASK-004 接入（LLM 不负责算数字）";
     const notify = $("btn-notify");
     if (notify) notify.title = "通知：后端暂无通知能力（企业化能力在 TASK-014，未启用）";
     const facts = $("hero-facts");
     if (facts) facts.title = "以上四项全部来自 GET /api/health 的真实字段";
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 自然语言入口的交互（TASK-004）
+  // ══════════════════════════════════════════════════════════════════════
+  function renderNlNote() {
+    const caps = state.capabilities;
+    if (!caps || !caps.intents) return;   // 拿不到能力清单就不改文案（不编一句"支持三类问题"糊上去）
+
+    const llm = caps.llm || {};
+    const llmText = llm.configured ? `${llm.model || "LLM"} 已就绪` : "LLM 未配置（只能走关键词降级）";
+    const names = caps.intents.map((item) => item.title).join(" / ");
+    const profile = caps.data_profile || {};
+
+    setText("nl-note", `自然语言入口：可问 ${names}（数字全部由程序算，LLM 只负责听懂问题与组织语言）· ${llmText}`);
+    setText("chat-source", `POST /api/chat · 白名单工具 ${caps.intents.length} 个`);
+    setText(
+      "hero-nl-note",
+      `本版支持 ${names}；数据范围 ${text(profile.first_day)} ~ ${text(profile.last_day)}，`
+      + `问数据里没有的维度（如区域）会被明确拒绝。`,
+    );
+  }
+
+  function scrollToChat() {
+    const panel = $("chat-panel");
+    if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: "start" });
+  }
+
+  function bindChat() {
+    // 两个输入框（顶栏 + hero）走**同一个**提交函数，行为完全一致
+    const pairs = [["nl-input", "nl-ask"], ["hero-nl-input", "hero-nl-btn"]];
+    pairs.forEach(([inputId, buttonId]) => {
+      const input = $(inputId);
+      const button = $(buttonId);
+      if (button) {
+        button.addEventListener("click", () => {
+          askQuestion(input ? input.value : "").then(scrollToChat);
+        });
+      }
+      if (input) {
+        input.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          askQuestion(input.value).then(scrollToChat);
+        });
+      }
+    });
+
+    // 示例 chips：问题原文写在 HTML 的 data-question 上（**不是** JS 里另抄一份）
+    ["chip-summary", "chip-trend", "chip-products"].forEach((id) => {
+      const chip = $(id);
+      if (!chip) return;
+      chip.addEventListener("click", () => {
+        const question = chip.dataset.question || "";
+        const input = $("hero-nl-input");
+        if (input) input.value = question;
+        askQuestion(question).then(scrollToChat);
+      });
+    });
+
+    // 历史列表：事件委托（列表是动态重建的，不能逐个绑）
+    const history = $("chat-history");
+    if (history) {
+      history.addEventListener("click", (event) => {
+        const holder = event.target.closest("[data-conversation-id]");
+        if (!holder) return;
+        openConversation(holder.dataset.conversationId).then(scrollToChat);
+      });
+    }
+
+    const jump = $("btn-ai-conclusion");
+    if (jump) jump.addEventListener("click", scrollToChat);
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1227,13 +1728,18 @@
     bindRightPanel();
     bindDataPage();
     bindDocuments();
+    bindChat();
     renderInertControls();
     await renderMetricOptions();
     hide($("upload-result-wrap"));
     hide($("run-result-wrap"));
     hide($("doc-result-wrap"));
+    hide($("chat-body"));
     renderSpec();
     renderRunResult();
+    renderChat();
+    renderChatHistory();
+    renderAiConclusion();
     await refreshAll();
     if (state.selectedTaskId) await selectTask(state.selectedTaskId);
   }

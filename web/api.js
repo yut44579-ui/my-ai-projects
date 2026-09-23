@@ -174,6 +174,18 @@ const API = (() => {
     ),
     documentTextUrl: (docId) => `/api/documents/${encodeURIComponent(docId)}/text`,
 
+    // ── 自然语言问答（TASK-004）────────────────────────────────────────
+    // 后端返回的是**整条链路**（问题 / Intent / 工具 / 事实 / 回答），这里原样透传：
+    // 页面上分区显示的东西，就是落进 state/conversations.json 的那条记录。
+    // use_llm=false 用于"强制降级演示"（验证没接 LLM 时系统不编造）。
+    chatCapabilities: () => request("/api/chat/capabilities"),
+    chat: (question, useLlm) => request("/api/chat", json({
+      question,
+      use_llm: useLlm !== false,
+    })),
+    listConversations: (params) => request(`/api/conversations${query(params)}`),
+    getConversation: (id) => request(`/api/conversations/${encodeURIComponent(id)}`),
+
     // 下载地址一律用**后端返回的相对 URL**（download_url）拼当前源，前端不自己拼路径
     downloadUrl: (relative) => new URL(relative, window.location.origin).href,
 

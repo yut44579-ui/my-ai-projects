@@ -36,12 +36,14 @@ from typing import Callable
 from app.repositories import json_store
 from app.repositories.base import (
     REPOSITORY_INTERFACES,
+    ConversationRepository,
     DocumentRepository,
     ExecutionRepository,
     TaskRepository,
     UploadRepository,
 )
 from app.repositories.json_repo import (
+    JsonConversationRepository,
     JsonDocumentRepository,
     JsonExecutionRepository,
     JsonTaskRepository,
@@ -70,6 +72,11 @@ def build_document_repository(path_getter: Callable[[], Path] | None = None) -> 
     return JsonDocumentRepository(path_getter)
 
 
+def build_conversation_repository(path_getter: Callable[[], Path] | None = None) -> ConversationRepository:
+    """造一个对话仓库（TASK-004：自然语言问答 —— 问题/Intent/工具/事实/回答 全链路留痕）。"""
+    return JsonConversationRepository(path_getter)
+
+
 # ════════════════════════════════════════════════════════════════════════
 # 默认实例（惰性构造一次，全局共用）
 # ════════════════════════════════════════════════════════════════════════
@@ -77,6 +84,7 @@ _uploads: UploadRepository | None = None
 _tasks: TaskRepository | None = None
 _executions: ExecutionRepository | None = None
 _documents: DocumentRepository | None = None
+_conversations: ConversationRepository | None = None
 
 
 def uploads() -> UploadRepository:
@@ -111,24 +119,36 @@ def documents() -> DocumentRepository:
     return _documents
 
 
+def conversations() -> ConversationRepository:
+    """对话仓库（`state/conversations.json`，TASK-004）。"""
+    global _conversations
+    if _conversations is None:
+        _conversations = build_conversation_repository()
+    return _conversations
+
+
 __all__ = [
     "UploadRepository",
     "TaskRepository",
     "ExecutionRepository",
     "DocumentRepository",
+    "ConversationRepository",
     "REPOSITORY_INTERFACES",
     "JsonUploadRepository",
     "JsonTaskRepository",
     "JsonExecutionRepository",
     "JsonDocumentRepository",
+    "JsonConversationRepository",
     "build_upload_repository",
     "build_task_repository",
     "build_execution_repository",
     "build_document_repository",
+    "build_conversation_repository",
     "uploads",
     "tasks",
     "executions",
     "documents",
+    "conversations",
     "json_store",
     "LOCK",
     "SCHEMA_VERSION",
