@@ -1043,9 +1043,13 @@
   function fmtByStyle(value, style) {
     if (typeof value !== "number" || !isFinite(value)) return text(value);
     if (style === "money") return fmtMoney(value);
+    // 变化额/贡献率必须**带符号**：+354,517.03 / -1,234.56。
+    // 少了符号，读者得自己从上下文猜方向 —— 而方向正是这两行的全部重点。
+    if (style === "money_signed") return (value >= 0 ? "+" : "-") + fmtMoney(Math.abs(value));
     if (style === "int") return fmtInt(value);
     if (style === "qty") return fmtInt(Math.round(value));
     if (style === "pct") return value.toFixed(2);
+    if (style === "pct_signed") return (value >= 0 ? "+" : "") + value.toFixed(2);
     return Number.isInteger(value) ? fmtInt(value) : String(value);
   }
 
@@ -1184,7 +1188,10 @@
       box.appendChild(line("本次没有调用任何工具（没解析出意图，或问题涉及数据里没有的维度）。"));
       return;
     }
-    box.appendChild(line(`${tool.title || ""} · 工具名 ${tool.name}（白名单里的三个之一）`));
+    // 白名单工具个数**从后端能力清单取**（不在前端写死"三个"—— 加了能力就会对不上）
+    const intents = (state.capabilities || {}).intents || [];
+    const scope = intents.length ? `白名单 ${intents.length} 个工具之一` : "白名单工具之一";
+    box.appendChild(line(`${tool.title || ""} · 工具名 ${tool.name}（${scope}）`));
     const params = document.createElement("pre");
     params.className = "code";
     params.textContent = JSON.stringify(tool.params || {}, null, 2);

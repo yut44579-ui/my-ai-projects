@@ -188,8 +188,37 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
             notice=f"计算失败（{type(exc).__name__}）：{exc}",
         )
 
+    # ── 数据不足（如窗口不完整）：不猜不补，如实说明，**也不问 LLM** ─────
+    # 没有可比的两个窗口就没有事实可讲，让模型去"圆"只会圆出编造的原因。
+    if result.get("status") == "insufficient_data":
+        reason = (result.get("notes") or ["数据不足，无法比较。"])[0]
+        payload = answer.compose(
+            question=question,
+            result=result,
+            llm_raw=None,
+            llm_used=False,
+            llm_error=llm_error,
+            unsupported_reason=None,
+            profile=profile,
+            fallback_reason="（数据不足，本次不给推断与建议 —— 没有可比的事实，说了就是编。）",
+        )
+        return _record(
+            question=question,
+            status=STATUS_UNSUPPORTED,
+            profile=profile,
+            parsed=parsed,
+            parse_info=parse_info,
+            params={key: (value.isoformat() if hasattr(value, "isoformat") else value)
+                    for key, value in params.items()},
+            result=result,
+            answer_payload=payload,
+            llm_error=llm_error,
+            notice=reason,
+        )
+
     # ── 第 5 步：LLM 只负责"组织语言" ─────────────────────────────────
-    facts_text = answer.render_facts_text(result, question=question)
+    # 喂给模型的**只有代码产生的文本**（事实段 + 主要贡献段），没有 DataFrame、没有原始行。
+    facts_text = answer.render_llm_facts(result)
     llm_raw: str | None = None
     llm_used = False
     if use_llm and llm.available():

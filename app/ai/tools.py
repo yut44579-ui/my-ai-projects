@@ -7,13 +7,23 @@
 回答里出现的每一个数字，都必须能在本文件某次调用的返回值里找到出处。
 所以本文件的规矩只有一条：**所有数字都由 pandas/executor 算，没有一个是写死的。**
 
-三个工具（第一版就三个，多一个都不加）：
+五个工具（白名单**恰好这五个**，表外的一律调不动）：
 
     sales_summary   调**既有冻结资产** `executor.compute_sales_amount()` —— 口径就是 D16，
                     一行不改、一位不差。订单数/客户数这类 metrics 目录里没有的，
                     在这里用**同一套掩码**（`_valid_window`）现算，并与 executor 对账。
     sales_trend     同一套掩码 → groupby 日/周求和（确定性）
     top_products    同一套掩码 → 按 StockCode 分组排序取 TOP N（确定性）
+    sales_compare   两个区间比大小（custom/wow/mom/yoy）+ 可选的**受控归因**
+                    （attribution_dimension ∈ country/stock_code）—— TASK-005
+    sales_breakdown_by_country  某区间各国家的销售额分布 TOP N + 占比 —— TASK-005
+
+【TASK-005 加的这两条，把"判断权"也钉在了代码里】
+    · 「主要是谁造成的」= 排序问题。排序由 `_rank_contributors()` 做，
+      LLM 只拿到排好的名单（连"主要"这个词都是代码写的，见 answer.render_contribution_text）。
+    · 归因有**硬校验**：Σ(各维度 delta) 必须等于总 delta（总 delta 走 executor，
+      分组求和走 groupby —— 两条独立路径）。不等 → 整段归因不得进入回答。
+    · previous == 0 → 一律 `not_available`，**绝不放 Infinity / NaN 出去**。
 
 ════════════════════════════════════════════════════════════════════════
 【为什么必须"同一套掩码"（而不是各自写一遍筛选）】
@@ -33,6 +43,7 @@ D16 口径有三条排除规则（取消单 / 负数量 / 非正价格）与"含
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -503,6 +514,652 @@ def top_products(start: _dt.date, end: _dt.date, top_n: int = 5) -> dict[str, An
 
 
 # ════════════════════════════════════════════════════════════════════════
+# 工具 ④：sales_compare（两区间比较 + 受控归因）—— TASK-005
+# ════════════════════════════════════════════════════════════════════════
+COMPARISON_TYPES: tuple[str, ...] = ("custom", "wow", "mom", "yoy")
+
+# 归因维度白名单：**只认数据集里真实存在的列**。
+# 区域/省份/城市/门店/渠道/销售员不在这张表里 —— 所以「拿 Country 顶替区域」
+# 在**参数层**就走不通（intent 层的关键词硬闸门已经先拦了一道，这是第二道）。
+ATTRIBUTION_DIMENSIONS: dict[str, str] = {"country": "Country", "stock_code": "StockCode"}
+
+# 正/负贡献者各取前几名 —— **常量只放这一处**，不散落到调用点
+ATTRIBUTION_TOP_N = 3
+
+# 贡献率的分母是**总变化额**，不是总销售额 —— 这句话必须跟着数字一起出现，
+# 否则用户会把 150% 读成"占了全部销售额的 150%"（评审点名的误读风险）。
+CONTRIBUTION_DENOMINATOR_NOTE = (
+    "贡献率 = 该维度的变化额 ÷ **总变化额**（不是总销售额）；"
+    "大于 100% 或为负在数学上是正常的（某个维度涨得比总体多、或有维度在反向拉）。"
+)
+
+
+def _month_window(day: _dt.date) -> tuple[_dt.date, _dt.date]:
+    """day 所在的自然月（1 日 ~ 月末）。"""
+    start = day.replace(day=1)
+    end = (start + _dt.timedelta(days=32)).replace(day=1) - _dt.timedelta(days=1)
+    return start, end
+
+
+def _week_window(day: _dt.date) -> tuple[_dt.date, _dt.date]:
+    """day 所在的自然周（**周一起算**，与 WEEK_START_WEEKDAY 一致）。"""
+    start = day - _dt.timedelta(days=day.weekday())
+    return start, start + _dt.timedelta(days=6)
+
+
+def _prev_month_window(day: _dt.date) -> tuple[_dt.date, _dt.date]:
+    return _month_window(day.replace(day=1) - _dt.timedelta(days=1))
+
+
+def _prev_week_window(day: _dt.date) -> tuple[_dt.date, _dt.date]:
+    return _week_window(day - _dt.timedelta(days=7))
+
+
+def _same_day_last_year(day: _dt.date) -> _dt.date | None:
+    """去年同一天。2 月 29 日在去年不存在 → 返回 None（**不猜、不补成 28 日**）。"""
+    try:
+        return day.replace(year=day.year - 1)
+    except ValueError:
+        return None
+
+
+def _insufficient(reason: str, **extra: Any) -> dict[str, Any]:
+    return {"status": "insufficient_data", "reason": reason, **extra}
+
+
+def resolve_compare_windows(
+    *,
+    comparison_type: str,
+    current_start: _dt.date | None,
+    current_end: _dt.date | None,
+    previous_start: _dt.date | None,
+    previous_end: _dt.date | None,
+    first: _dt.date,
+    last: _dt.date,
+) -> dict[str, Any]:
+    """把「比较类型 + 问题里的日期」解析成两个窗口，并**判断到底能不能比**。
+
+    这是**纯函数**（只吃日期、要 first/last 边界，不碰数据），所以能被单元测试
+    用构造的边界喂进去，把每一种"数据不足"的情形钉死。
+
+    三条规则：
+      ① 两个区间都给了 → 用用户给的，**一个字节都不动**（不截断、不挪动）。
+         只要有一个没被数据集完全覆盖 → `insufficient_data` + 明确原因。
+      ② 只给了本期（或什么都没给）→ 由 comparison_type 推：
+         wow = 含数据最后一天的自然周；mom/yoy = 含最后一天的自然月。
+         · wow/mom 的本期若被数据边界切断 → 退到**最近一个完整周期**并写明
+           （拿 9 天比 30 天得出的"环比 -51%"是假数字，宁可换个基准也不能给）。
+         · yoy **不退**：用户问的是哪一年哪个月就是哪个月，不完整就如实说数据不足。
+      ③ 上一期：
+         · 本期是"按日历推出来的" → 用紧邻的上一个自然周/月（等长）
+         · 本期是"用户给的" → 按同长度往前挪（周挪 7 天、月挪 1 个月、年挪 1 年）
+    """
+    if comparison_type not in COMPARISON_TYPES:
+        return _insufficient(f"不认识的比较类型：{comparison_type!r}（只支持 {list(COMPARISON_TYPES)}）")
+
+    notes: list[str] = []
+    adjusted = False
+    current_explicit = bool(current_start and current_end)
+    previous_explicit = bool(previous_start and previous_end)
+
+    # ── 本期 ──────────────────────────────────────────────────────────
+    if current_explicit:
+        current = (current_start, current_end)
+        notes.append(f"本期区间 `{current_start} ~ {current_end}` 来自问题里的明确日期（程序没有改它）。")
+    else:
+        if comparison_type == "custom":
+            return _insufficient("自定义比较必须给出两个区间（`custom` 缺日期）。")
+        if comparison_type == "wow":
+            current = _week_window(last)
+        else:
+            current = _month_window(last)
+        if comparison_type in ("wow", "mom"):
+            derived = current
+            moved, move_notes = _walk_back_to_complete(current, comparison_type, first, last)
+            current, notes = moved, notes + move_notes
+            adjusted = moved != derived
+        else:
+            notes.append(
+                f"本期取数据最后一天（{last}）所在的自然月 `{current[0]} ~ {current[1]}`。"
+            )
+
+    # ── 上一期 ────────────────────────────────────────────────────────
+    if previous_explicit:
+        previous = (previous_start, previous_end)
+        notes.append(f"上一期区间 `{previous_start} ~ {previous_end}` 来自问题里的明确日期（程序没有改它）。")
+    elif comparison_type == "custom":
+        return _insufficient("自定义比较必须给出两个区间（`custom` 缺上一期）。")
+    elif comparison_type == "wow":
+        previous = (
+            (current[0] - _dt.timedelta(days=7), current[1] - _dt.timedelta(days=7))
+            if current_explicit
+            else _prev_week_window(current[0])
+        )
+    elif comparison_type == "mom":
+        previous = (
+            _shift_month_span(current[0], current[1], -1) if current_explicit else _prev_month_window(current[0])
+        )
+    else:                                    # yoy
+        shifted_start = _same_day_last_year(current[0])
+        shifted_end = _same_day_last_year(current[1])
+        if shifted_start is None or shifted_end is None:
+            return _insufficient(
+                f"无法做同比：本期区间 `{current[0]} ~ {current[1]}` 里有 2 月 29 日，"
+                f"去年没有这一天，强行对齐就是编数据。"
+            )
+        previous = (shifted_start, shifted_end)
+
+    # ── 能不能比：两个窗口都必须被数据集**完全覆盖** ──────────────────
+    covered, problem = _coverage_problem(
+        comparison_type, current, previous, first, last, current_explicit
+    )
+    if not covered:
+        return _insufficient(problem, current=_span(current), previous=_span(previous))
+
+    same_length = (current[1] - current[0]) == (previous[1] - previous[0])
+    if same_length:
+        notes.append(
+            f"两个区间等长（各 {(current[1] - current[0]).days + 1} 天），是**可比的等长窗口**。"
+        )
+    return {
+        "status": "ok",
+        "reason": "",
+        "current": _span(current, adjusted=adjusted),
+        "previous": _span(previous),
+        "same_length": same_length,
+        "notes": notes,
+    }
+
+
+def _span(window: tuple[_dt.date, _dt.date], *, adjusted: bool = False) -> dict[str, Any]:
+    """窗口的机器可读形态。`adjusted=True` 表示本期被程序挪到过（原因在 notes 里）。"""
+    start, end = window
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "days": (end - start).days + 1,
+        "adjusted": adjusted,
+    }
+
+
+def _walk_back_to_complete(
+    window: tuple[_dt.date, _dt.date], kind: str, first: _dt.date, last: _dt.date
+) -> tuple[tuple[_dt.date, _dt.date], list[str]]:
+    """本期被数据边界切断时，退到**最近一个完整周期**（并如实写明为什么）。"""
+    start, end = window
+    if start >= first and end <= last:
+        return window, [f"本期取数据最后一天所在的自然{'周' if kind == 'wow' else '月'} `{start} ~ {end}`。"]
+    original = f"{start} ~ {end}"
+    steps = 0
+    while (end > last or start < first) and steps < 400:
+        if kind == "wow":
+            start, end = start - _dt.timedelta(days=7), end - _dt.timedelta(days=7)
+        else:
+            (start, end) = _prev_month_window(start)
+        steps += 1
+    return (start, end), [
+        f"**本期基准被改过**：数据最后一天 {last} 落在不完整的 `{original}` 里"
+        f"（该{'周' if kind == 'wow' else '月'}没走完），拿它跟完整的上期比会得出失真的{'环比' if kind == 'mom' else '周环比'}，"
+        f"因此本期退到**最近一个完整{'周' if kind == 'wow' else '月'}**：`{start} ~ {end}`。"
+    ]
+
+
+def _shift_month_span(start: _dt.date, end: _dt.date, months: int) -> tuple[_dt.date, _dt.date]:
+    """把区间整体往前挪 N 个月（日号越界时夹到当月最后一天）。"""
+
+    def shift(day: _dt.date) -> _dt.date:
+        total = day.year * 12 + (day.month - 1) + months
+        year, month = divmod(total, 12)
+        month += 1
+        last_day = (_dt.date(year, month, 1) + _dt.timedelta(days=32)).replace(day=1) - _dt.timedelta(days=1)
+        return day.replace(year=year, month=month, day=min(day.day, last_day.day))
+
+    return shift(start), shift(end)
+
+
+def _coverage_problem(
+    comparison_type: str,
+    current: tuple[_dt.date, _dt.date],
+    previous: tuple[_dt.date, _dt.date],
+    first: _dt.date,
+    last: _dt.date,
+    current_explicit: bool,
+) -> tuple[bool, str]:
+    """两个窗口是否都被数据集完全覆盖？没有 → 返回**能读懂的原因**（不猜不补不偷偷截断）。"""
+    for label, window in (("本期", current), ("上一期", previous)):
+        start, end = window
+        if start >= first and end <= last:
+            continue
+        if comparison_type == "yoy" and label == "本期" and start.day == 1 and start.year == last.year:
+            # 指令点名要的那句话：整月同比但该月没走完
+            return False, (
+                f"无法进行完整月度同比：{start.year} 年 {start.month} 月数据仅覆盖至 "
+                f"{last.month} 月 {last.day} 日（数据集范围 {first} ~ {last}）。"
+                f"若要看等长窗口，可以比 `{start} ~ {last}` 与去年同期的 "
+                f"`{start.replace(year=start.year - 1)} ~ {last.replace(year=last.year - 1)}`。"
+            )
+        if start < first:
+            return False, (
+                f"无法比较：{label}区间 `{start} ~ {end}` 早于数据集起点 {first}，"
+                f"数据集里没有这段数据（不猜、不补、不偷偷截断）。"
+            )
+        extra = "" if current_explicit else "（该周期在数据集里没走完）"
+        return False, (
+            f"无法比较：{label}区间 `{start} ~ {end}` 没有被数据集完全覆盖{extra}，"
+            f"数据集只到 {last}（不猜、不补、不偷偷截断）。"
+        )
+    return True, ""
+
+
+# ── 归因：分组求和 → 代码排序 → 硬校验 ───────────────────────────────────
+def _group_amounts(rows: pd.DataFrame, field: str) -> dict[str, float]:
+    """按某个维度列分组求金额（NaN 归到「(缺失)」，不让它变出一个 "nan" 名字）。"""
+    if rows.empty:
+        return {}
+    grouped = rows.groupby(field, dropna=False)["_amount"].sum()
+    return {_dimension_name(key): float(value) for key, value in grouped.items()}
+
+
+def _group_labels(rows: pd.DataFrame, field: str, keys: list[str]) -> dict[str, str]:
+    """给每个维度值配一个**展示名**（StockCode 用出现次数最多的 Description）。"""
+    if field != "StockCode" or rows.empty:
+        return {}
+    labels: dict[str, str] = {}
+    for key, group in rows.groupby(field, dropna=False):
+        name = _dimension_name(key)
+        if name in keys:
+            labels[name] = _dominant_description(group["Description"].dropna())
+    return labels
+
+
+def _dimension_name(key: Any) -> str:
+    return "(缺失)" if pd.isna(key) else str(key)
+
+
+def _rank_contributors(records: list[dict[str, Any]], top_n: int) -> tuple[list, list]:
+    """**代码排序**：按 |变化额| 降序取正/负贡献者各 top_n 个。
+
+    tie-break 用维度值字典序 —— 不然金额相同的两个维度谁排前面取决于 pandas
+    的内部顺序，"同一个问题问两次给出不同名单"就可能发生。
+    """
+    ordered = sorted(records, key=lambda item: (-abs(item["delta"]), item["name"]))
+    positive = [item for item in ordered if item["delta"] > _FLOAT_TOL][:top_n]
+    negative = [item for item in ordered if item["delta"] < -_FLOAT_TOL][:top_n]
+    return positive, negative
+
+
+def build_attribution(
+    dimension: str,
+    current_rows: pd.DataFrame,
+    previous_rows: pd.DataFrame,
+    total_delta: float,
+    *,
+    current_total: float | None = None,
+    previous_total: float | None = None,
+    top_n: int = ATTRIBUTION_TOP_N,
+) -> dict[str, Any]:
+    """归因的**全部数学**都在这里：分组 → delta → 排序 → 贡献率 → 一致性硬校验。
+
+    一致性校验为什么是硬闸门：`total_delta` 来自 executor（独立路径），
+    `Σ delta` 来自这里的 groupby。两条路径对不上，说明其中一条错了 ——
+    那时候**任何一个数字都不能给用户**，所以 `passed=False` 时调用方必须整段丢掉。
+    """
+    if dimension not in ATTRIBUTION_DIMENSIONS:
+        raise ValueError(f"不支持的归因维度：{dimension!r}（白名单：{sorted(ATTRIBUTION_DIMENSIONS)}）")
+    field = ATTRIBUTION_DIMENSIONS[dimension]
+
+    current = _group_amounts(current_rows, field)
+    previous = _group_amounts(previous_rows, field)
+    names = sorted(set(current) | set(previous))
+    labels = _group_labels(pd.concat([current_rows, previous_rows], ignore_index=True), field, names)
+
+    records: list[dict[str, Any]] = []
+    for name in names:
+        now, before = current.get(name, 0.0), previous.get(name, 0.0)
+        records.append({
+            "dimension": dimension,
+            "name": name,
+            "label": labels.get(name, ""),
+            "current": now,
+            "previous": before,
+            "delta": now - before,
+        })
+
+    sum_delta = math.fsum(item["delta"] for item in records)
+    tolerance = max(_FLOAT_TOL, abs(total_delta) * _FLOAT_TOL)
+    consistency: dict[str, Any] = {
+        "policy": "Σ(各维度 delta) == total_delta（total_delta 由 executor 独立算出，不是这里加的）",
+        "dimension_count": len(records),
+        "sum_of_dimension_deltas": sum_delta,
+        "total_delta": total_delta,
+        "delta": abs(sum_delta - total_delta),
+        "tolerance": tolerance,
+        "passed": abs(sum_delta - total_delta) <= tolerance,
+    }
+    if current_total is not None:
+        consistency["sum_of_current"] = math.fsum(item["current"] for item in records)
+        consistency["current_total"] = current_total
+        consistency["current_matches"] = abs(consistency["sum_of_current"] - current_total) <= tolerance
+        consistency["passed"] = consistency["passed"] and consistency["current_matches"]
+    if previous_total is not None:
+        consistency["sum_of_previous"] = math.fsum(item["previous"] for item in records)
+        consistency["previous_total"] = previous_total
+        consistency["previous_matches"] = abs(consistency["sum_of_previous"] - previous_total) <= tolerance
+        consistency["passed"] = consistency["passed"] and consistency["previous_matches"]
+
+    positive, negative = _rank_contributors(records, top_n)
+    for item in records:
+        # previous==0 / 总变化为 0 → 一律 not_available，**不放 Infinity/NaN 出去**
+        share, status = _share_of_change(item["delta"], total_delta)
+        item["contribution_share_of_change"] = share
+        item["contribution_share_status"] = status
+
+    return {
+        "dimension": dimension,
+        "dimension_field": field,
+        "top_n": int(top_n),
+        "total_delta": total_delta,
+        "contributor_count": len(records),
+        "positive_contributors": positive,
+        "negative_contributors": negative,
+        "consistency": consistency,
+        "passed": bool(consistency["passed"]),
+        "notes": [CONTRIBUTION_DENOMINATOR_NOTE],
+    }
+
+
+def _share_of_change(delta: float, total_delta: float) -> tuple[float | None, str]:
+    """贡献率 = delta / 总变化额。总变化为 0 → `(None, "not_available")`，绝不出 Infinity。"""
+    if total_delta == 0:
+        return None, "not_available"
+    return delta / total_delta, "ok"
+
+
+def _change_of(current: float, previous: float) -> dict[str, Any]:
+    """变化额 + 变化率（previous == 0 → 变化率 `not_available`）。"""
+    change = current - previous
+    rate, status = (None, "not_available") if previous == 0 else (change / previous, "ok")
+    return {"change": change, "rate": rate, "rate_status": status}
+
+
+def sales_compare(
+    *,
+    comparison_type: str = "custom",
+    current_start: _dt.date | None = None,
+    current_end: _dt.date | None = None,
+    previous_start: _dt.date | None = None,
+    previous_end: _dt.date | None = None,
+    attribution_dimension: str | None = None,
+) -> dict[str, Any]:
+    """两个区间比大小（本期 vs 上一期），可选按某个维度做**代码归因**。
+
+    金额一律来自 `sales_summary`（→ 冻结资产 executor），所以天然满足 AC-10 的位级相等。
+    """
+    first, last = dataset_bounds()
+    resolution = resolve_compare_windows(
+        comparison_type=comparison_type,
+        current_start=current_start,
+        current_end=current_end,
+        previous_start=previous_start,
+        previous_end=previous_end,
+        first=first,
+        last=last,
+    )
+    params = {
+        "comparison_type": comparison_type,
+        "current_start": current_start.isoformat() if current_start else None,
+        "current_end": current_end.isoformat() if current_end else None,
+        "previous_start": previous_start.isoformat() if previous_start else None,
+        "previous_end": previous_end.isoformat() if previous_end else None,
+        "attribution_dimension": attribution_dimension,
+    }
+
+    if resolution["status"] != "ok":
+        # 数据不足 → 明确拒绝，**一个变化额都不给**（不给用户半个答案）
+        return {
+            "tool": "sales_compare",
+            "params": params,
+            "status": "insufficient_data",
+            "facts": {
+                "comparison_type": comparison_type,
+                "comparison_status": "insufficient_data",
+                "attribution_dimension": attribution_dimension,
+            },
+            "notes": [resolution["reason"], "数据不足时不给变化额与变化率 —— 不猜、不补、不偷偷截断。"],
+            "display": [
+                {"label": "比较类型", "value": comparison_type, "unit": "", "format": "text"},
+                {"label": "比较结果", "value": "数据不足，未做比较", "unit": "", "format": "text",
+                 "note": resolution["reason"]},
+            ],
+            "selfcheck": {"windows_resolved": False, "reason": resolution["reason"]},
+        }
+
+    current, previous = resolution["current"], resolution["previous"]
+    current_window = (_dt.date.fromisoformat(current["start"]), _dt.date.fromisoformat(current["end"]))
+    previous_window = (_dt.date.fromisoformat(previous["start"]), _dt.date.fromisoformat(previous["end"]))
+    now = sales_summary(*current_window)
+    before = sales_summary(*previous_window)
+    cur, prev = now["facts"], before["facts"]
+
+    amount_change = _change_of(cur["sales_amount"], prev["sales_amount"])
+    changes = {
+        "order_count": _change_of(cur["order_count"], prev["order_count"]),
+        "customer_count": _change_of(cur["customer_count"], prev["customer_count"]),
+        "avg_order_amount": _change_of(cur["avg_order_amount"], prev["avg_order_amount"]),
+    }
+
+    # ── 归因（可选）：算 → 排序 → **硬校验**，过不了就整段丢弃 ──────────
+    attribution: dict[str, Any] | None = None
+    rejected: dict[str, Any] | None = None
+    if attribution_dimension:
+        rows_now = _valid_rows(*current_window)
+        rows_before = _valid_rows(*previous_window)
+        candidate = build_attribution(
+            attribution_dimension,
+            rows_now,
+            rows_before,
+            amount_change["change"],
+            current_total=cur["sales_amount"],
+            previous_total=prev["sales_amount"],
+            top_n=ATTRIBUTION_TOP_N,
+        )
+        if candidate["passed"]:
+            attribution = candidate
+        else:
+            rejected = {
+                "reason": "归因一致性校验未通过（Σ各维度变化额 ≠ 总变化额），按规则**整段归因不进入回答**。",
+                "consistency": candidate["consistency"],
+            }
+
+    facts: dict[str, Any] = {
+        "comparison_type": comparison_type,
+        "comparison_status": "ok",
+        "current_period": current,
+        "previous_period": previous,
+        "same_length": resolution["same_length"],
+        "current": {"sales_amount": cur["sales_amount"], "order_count": cur["order_count"],
+                    "customer_count": cur["customer_count"], "avg_order_value": cur["avg_order_amount"]},
+        "previous": {"sales_amount": prev["sales_amount"], "order_count": prev["order_count"],
+                     "customer_count": prev["customer_count"], "avg_order_value": prev["avg_order_amount"]},
+        "change_amount": amount_change["change"],
+        "change_rate": amount_change["rate"],
+        "change_rate_status": amount_change["rate_status"],
+        # 别名：AC 里同时出现过 delta/rate 与 change_amount/change_rate 两种叫法，都给
+        "delta": amount_change["change"],
+        "rate": amount_change["rate"],
+        "changes": {key: {"change": value["change"], "rate": value["rate"],
+                          "rate_status": value["rate_status"]} for key, value in changes.items()},
+        "attribution_dimension": attribution_dimension,
+        "attribution_status": ("ok" if attribution else ("rejected_inconsistent" if rejected else None)),
+        "total_delta": amount_change["change"],
+        "positive_contributors": attribution["positive_contributors"] if attribution else [],
+        "negative_contributors": attribution["negative_contributors"] if attribution else [],
+    }
+
+    notes = list(resolution["notes"]) + [
+        "口径 D16：含首尾全天；排除取消单（InvoiceNo 以 C 开头）、数量≤0、单价≤0 的行。",
+        "变化率 = 变化额 ÷ 上一期销售额；上一期为 0 时输出 `not_available`（不做除零）。",
+    ]
+    if attribution:
+        notes.append(CONTRIBUTION_DENOMINATOR_NOTE)
+    if rejected:
+        notes.append(rejected["reason"] + "（细节见 attribution_rejected.consistency）")
+    if not int(cur["rows_in_range"]) or not int(prev["rows_in_range"]):
+        empty = "本期" if not int(cur["rows_in_range"]) else "上一期"
+        window = current_window if empty == "本期" else previous_window
+        notes.append(
+            f"{empty}区间（{window[0]} ~ {window[1]}）在数据集里**一行交易都没有**，"
+            f"它的金额是 0 —— 这是数据事实，不是计算失败。"
+        )
+
+    display = [
+        {"label": "本期区间", "value": f"{current['start']} ~ {current['end']}"
+                                        f"（{current['days']} 天）", "unit": "", "format": "text",
+         "note": "本期基准被程序挪到最近一个完整周期（原因见下方口径说明）" if current.get("adjusted") else ""},
+        {"label": "上一期区间", "value": f"{previous['start']} ~ {previous['end']}"
+                                          f"（{previous['days']} 天）", "unit": "", "format": "text"},
+        {"label": "本期销售额", "value": cur["sales_amount"], "unit": currency_unit(), "format": "money"},
+        {"label": "上一期销售额", "value": prev["sales_amount"], "unit": currency_unit(), "format": "money"},
+        {"label": "销售额变化额（本期 − 上期）", "value": amount_change["change"], "unit": currency_unit(),
+         "format": "money_signed", "derived": True},
+    ]
+    display.append(_rate_display("销售额变化率（变化额 ÷ 上期）", amount_change))
+    display += [
+        _count_display("本期订单数", cur["order_count"], "单"),
+        _count_display("上一期订单数", prev["order_count"], "单"),
+        _count_display("本期客户数", cur["customer_count"], "位"),
+        _count_display("上一期客户数", prev["customer_count"], "位"),
+        {"label": "本期客单价", "value": cur["avg_order_amount"], "unit": currency_unit(), "format": "money",
+         "derived": True},
+        {"label": "上一期客单价", "value": prev["avg_order_amount"], "unit": currency_unit(), "format": "money",
+         "derived": True},
+    ]
+    if attribution_dimension:
+        display.append({
+            "label": "归因维度",
+            "value": f"{ATTRIBUTION_DIMENSIONS[attribution_dimension]}"
+                     f"（正/负贡献者各取前 {ATTRIBUTION_TOP_N} 名，由程序排序选出）"
+                     if attribution else "归因结果未通过一致性校验，已整段丢弃",
+            "unit": "", "format": "text",
+        })
+
+    return {
+        "tool": "sales_compare",
+        "params": params,
+        "status": "ok",
+        "facts": facts,
+        "attribution": attribution,
+        "attribution_rejected": rejected,
+        "notes": notes,
+        "display": display,
+        "selfcheck": {
+            "window_source": "代码解析（见 resolve_compare_windows），日期不由 LLM 解释",
+            "amount_source": "executor.compute_sales_amount（冻结资产），两个区间各调一次",
+            "current_amount": cur["sales_amount"],
+            "previous_amount": prev["sales_amount"],
+            "change_amount": amount_change["change"],
+            "rate_not_available": amount_change["rate_status"] == "not_available",
+            "attribution_consistency": attribution["consistency"] if attribution else
+                                       (rejected["consistency"] if rejected else None),
+            "attribution_passed": bool(attribution),
+        },
+    }
+
+
+def _rate_display(label: str, change: dict[str, Any]) -> dict[str, Any]:
+    """变化率那一行：`not_available` 时**不显示数字**，显示一句人能读的原因。"""
+    if change["rate_status"] == "not_available":
+        return {"label": label, "value": "不适用（上一期为 0，未做除零）", "unit": "", "format": "text",
+                "note": "not_available"}
+    return {"label": label, "value": change["rate"] * 100, "unit": "%", "format": "pct_signed", "derived": True}
+
+
+def _count_display(label: str, value: Any, unit: str) -> dict[str, Any]:
+    return {"label": label, "value": value, "unit": unit, "format": "int"}
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 工具 ⑤：sales_breakdown_by_country（只做分布，**不承担变化归因**）
+#
+# 「某时段谁卖得多」和「两个时段之间谁造成了变化」是两个问题，别混：
+# 前者归这里，后者归 sales_compare 的 attribution（评审明确要求分开）。
+# ════════════════════════════════════════════════════════════════════════
+def sales_breakdown_by_country(start: _dt.date, end: _dt.date, top_n: int = 5) -> dict[str, Any]:
+    """某时间段各国家的销售额分布：TOP N + 占比 + **总额一致性**。"""
+    rows = _valid_rows(start, end)
+    total = _amount_of(rows)
+
+    if rows.empty:
+        grouped_total, items = 0.0, []
+    else:
+        table = rows.groupby("Country", dropna=False).agg(
+            amount=("_amount", "sum"),
+            orders=("InvoiceNo", "nunique"),
+            customers=("CustomerID", "nunique"),
+            rows=("_amount", "size"),
+        )
+        table = table.sort_values(["amount", "Country"], ascending=[False, True], kind="mergesort")
+        grouped_total = float(table["amount"].sum())
+        items = [
+            {
+                "rank": rank,
+                "country": _dimension_name(index),
+                "amount": float(row["amount"]),
+                "share": (float(row["amount"]) / grouped_total) if grouped_total else 0.0,
+                "orders": int(row["orders"]),
+                "customers": int(row["customers"]),
+                "rows": int(row["rows"]),
+            }
+            for rank, (index, row) in enumerate(table.head(top_n).iterrows(), start=1)
+        ]
+
+    top_amount = math.fsum(item["amount"] for item in items)
+    facts: dict[str, Any] = {
+        "total_amount": total,
+        "grouped_total": grouped_total,
+        "country_count": int(len(items)) if rows.empty else int(rows["Country"].nunique(dropna=False)),
+        "top_n": int(top_n),
+        "top_amount": top_amount,
+        "top_share": (top_amount / grouped_total) if grouped_total else 0.0,
+        "top_country": items[0]["country"] if items else "",
+        "top_country_amount": items[0]["amount"] if items else 0.0,
+    }
+
+    notes = [
+        "口径 D16：含首尾全天；排除取消单、数量≤0、单价≤0 的行。",
+        "按 Country 分组（数据集里真实存在的国家字段）。**只描述这个时间段内的分布**，"
+        "不承担「两个时间段之间谁造成变化」的归因（那个问题归两区间比较的归因能力）。",
+        "**国家不是区域**：数据集没有区域/省份/城市/门店/渠道字段，本工具也不会拿国家顶着用。",
+    ] + _empty_window_note(len(rows), start, end)
+
+    return {
+        "tool": "sales_breakdown_by_country",
+        "params": {"start": start.isoformat(), "end": end.isoformat(), "top_n": int(top_n)},
+        "status": "ok",
+        "facts": facts,
+        "items": items,
+        "notes": notes,
+        "display": [
+            {"label": "区间总销售额", "value": total, "unit": currency_unit(), "format": "money"},
+            {"label": "上榜国家数", "value": len(items), "unit": "个", "format": "int"},
+            {"label": f"TOP{len(items)} 合计销售额", "value": top_amount, "unit": currency_unit(),
+             "format": "money"},
+            {"label": "占区间总销售额", "value": facts["top_share"] * 100, "unit": "%", "format": "pct",
+             "derived": True},
+            {"label": "区间内出现过的国家数", "value": facts["country_count"], "unit": "个", "format": "int"},
+        ],
+        "selfcheck": {
+            "detail_total_source": "同一掩码下 line_amount(rows).sum()",
+            "detail_total": total,
+            "grouped_total": grouped_total,
+            "grouped_matches_detail": abs(grouped_total - total) <= max(_FLOAT_TOL, abs(total) * _FLOAT_TOL),
+            "delta": abs(grouped_total - total),
+            "top_amount_le_total": top_amount <= total + _FLOAT_TOL,
+        },
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
 # 白名单注册表（service.py 只认这张表 —— 表外的东西调不动）
 # ════════════════════════════════════════════════════════════════════════
 @dataclass(frozen=True)
@@ -532,6 +1189,19 @@ TOOLS: dict[str, ToolSpec] = {
         description="某时间段销售额最高的 N 个产品（按 StockCode 分组降序）",
         run=top_products,
     ),
+    "sales_compare": ToolSpec(
+        name="sales_compare",
+        title="两区间比较",
+        description="两个时间段比大小（custom/wow/mom/yoy）：销售额/订单数/客户数/客单价 + "
+                    "变化额 + 变化率；可选按 country 或 stock_code 做**代码归因**",
+        run=sales_compare,
+    ),
+    "sales_breakdown_by_country": ToolSpec(
+        name="sales_breakdown_by_country",
+        title="国家分布",
+        description="某时间段各国家销售额分布 TOP N + 占比（**不做变化归因**）",
+        run=sales_breakdown_by_country,
+    ),
 }
 
 
@@ -544,15 +1214,23 @@ def run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "ATTRIBUTION_DIMENSIONS",
+    "ATTRIBUTION_TOP_N",
+    "COMPARISON_TYPES",
+    "CONTRIBUTION_DENOMINATOR_NOTE",
     "DATASET_CURRENCY",
     "TOOLS",
     "ToolSpec",
     "WEEK_START_WEEKDAY",
+    "build_attribution",
     "currency_unit",
     "dataset_bounds",
     "dataset_profile",
     "reset_cache",
+    "resolve_compare_windows",
     "run_tool",
+    "sales_breakdown_by_country",
+    "sales_compare",
     "sales_summary",
     "sales_trend",
     "top_products",

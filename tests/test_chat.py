@@ -42,12 +42,14 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import pandas as pd  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import prewarm, state  # noqa: E402
 from app.ai import answer, intent as intent_module, llm, service, tools  # noqa: E402
 from app.api import app  # noqa: E402
 from app.engine import executor, loader  # noqa: E402
+from app.engine import metrics as engine_metrics  # noqa: E402
 
 client = TestClient(app)
 
@@ -744,11 +746,18 @@ def test_AC08_app_ai里没有密钥字面量或提交痕迹():
     assert ".env" in ignored
 
 
-def test_AC08_工具白名单只有三个且都在注册表里():
+def test_AC08_工具白名单恰好五个且都在注册表里():
+    """白名单是**穷举**的：表外的东西一律调不动（TASK-005 加两个，名字也钉死）。"""
     assert set(tools.TOOLS) == set(intent_module.COMPUTE_INTENTS)
-    assert len(tools.TOOLS) == 3
+    assert set(tools.TOOLS) == {
+        "sales_summary", "sales_trend", "top_products",
+        "sales_compare", "sales_breakdown_by_country",
+    }
     with pytest.raises(KeyError):
         tools.run_tool("delete_everything", {})
+    # 归因**不是**一个独立 Intent（评审明确要求别开 sales_attribution）
+    assert "sales_attribution" not in intent_module.ALL_INTENTS
+    assert "sales_attribution" not in intent_module.COMPUTE_INTENTS
 
 
 def test_引擎不依赖ai层():
@@ -918,3 +927,472 @@ def test_预热在后台线程里跑_健康检查不用等它(monkeypatch):
             if prewarm.STATE["done"]:
                 break
             time.sleep(0.05)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 12. TASK-005：两区间比较 / 国家分布 / 归因 —— 算得对，**"判定"也对**
+#     核心三条（评审点名）：① 连"主要是谁"都由代码判  ② Σ维度==总额 硬校验
+#     ③ 贡献率叫 contribution_share_of_change（允许 >100% / <0%）
+# ════════════════════════════════════════════════════════════════════════
+def _independent_valid_rows(window: tuple[str, str]) -> pd.DataFrame:
+    """**测试自己**按 D16 口径取有效行。
+
+    刻意不借 `tools._valid_rows`：那样等于拿被测代码当参考答案。
+    这里只用冻结资产（loader + metrics）走一遍 executor 的同一套掩码。
+    """
+    frame = loader.load_raw()
+    rules = engine_metrics.resolve_enabled_rules()
+    time_column = engine_metrics.TIME_FIELD
+    start = _dt.date.fromisoformat(window[0])
+    end = _dt.date.fromisoformat(window[1])
+    low, high = engine_metrics.inclusive_day_window(start, end)
+    picked = frame.loc[(frame[time_column] >= low) & (frame[time_column] < high)]
+    hit = pd.concat({rule.key: rule.mask(picked).astype(bool) for rule in rules}, axis=1).sum(axis=1)
+    valid = picked.loc[hit == 0].copy()
+    valid["_amount"] = engine_metrics.line_amount(valid)
+    return valid
+
+
+def _independent_group_deltas(
+    field: str, current: tuple[str, str], previous: tuple[str, str]
+) -> dict[str, float]:
+    """各维度在两个区间之间的变化额（测试自己算的，用来和被测代码比对）。"""
+    def _by_group(window: tuple[str, str]) -> pd.Series:
+        table = _independent_valid_rows(window).groupby(field, dropna=False)["_amount"].sum()
+        return table.rename(index=lambda key: "(缺失)" if pd.isna(key) else str(key))
+
+    now, before = _by_group(current), _by_group(previous)
+    return {str(key): float(now.get(key, 0.0) - before.get(key, 0.0)) for key in now.index.union(before.index)}
+
+
+NOV = ("2011-11-01", "2011-11-30")
+OCT = ("2011-10-01", "2011-10-31")
+
+
+def test_T005_AC01_两区间比较走HTTP且数字与executor逐位一致(no_llm):
+    record = _ask("2011年11月和10月的销售额对比")
+    assert record["intent"]["intent"] == "sales_compare"
+    assert record["tool"]["name"] == "sales_compare"
+    assert record["status"] == "degraded"                       # 未接 LLM：如实标注
+
+    cur, prev = _executor_amount(*NOV), _executor_amount(*OCT)
+    facts = record["facts"]
+    assert facts["comparison_status"] == "ok"
+    assert facts["current"]["sales_amount"] == cur              # 位级相等，不是约等
+    assert facts["previous"]["sales_amount"] == prev
+    assert facts["change_amount"] == cur - prev
+    assert facts["change_rate"] == (cur - prev) / prev
+    # 两个区间确实来自问句，不是"整段汇总"
+    assert facts["current_period"]["start"] == NOV[0] and facts["current_period"]["end"] == NOV[1]
+    assert facts["previous_period"]["start"] == OCT[0] and facts["previous_period"]["end"] == OCT[1]
+    # 【发生了什么】是代码写的；不带归因时**没有**主要贡献段
+    keys = [section["key"] for section in record["answer"]["sections"]]
+    assert keys == ["what", "why", "actions"]
+    assert record["answer"]["sections"][0]["source"] == "code"
+    assert record["answer"]["guard"]["passed"] is True
+
+
+def test_T005_AC02_自定义两区间进结构化参数且可独立复算(no_llm):
+    """日期由**代码**从问句里抠成结构化参数（不是 LLM 解释的），事后可独立复算。"""
+    record = _ask("2011-11-01 到 2011-11-15 与 2011-10-01 到 2011-10-15 的销售额对比")
+    assert record["intent"]["intent"] == "sales_compare"
+    params = record["params"]
+    assert params["comparison_type"] == "custom"
+    assert (params["current_start"], params["current_end"]) == ("2011-11-01", "2011-11-15")
+    assert (params["previous_start"], params["previous_end"]) == ("2011-10-01", "2011-10-15")
+    assert params["attribution_dimension"] is None              # 单纯比较**不**带归因
+
+    cur = _executor_amount("2011-11-01", "2011-11-15")
+    prev = _executor_amount("2011-10-01", "2011-10-15")
+    assert record["facts"]["current"]["sales_amount"] == cur
+    assert record["facts"]["previous"]["sales_amount"] == prev
+    assert record["facts"]["change_amount"] == cur - prev
+    # 换个说法问同一件事，必须得出同一个数（说明日期理解是确定性的）
+    again = _ask("2011年11月1日到11月15日 和 2011年10月1日到10月15日 比一比销售额")
+    assert again["facts"]["change_amount"] == cur - prev
+
+
+def test_T005_AC03_环比落到最近一个完整周期且上一期与D16那一周对齐(no_llm):
+    """数据最后一天在**月中/周中**：本期基准必须退到完整周期，且**写明退过**。"""
+    # ① 本月比上月 → 2011-11 vs 2011-10
+    record = _ask("本月比上月销售额增长了多少")
+    assert record["intent"]["intent"] == "sales_compare"
+    assert record["params"]["comparison_type"] == "mom"
+    facts = record["facts"]
+    assert facts["current_period"]["start"] == NOV[0] and facts["current_period"]["end"] == NOV[1]
+    assert facts["previous_period"]["start"] == OCT[0] and facts["previous_period"]["end"] == OCT[1]
+    assert facts["current"]["sales_amount"] == _executor_amount(*NOV)
+    assert facts["previous"]["sales_amount"] == _executor_amount(*OCT)
+    assert facts["change_amount"] == _executor_amount(*NOV) - _executor_amount(*OCT)
+
+    # ② 本周比上周 → 上一期正好是 D16 那一周（口径对齐的硬证据）
+    weekly = _ask("本周比上周的销售额")
+    assert weekly["params"]["comparison_type"] == "wow"
+    weekly_facts = weekly["facts"]
+    assert weekly_facts["previous_period"]["start"] == D16_WEEK_RANGE[0]
+    assert weekly_facts["previous_period"]["end"] == D16_WEEK_RANGE[1]
+    assert weekly_facts["previous"]["sales_amount"] == _executor_amount(*D16_WEEK_RANGE)
+    # 与 DECISIONS 里那一周的口径一致（同一个数，只是浮点求和的末位写法不同）
+    assert weekly_facts["previous"]["sales_amount"] == pytest.approx(D16_AMOUNT, abs=1e-6)
+    assert weekly_facts["current_period"]["days"] == 7
+    assert weekly_facts["previous_period"]["days"] == 7
+    assert weekly_facts["same_length"] is True
+    # 为什么挪了基准：必须写在 notes 里（不能悄悄换一个周期）
+    notes = " ".join(weekly["tool"]["notes"])
+    assert "本期基准被改过" in notes and "2011-12-09" in notes
+
+
+def test_T005_AC03_上一期为0时变化率是not_available而不是Infinity(no_llm):
+    """2011-11-26 在数据里**一行都没有** → 上一期 0 → 不许出 Infinity / NaN。"""
+    record = _ask("2011-11-27 和 2011-11-26 的销售额对比")
+    facts = record["facts"]
+    assert facts["current"]["sales_amount"] == _executor_amount("2011-11-27", "2011-11-27")
+    assert facts["previous"]["sales_amount"] == 0.0
+    assert facts["change_rate"] is None
+    assert facts["change_rate_status"] == "not_available"
+    assert record["tool"]["selfcheck"]["rate_not_available"] is True
+    display = json.dumps(record["tool"]["display"], ensure_ascii=False)
+    assert "不适用" in display and "上一期为 0" in display
+
+    blob = json.dumps(record, ensure_ascii=False, default=str)
+    for bad in ("Infinity", "-Infinity", "NaN", "nan", "Inf"):
+        assert bad not in blob, f"答案里出现了 {bad}"
+
+
+def test_T005_AC04_同比有完整等长窗口才做_做不到就说数据不足(no_llm):
+    # ① 完整等长窗口（去年同一天数）→ 照做
+    same = tools.sales_compare(
+        comparison_type="yoy",
+        current_start=_dt.date(2011, 12, 1), current_end=_dt.date(2011, 12, 9),
+    )
+    facts = same["facts"]
+    assert facts["comparison_status"] == "ok"
+    assert facts["current_period"]["start"] == "2011-12-01"
+    assert facts["previous_period"] == {"start": "2010-12-01", "end": "2010-12-09", "days": 9, "adjusted": False}
+    assert facts["same_length"] is True
+    assert facts["current"]["sales_amount"] == _executor_amount("2011-12-01", "2011-12-09")
+    assert facts["previous"]["sales_amount"] == _executor_amount("2010-12-01", "2010-12-09")
+    assert facts["change_amount"] == facts["current"]["sales_amount"] - facts["previous"]["sales_amount"]
+
+    # ② 去年同期整月落在数据集起点之前 → 不许截断成"能算多少算多少"
+    early = tools.sales_compare(
+        comparison_type="yoy",
+        current_start=_dt.date(2011, 11, 1), current_end=_dt.date(2011, 11, 30),
+    )
+    assert early["facts"]["comparison_status"] == "insufficient_data"
+    assert "早于数据集起点" in early["notes"][0]
+
+
+def test_T005_AC04_用户要的同比不完整时明确说数据不足且不截断不猜(no_llm):
+    record = _ask("2011年12月同比是多少")
+    assert record["intent"]["intent"] == "sales_compare"
+    assert record["status"] == "unsupported"
+    # 用户要的区间**原样保留**在参数里（没有偷偷改成 12-01~12-09）
+    assert record["params"]["current_end"] == "2011-12-31"
+    assert record["facts"]["comparison_status"] == "insufficient_data"
+    assert "change_amount" not in record["facts"]
+    assert "change_rate" not in record["facts"]
+    notice = record["notice"]
+    assert "仅覆盖至" in notice and "12 月 9 日" in notice
+    # 数据不足时**一个金额都不给**（连"12月已发生的那 9 天"也不给）
+    partial = _executor_amount("2011-12-01", "2011-12-09")
+    blob = json.dumps(record, ensure_ascii=False, default=str)
+    assert f"{partial}" not in blob and f"{partial:,.2f}" not in blob
+    # 没有可比的事实 → 不给推断与建议，且这段是**代码**写的
+    keys = [section["key"] for section in record["answer"]["sections"]]
+    assert keys == ["what", "why", "actions"]
+    why = record["answer"]["sections"][1]
+    assert why["source"] == "code" and "数据不足" in why["text"]
+
+
+def test_T005_AC05_国家分布TOP5的构成项之和等于区间总额(no_llm):
+    record = _ask("2011年11月各国家销售额TOP5")
+    assert record["intent"]["intent"] == "sales_breakdown_by_country"
+    assert record["tool"]["name"] == "sales_breakdown_by_country"
+    facts, items = record["facts"], record["items"]
+    total = _executor_amount(*NOV)
+    assert facts["total_amount"] == total                      # 与冻结资产位级相等
+    # Σ(各国家) == 区间总额（两条求和路径，浮点末位允许差一点，但必须过工具自己的容差）
+    assert facts["grouped_total"] == pytest.approx(total, abs=1e-6)
+    assert record["tool"]["selfcheck"]["grouped_matches_detail"] is True
+    assert [item["rank"] for item in items] == [1, 2, 3, 4, 5]
+    assert len(items) == 5 and facts["top_n"] == 5
+    # 排序确实是"金额降序"（并列时按国家名，可复现）
+    amounts = [item["amount"] for item in items]
+    assert amounts == sorted(amounts, reverse=True)
+    assert items[0]["amount"] == facts["top_country_amount"] == max(amounts)
+    # 占比按"区间总销售额"算，且没被截断
+    for item in items:
+        assert abs(item["share"] - item["amount"] / total) < 1e-12
+        assert 0 < item["share"] <= 1
+    assert sum(item["share"] for item in items) < 1            # 只有 TOP5，不是全部国家
+    assert "不承担" in " ".join(record["tool"]["notes"])        # 明说这不做归因
+
+
+def test_T005_AC05_国家分布里的国家全部来自数据集的Country列(no_llm):
+    record = _ask("2011年11月各国家销售额TOP5")
+    real = {str(name) for name in loader.load_raw()["Country"].dropna().unique()}
+    for item in record["items"]:
+        assert item["country"] in real, f"{item['country']} 不是数据集里的国家"
+    # 「区间内出现过的国家数」按**这个区间**算，不是整个数据集的
+    window_countries = _independent_valid_rows(NOV)["Country"].nunique(dropna=False)
+    assert record["facts"]["country_count"] == window_countries
+    assert window_countries < loader.load_raw()["Country"].nunique(dropna=False)
+
+
+def test_T005_AC06_归因的贡献者由代码按变化额排序选出且与测试自己算的一致(no_llm):
+    record = _ask("2011年11月相比10月，哪些国家推动了销售额变化")
+    assert record["intent"]["intent"] == "sales_compare"
+    assert record["params"]["attribution_dimension"] == "country"
+    facts = record["facts"]
+    assert facts["attribution_status"] == "ok"
+    positive, negative = facts["positive_contributors"], facts["negative_contributors"]
+    assert positive and negative and facts["attribution_dimension"] == "country"
+
+    # ── 硬校验：Σ(各维度 delta) == total_delta，且 total_delta 来自冻结资产 ──
+    consistency = record["tool"]["selfcheck"]["attribution_consistency"]
+    assert consistency["passed"] is True
+    assert record["tool"]["selfcheck"]["attribution_passed"] is True
+    assert consistency["sum_of_dimension_deltas"] == pytest.approx(consistency["total_delta"], abs=1e-6)
+    assert consistency["total_delta"] == facts["change_amount"]
+    assert consistency["total_delta"] == _executor_amount(*NOV) - _executor_amount(*OCT)
+
+    # ── 独立复算：名单、排序、金额、贡献率全对得上 ──
+    deltas = _independent_group_deltas("Country", NOV, OCT)
+    assert abs(sum(deltas.values()) - facts["change_amount"]) < 1e-6
+    ranked = sorted(deltas.items(), key=lambda pair: (-abs(pair[1]), pair[0]))
+    top_n = tools.ATTRIBUTION_TOP_N
+    expected_positive = [name for name, delta in ranked if delta > tools._FLOAT_TOL][:top_n]
+    expected_negative = [name for name, delta in ranked if delta < -tools._FLOAT_TOL][:top_n]
+    assert [item["name"] for item in positive] == expected_positive
+    assert [item["name"] for item in negative] == expected_negative
+
+    for item in positive + negative:
+        assert abs(item["delta"] - deltas[item["name"]]) < 1e-6
+        assert abs(item["current"] - item["previous"] - item["delta"]) < 1e-6
+        assert item["contribution_share_of_change"] is not None
+        # 贡献率的分母是**总变化额**，不是总销售额
+        assert abs(item["contribution_share_of_change"] * consistency["total_delta"] - item["delta"]) < 1e-6
+    # 有正有负都正常；**允许 >100% / <0%（不许 clamp）** —— 本项目 11 月 UK 就是 >100%
+    shares = [item["contribution_share_of_change"] for item in positive + negative]
+    assert max(shares) > 1, "贡献率被截断了（>100% 是正常数学结果，不该被 clamp）"
+    assert min(shares) < 0
+    assert "总变化额" in " ".join(record["tool"]["notes"])      # 分母口径写在明面上
+
+
+def test_T005_AC07_按产品编码归因同样守恒且名字是真实StockCode(no_llm):
+    record = _ask("2011年11月相比10月，哪些产品推动了销售额变化")
+    assert record["params"]["attribution_dimension"] == "stock_code"
+    facts = record["facts"]
+    consistency = record["tool"]["selfcheck"]["attribution_consistency"]
+    assert consistency["passed"] is True
+    assert consistency["total_delta"] == facts["change_amount"]
+    contributors = facts["positive_contributors"] + facts["negative_contributors"]
+    assert contributors
+
+    codes = {str(code) for code in loader.load_raw()["StockCode"].dropna().unique()}
+    for item in contributors:
+        assert item["name"] in codes, f"{item['name']} 不是数据集里的 StockCode"
+    deltas = _independent_group_deltas("StockCode", NOV, OCT)
+    for item in contributors:
+        assert abs(item["delta"] - deltas[item["name"]]) < 1e-6
+    # 榜单要能读：编码旁边带上展示名
+    assert any(item["label"] for item in facts["positive_contributors"])
+
+
+def test_T005_AC08_一致性校验不过时整段归因不进回答(monkeypatch, no_llm):
+    """故意让校验失败：必须**整段**消失（facts 状态、回答分区、工具返回值三处都要看得出）。"""
+    real = tools.build_attribution
+
+    def _broken(*args, **kwargs):
+        report = real(*args, **kwargs)
+        report["consistency"]["passed"] = False               # 伪造一个"Σ ≠ 总额"
+        report["consistency"]["delta"] = 999.99
+        report["passed"] = False
+        return report
+
+    monkeypatch.setattr(tools, "build_attribution", _broken)
+    record = _ask("2011年11月相比10月，哪些国家推动了销售额变化")
+    assert record["facts"]["attribution_status"] == "rejected_inconsistent"
+    assert record["facts"]["positive_contributors"] == []
+    assert record["tool"]["selfcheck"]["attribution_passed"] is False
+    assert record["tool"]["selfcheck"]["attribution_consistency"]["passed"] is False
+    assert "一致性" in " ".join(record["tool"]["notes"])
+    keys = [section["key"] for section in record["answer"]["sections"]]
+    assert "contribution" not in keys, "归因没过校验，却还是出现在回答里"
+    blob = json.dumps(record, ensure_ascii=False, default=str)
+    assert "正贡献者" not in blob and "负贡献者" not in blob
+    # 但比较本身照样给（只是一段归因被丢掉，不是整个回答作废）
+    assert record["facts"]["change_amount"] == _executor_amount(*NOV) - _executor_amount(*OCT)
+
+
+def test_T005_AC08_一致性校验函数本身能判出不一致(no_llm):
+    now = tools._valid_rows(_dt.date(2011, 11, 1), _dt.date(2011, 11, 30))
+    before = tools._valid_rows(_dt.date(2011, 10, 1), _dt.date(2011, 10, 31))
+    total_delta = _executor_amount(*NOV) - _executor_amount(*OCT)
+
+    good = tools.build_attribution("country", now, before, total_delta)
+    assert good["passed"] is True and good["consistency"]["delta"] <= good["consistency"]["tolerance"]
+    bad = tools.build_attribution("country", now, before, total_delta + 12345.67)
+    assert bad["passed"] is False
+    assert bad["consistency"]["delta"] > bad["consistency"]["tolerance"]
+
+
+@pytest.mark.parametrize(
+    "question, keyword",
+    [
+        ("2011年11月华南区各国家销售额TOP5", "华南"),
+        ("2011年11月各区域销售额占比", "区域"),
+        ("2011年11月北美区域的销售额", "北美"),
+        ("2011年11月广东省的销售额", "省"),
+        ("2011年11月上海门店卖了多少", "门店"),
+        ("2011年11月线上渠道的销售额", "渠道"),
+        ("张三销售2011年11月的销售额", "销售"),
+        ("2011年11月按销售员拆分销售额", "销售员"),
+    ],
+)
+def test_T005_AC09_区域省份城市门店渠道销售员仍然被拒且不许用国家顶替(question, keyword):
+    record = _ask(question)
+    assert record["status"] == "unsupported"
+    assert record["intent"]["intent"] == "unsupported"
+    assert keyword in record["intent"]["reason"]
+    assert record["tool"] is None and record["facts"] is None
+    blob = json.dumps(record, ensure_ascii=False, default=str)
+    # 没有偷算出任何金额，也没有把国家搬出来顶替
+    assert str(_executor_amount(*NOV)) not in blob
+    assert f"{_executor_amount(*NOV):,.2f}" not in blob
+    # 回答段里不许出现国家名（`data_profile` 的币种说明里提到"英国零售商"是数据描述，
+    # 不是拿国家顶替区域，所以只查回答与工具部分）
+    answer_blob = json.dumps([record["answer"], record["tool"], record["items"]], ensure_ascii=False)
+    for name in ("United Kingdom", "英国", "Germany", "德国"):
+        assert name not in answer_blob
+    what = record["answer"]["sections"][0]["text"]
+    assert "Country" in what and "回答不了" in what
+
+
+def test_T005_AC09_带归因的问法里出现区域词也照样拒(no_llm):
+    """「哪些区域推动了变化」不能因为同句有"贡献/推动"就放行成按国家归因。"""
+    record = _ask("2011年11月相比10月，哪些区域推动了销售额变化")
+    assert record["status"] == "unsupported"
+    assert record["facts"] is None
+    assert not record["params"]
+    assert "贡献" not in record["answer"]["sections"][0]["text"]
+
+
+def test_T005_AC10_回答里的金额与executor位级相等(no_llm):
+    """位级比对：不是 approx，是 `==`（同一次 float 运算路径）。"""
+    record = _ask("2011年11月和10月的销售额对比")
+    text = record["answer"]["sections"][0]["text"]
+    cur, prev = _executor_amount(*NOV), _executor_amount(*OCT)
+    assert f"{cur:,.2f}" in text and f"{prev:,.2f}" in text
+    assert f"{cur - prev:+,.2f}" in text                        # 变化额带符号
+    assert f"{(cur - prev) / prev * 100:+.2f}" in text          # 变化率带符号、百分数
+    assert record["tool"]["selfcheck"]["current_amount"] == cur
+    assert record["tool"]["selfcheck"]["previous_amount"] == prev
+
+
+def test_T005_AC11_LLM只拿代码生成的文本_不碰DataFrame也不碰原始行(monkeypatch):
+    """架构级：喂给模型的**每一次**输入都必须是加工好的文本。"""
+    captured: list[str] = []
+    intent_json = (
+        '{"intent":"sales_compare","params":{"comparison_type":"custom",'
+        '"current_start":"2011-11-01","current_end":"2011-11-30",'
+        '"previous_start":"2011-10-01","previous_end":"2011-10-31",'
+        '"attribution_dimension":"country"},"assumptions":[],"confidence":0.9}'
+    )
+
+    def _chat(system: str, user: str, **kwargs):
+        captured.append(user)
+        assert isinstance(user, str) and isinstance(system, str)
+        if "意图解析器" in system:
+            return intent_json
+        return "【为什么】\n可能是需求集中。\n【建议行动】\n- 关注头部国家。"
+
+    monkeypatch.setattr(llm, "available", lambda: True)
+    monkeypatch.setattr(llm, "chat", _chat)
+    record = _ask("2011年11月相比10月，哪些国家推动了销售额变化", use_llm=True)
+    assert captured, "LLM 通道接上了却没被调用"
+
+    dirty = ("DataFrame", "dtype", "Series", "Name:", "nan", "NaN", "0    ")
+    for prompt in captured:
+        for marker in dirty:
+            assert marker not in prompt, f"喂给模型的文本里有 {marker}：{prompt[:200]}"
+    # 它拿到的确实是"事实 + 代码排好的贡献名单"，而不是让模型自己判断谁主要
+    answer_prompt = captured[-1]
+    assert "正贡献者" in answer_prompt and "负贡献者" in answer_prompt
+    assert "总变化：" in answer_prompt and "贡献率" in answer_prompt
+    top = record["facts"]["positive_contributors"][0]["name"]
+    assert top in answer_prompt                                   # 名单是代码给的，模型照着说
+    assert record["answer"]["sections"][1]["source"] == "code"
+
+
+def test_T005_AC12_主要贡献段由代码生成_LLM改不了名单(monkeypatch):
+    """LLM 在【为什么】里自称"主要贡献者是西班牙和火星国" —— 名单必须纹丝不动。"""
+    intent_json = (
+        '{"intent":"sales_compare","params":{"comparison_type":"custom",'
+        '"current_start":"2011-11-01","current_end":"2011-11-30",'
+        '"previous_start":"2011-10-01","previous_end":"2011-10-31",'
+        '"attribution_dimension":"country"},"assumptions":[],"confidence":0.9}'
+    )
+
+    def _chat(system: str, user: str, **kwargs):
+        if "意图解析器" in system:
+            return intent_json
+        return "【为什么】\n其实主要贡献者是西班牙和火星国。\n【建议行动】\n- 看西班牙。"
+
+    monkeypatch.setattr(llm, "available", lambda: True)
+    monkeypatch.setattr(llm, "chat", _chat)
+    record = _ask("2011年11月相比10月，哪些国家推动了销售额变化", use_llm=True)
+
+    sections = {section["key"]: section for section in record["answer"]["sections"]}
+    contribution = sections["contribution"]
+    assert contribution["source"] == "code"                     # 这一段不是模型写的
+    assert "西班牙" not in contribution["text"] and "火星国" not in contribution["text"]
+    assert "LLM 未参与" in contribution["contributors"]["decided_by"]
+
+    attribution = record["facts"]
+    assert contribution["contributors"]["positive"] == [
+        item["name"] for item in attribution["positive_contributors"]
+    ]
+    assert contribution["contributors"]["negative"] == [
+        item["name"] for item in attribution["negative_contributors"]
+    ]
+    assert contribution["contributors"]["total_delta"] == record["facts"]["change_amount"]
+    # 数字也是代码写的：段里的每个数字都能在确定性结果里找到
+    allowed = answer.collect_allowed_numbers(contribution["text"], record["facts"], record["tool"])
+    assert answer.number_guard(contribution["text"], allowed)["passed"] is True
+    # 分区顺序：事实 → 贡献 → 推断 → 建议（顺序本身就说明谁是事实谁是猜测）
+    assert [section["key"] for section in record["answer"]["sections"]] == [
+        "what", "contribution", "why", "actions"
+    ]
+
+
+def test_T005_AC12_主要贡献段里的每个数字都来自事实表(no_llm):
+    record = _ask("2011年11月相比10月，哪些国家推动了销售额变化")
+    contribution = [s for s in record["answer"]["sections"] if s["key"] == "contribution"][0]
+    allowed = answer.collect_allowed_numbers(contribution["text"], record["facts"], record["tool"])
+    report = answer.number_guard(contribution["text"], allowed)
+    assert report["passed"] is True and report["violations"] == []
+    assert "正贡献者" in contribution["text"] and "负贡献者" in contribution["text"]
+    # 分母口径必须跟着数字一起出现，免得被读成"占总销售额"
+    assert "总变化额" in contribution["text"] and "不是总销售额" in contribution["text"]
+
+
+def test_T005_回答分区四段且顺序固定(no_llm):
+    plain = _ask("2011年11月和10月的销售额对比")["answer"]["sections"]
+    assert [s["key"] for s in plain] == ["what", "why", "actions"]
+    attributed = _ask("2011年11月相比10月，哪些国家推动了销售额变化")["answer"]["sections"]
+    assert [s["key"] for s in attributed] == ["what", "contribution", "why", "actions"]
+    assert [s["source"] for s in attributed] == ["code", "code", "code", "code"]  # 未接 LLM 时降级
+    assert answer.SECTION_TITLES["contribution"] == "【主要贡献】"
+
+
+def test_T005_能力端点如实列出五个意图(no_llm):
+    body = client.get("/api/chat/capabilities").json()
+    names = [item["name"] for item in body["intents"]]
+    assert names == ["sales_summary", "sales_trend", "top_products",
+                     "sales_compare", "sales_breakdown_by_country"]
+    assert "sales_attribution" not in names
+    titles = {item["name"]: item["title"] for item in body["intents"]}
+    assert titles["sales_compare"] and titles["sales_breakdown_by_country"]
+    assert any("区域" in word for word in body["unsupported"]["dimensions"])

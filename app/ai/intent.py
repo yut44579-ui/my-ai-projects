@@ -10,11 +10,17 @@
 LLM 给什么形状，这里就用 schema 卡死：多一个字段、日期格式不对、top_n 越界 —— 一律拒绝。
 
 ════════════════════════════════════════════════════════════════════════
-【三个 Intent，多一个都不加（施工指令：第一版只做 3 个）】
+【五个 Intent（TASK-004 三个 + TASK-005 两个）】
 ════════════════════════════════════════════════════════════════════════
     sales_summary   某时间段 → 销售额 / 订单数 / 客户数（调既有 metrics + executor）
     sales_trend     某时间段 → 按日或按周的销售额序列（确定性 groupby）
     top_products    某时间段 → 产品 TOP N（确定性分组排序）
+    sales_compare   两个时间段比大小 + 可选归因（TASK-005）——
+                    **归因不是第三个 Intent，而是它的一个受控参数** `attribution_dimension`。
+                    评审明确要求别开 `sales_attribution`：那会一路裂成
+                    sales_country_attribution / sales_product_attribution…（Intent 爆炸）。
+    sales_breakdown_by_country  某时间段各国家分布 TOP N（TASK-005）——
+                    只回答"这段时间谁卖得多"，**不承担变化归因**（那是 sales_compare 的事）。
 
 外加两个**非计算**分支：
     unsupported     问的是数据里根本没有的维度（区域/省份/门店/毛利…）→ 明确告知不支持
@@ -42,17 +48,21 @@ from app.ai import llm
 from app.ai.tools import dataset_bounds
 
 # ════════════════════════════════════════════════════════════════════════
-# 三个 Intent 的名字（**白名单**：不在这个元组里的 intent 一律拒绝）
+# Intent 的名字（**白名单**：不在这个元组里的 intent 一律拒绝）
 # ════════════════════════════════════════════════════════════════════════
 INTENT_SALES_SUMMARY = "sales_summary"
 INTENT_SALES_TREND = "sales_trend"
 INTENT_TOP_PRODUCTS = "top_products"
+INTENT_SALES_COMPARE = "sales_compare"
+INTENT_SALES_BREAKDOWN_BY_COUNTRY = "sales_breakdown_by_country"
 INTENT_UNSUPPORTED = "unsupported"
 
 COMPUTE_INTENTS: tuple[str, ...] = (
     INTENT_SALES_SUMMARY,
     INTENT_SALES_TREND,
     INTENT_TOP_PRODUCTS,
+    INTENT_SALES_COMPARE,
+    INTENT_SALES_BREAKDOWN_BY_COUNTRY,
 )
 ALL_INTENTS: tuple[str, ...] = COMPUTE_INTENTS + (INTENT_UNSUPPORTED,)
 
@@ -70,19 +80,26 @@ WEEK_START_WEEKDAY = 0                      # Monday
 _BANNED_DIMENSIONS: tuple[tuple[tuple[str, ...], str], ...] = (
     (
         ("区域", "大区", "片区", "地区", "华南", "华东", "华北", "华中",
-         "西南", "西北", "东北", "东南", "长三角", "珠三角"),
+         "西南", "西北", "东北", "东南", "长三角", "珠三角",
+         "北美", "南美", "欧洲", "亚洲", "亚太", "美洲", "大洲"),
         "数据集只有 8 列（InvoiceNo / StockCode / Description / Quantity / InvoiceDate / "
         "UnitPrice / CustomerID / Country），**没有「区域」字段**，也没有任何能推出区域的列。",
     ),
     (
         ("省份", "省", "城市", "门店", "店铺", "网点", "仓库", "渠道", "销售员", "业务员",
-         "客户经理", "部门", "团队", "负责人"),
+         "客户经理", "部门", "团队", "负责人",
+         "上海", "北京", "广州", "深圳", "杭州", "成都", "天津", "重庆"),
         "数据集只有 8 列，**没有省份/城市/门店/渠道/销售员这类字段**，无法按它们拆分。",
     ),
     (
         ("毛利", "利润", "成本", "折扣", "税额", "税率", "运费"),
         "数据集只有 Quantity 与 UnitPrice 两列金额信息，**没有成本/毛利/折扣字段**，算不出这些。",
     ),
+)
+
+
+_SALESPERSON_REASON = (
+    "数据集只有 8 列，**没有销售员/业务员/负责人字段**，无法按人拆分。"
 )
 
 
@@ -127,10 +144,63 @@ class TopProductsParams(_DayRangeParams):
     top_n: int = Field(default=5, ge=1, le=20)
 
 
-PARAM_MODELS: dict[str, type[_DayRangeParams]] = {
+class CountryBreakdownParams(_DayRangeParams):
+    top_n: int = Field(default=5, ge=1, le=20)
+
+
+class SalesCompareParams(BaseModel):
+    """两区间比较的受控参数（**归因是这个参数的一个取值，不是新 Intent**）。
+
+    `attribution_dimension` 用 Literal 卡死：LLM 想按"区域/省份/门店"归因，
+    在这里就被拒（连 `region` 这个词都进不来）—— 从参数层杜绝"拿国家顶替区域"。
+
+    区间一律用**绝对日期**：LLM 只负责把"上个月"翻译成日期，翻译完就由代码接管，
+    `resolve_compare_windows()` 不会再让 LLM 解释任何日期（AC-02）。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    comparison_type: Literal["custom", "wow", "mom", "yoy"] = "custom"
+    current_start: _dt.date | None = None
+    current_end: _dt.date | None = None
+    previous_start: _dt.date | None = None
+    previous_end: _dt.date | None = None
+    attribution_dimension: Literal["country", "stock_code"] | None = None
+
+    def resolved(self) -> None:
+        """语义校验：**要么成对给，要么都不给**（半截日期是不合法的输入）。"""
+        for label, start, end in (
+            ("本期", self.current_start, self.current_end),
+            ("上一期", self.previous_start, self.previous_end),
+        ):
+            if (start is None) != (end is None):
+                raise IntentError(
+                    "intent_invalid_params",
+                    f"{label}区间只给了一半（start={start} / end={end}）—— 必须成对给。",
+                )
+            if start is not None and end is not None and start > end:
+                raise IntentError(
+                    "intent_invalid_params",
+                    f"{label}区间的起始日期晚于结束日期：{start} > {end}",
+                )
+        if self.comparison_type == "custom" and self.current_start is None:
+            raise IntentError(
+                "intent_invalid_params",
+                "比较类型是 custom，但没给出两个区间（至少要给本期区间的起止日期）。",
+            )
+        if self.previous_start is not None and self.current_start is None:
+            raise IntentError(
+                "intent_invalid_params",
+                "给了上一期区间却没给本期区间 —— 比较必须有个基准。",
+            )
+
+
+PARAM_MODELS: dict[str, type[BaseModel]] = {
     INTENT_SALES_SUMMARY: SalesSummaryParams,
     INTENT_SALES_TREND: SalesTrendParams,
     INTENT_TOP_PRODUCTS: TopProductsParams,
+    INTENT_SALES_COMPARE: SalesCompareParams,
+    INTENT_SALES_BREAKDOWN_BY_COUNTRY: CountryBreakdownParams,
 }
 
 
@@ -150,7 +220,7 @@ class ParsedIntent(BaseModel):
     confidence: float = 0.0
     reason: str = ""
 
-    def validated_params(self) -> _DayRangeParams:
+    def validated_params(self) -> BaseModel:
         """按 intent 取出对应 schema 校验参数。**多字段/少字段/类型不对 → 明确报错**。"""
         if self.intent not in PARAM_MODELS:
             raise IntentError(
@@ -204,25 +274,49 @@ def system_prompt() -> str:
     """把"数据现实"如实写进提示词 —— 模型知道边界，才可能正确回答"不支持"。"""
     first, last = dataset_bounds()
     return f"""你是销售数据问答的**意图解析器**。你的唯一输出是一段 JSON，不要解释、不要 markdown 代码块、不要多余文字。
+**你不做任何计算、不做任何排序、不判断"主要贡献者"** —— 那些由程序做。你只把问题翻译成结构化参数。
 
-可用 intent 只有 4 个，多一个都不许编：
+可用 intent 只有下面这 6 个，多一个都不许编（**没有 sales_attribution 这个 intent** ——
+"归因"是 sales_compare 的一个参数）：
 1. sales_summary —— 问某时间段的销售额/订单数/客户数。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}}
 2. sales_trend   —— 问某时间段按日或按周的趋势走势。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","granularity":"day"|"week"}}
 3. top_products  —— 问某时间段卖得最好的产品排行。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","top_n":整数(1-20)}}
-4. unsupported   —— 问题涉及数据里不存在的维度/指标时用它。params: {{}}，并在 reason 里说明缺什么。
+4. sales_compare —— 问**两个时间段之间**的差别/变化/增减/对比，或问"变化主要是谁造成的"。
+   params: {{
+     "comparison_type": "custom"|"wow"|"mom"|"yoy",
+     "current_start":"YYYY-MM-DD","current_end":"YYYY-MM-DD",       ← 本期（可省略，见下）
+     "previous_start":"YYYY-MM-DD","previous_end":"YYYY-MM-DD",      ← 上一期（可省略）
+     "attribution_dimension": null|"country"|"stock_code"            ← 只有问"谁造成的/哪个国家/哪个商品"时才填
+   }}
+5. sales_breakdown_by_country —— 问**某一个时间段内**各个国家的销售额分布/占比/排名。
+   params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","top_n":整数(1-20)}}
+6. unsupported   —— 问题涉及数据里不存在的维度/指标时用它。params: {{}}，并在 reason 里说明缺什么。
+
+sales_compare 的 comparison_type 怎么选（**这一条最容易错，请严格照做**）：
+- 用户明确给了两个区间（"比较 2011-11-01 到 11-15 与 2011-10-01 到 10-15"）→ "custom"，并把两个区间都填进 params。
+- 说"本周/这周 vs 上周"或只给了一个区间但要跟上一周比 → "wow"。
+- 说"本月/这个月 vs 上月"或只给了一个区间但要跟上一月比 → "mom"。
+- 说"同比/去年同期/和去年比" → "yoy"。
+- **只要 comparison_type 不是 custom，就不要自己算上一期的日期**：上一期由程序推导
+  （用户给了哪一期就填哪一期，没给就留空）。你填错日期比留空更糟。
+- "哪些国家推动了变化/变化主要来自哪个国家" → sales_compare + attribution_dimension="country"。
+- "哪些商品造成了变化" → sales_compare + attribution_dimension="stock_code"。
+- 问"某个时间段内各国卖了多少"（只有一个时间段、没有"变化/对比"）→ sales_breakdown_by_country。
 
 数据集事实（**必须严格按这个来，不许假装知道更多**）：
 - 只有 8 列：InvoiceNo / StockCode / Description / Quantity / InvoiceDate / UnitPrice / CustomerID / Country
-- 时间范围：{first} ~ {last}
+- 时间范围：{first} ~ {last}（注意：最后一天不是月末，**最后一个月/周是不完整的**）
 - **没有「区域」「省份」「城市」「门店」「渠道」「销售员」「毛利」「成本」这些字段**
 - 用户问「华南/华东/大区/某省/某门店/毛利」这类 → 必须返回 unsupported，
   **绝对不许**用 Country（国家）或其它字段"代替"回答 —— 那是答非所问。
+  「国家」是合法维度（数据里有 Country），「区域」不是 —— 两者绝不可混。
 - 「今天」以数据集最后一天 {last} 为基准（数据是历史数据，不是实时数据）。
 
 参数规则：
 - 时间一律解析成**绝对日期** YYYY-MM-DD。相对说法（"上个月""第三周"）也换算成绝对日期。
 - 「X月」= 该月 1 日 ~ 该月最后一天。「X月第N周」= 该月内第 N 个完整周，**一周从周一开始**。
 - 用户**没给**时间范围时：start={first}、end={last}，并在 assumptions 里写明"未指定时间范围，已用数据集全区间"。
+  （**sales_compare 例外**：没给区间就按上面的规则留空，让程序去推。）
 - granularity 没说就 "day"；top_n 没说就 5。
 - assumptions：数组，写你为理解问题做的每一个**自行判断**（如"上个月"按数据集最后一天倒推）。
   没做判断就空数组。**不要**把用户已经说清楚的东西再复述一遍。
@@ -278,8 +372,9 @@ def parse(question: str, *, allow_llm: bool = True) -> tuple[ParsedIntent, dict[
     if parsed is None:
         raise IntentError(
             "intent_unparseable",
-            f"没听懂这个问题，也不知道该调哪个工具。当前只支持三类问题："
-            f"①某时间段卖了多少 ②某时间段卖得怎么样（趋势） ③某时间段卖得最好的产品。"
+            f"没听懂这个问题，也不知道该调哪个工具。当前支持："
+            f"①某时间段卖了多少 ②某时间段卖得怎么样（趋势） ③某时间段卖得最好的产品 "
+            f"④两个时间段比大小（含按国家/商品归因） ⑤某时间段各国销售额分布。"
             f"（LLM 未能参与解析：{llm_error['message']}）",
         )
     parsed = parsed.model_copy(update={"assumptions": tuple(parsed.assumptions) + ("由关键词匹配降级解析（LLM 未参与）",)})
@@ -358,6 +453,15 @@ def guard_unsupported(question: str) -> ParsedIntent | None:
                 confidence=1.0,
                 reason=f"你问到了「{'/'.join(hits)}」。{reason}",
             )
+    match = _SALESPERSON_RE.search(question)
+    if match:
+        return ParsedIntent(
+            intent=INTENT_UNSUPPORTED,
+            params={},
+            assumptions=(),
+            confidence=1.0,
+            reason=f"你问到了「{match.group(0)}」。{_SALESPERSON_REASON}",
+        )
     return None
 
 
@@ -371,6 +475,68 @@ _TREND_WORDS = ("趋势", "走势", "变化", "曲线", "逐日", "逐周", "按
 _RANK_WORDS = ("排行", "排名", "top", "TOP", "Top", "卖得最好", "最好卖", "畅销", "热销", "销量最高", "前几", "最畅销")
 _SUMMARY_WORDS = ("多少", "总额", "一共", "总共", "合计", "销售额", "营业额", "卖了多少", "卖了多少钱", "订单", "客户数")
 
+# ── TASK-005 的关键词（降级路径用）─────────────────────────────────────────
+# 「对比」类词表：命中就**必须**走 sales_compare，绝不能掉进 summary ——
+# 否则"比较 11 月和 10 月"会被当成"11 月~10 月整段"汇总，给出一个**答另一个问题**的数字，
+# 那比"没听懂"糟糕得多。
+_COMPARE_WORDS = (
+    "对比", "相比", "环比", "同比", "比较", "增长", "下降", "上升", "减少",
+    "涨幅", "跌幅", "同期", "去年同期", "多了多少", "少了多少",
+    # 归因类词（"贡献/推动/造成"）本质上也是"两个时段之间"的问题，一并算比较类
+    "贡献", "推动", "造成", "拉动",
+)
+_COUNTRY_WORDS = ("国家", "各国", "国别", "按国家")
+_ATTRIBUTION_WORDS = ("贡献", "推动", "造成", "拉动", "主要来自", "主要是谁", "哪些国家", "哪个国家")
+_PRODUCT_WORDS = ("产品", "商品", "货号", "编码", "SKU", "sku")
+_JOINER_RE = re.compile(r"[到至~～—－]")
+# 「张三销售」这种"按人"的问法。前后文限定得很严，**不能误伤**「销售额/销售量/销售趋势/
+# 销售占比/销售金额」这些正常指标词 —— 所以要求"销售/业务"前面有 2~3 个汉字（人名），
+# 后面不是 额/量/收/单/趋/占… 这类指标后缀。
+_SALESPERSON_RE = re.compile(
+    r"[一-龥]{2,3}(?:销售|业务)(?![额量收单增环同趋情部变现占金排人])"
+)
+# 只写了「X月」（没写年份）→ 年份沿用前一个日期（与 `_dates_from_text` 同一套规则）
+_BARE_MONTH_RE = re.compile(r"(?<![\d年\-/])(\d{1,2})\s*月")
+
+
+def _is_comparison(text: str) -> bool:
+    """是不是"两个时间段比大小"的问题？
+
+    「占比」里的"比"不算（那是分布问题）—— 这个豁免必须留着，
+    否则「各国销售额占比」会被误判成比较。
+    """
+    if any(word in text for word in _COMPARE_WORDS):
+        return True
+    return "比" in text and "占比" not in text
+
+
+def _comparison_type_from_text(text: str) -> str:
+    if "同比" in text or "同期" in text:
+        return "yoy"
+    if "周环比" in text or "本周" in text or "这周" in text or "上周" in text or "每周" in text:
+        return "wow"
+    if "环比" in text or "本月" in text or "这个月" in text or "上月" in text or "上个月" in text:
+        return "mom"
+    return "custom"
+
+
+def _attribution_dimension_from_text(text: str) -> str | None:
+    """只有"哪些国家/谁造成了变化"这种问法才带归因 —— 单纯比较不带。"""
+    if not any(word in text for word in _ATTRIBUTION_WORDS):
+        return None
+    if any(word in text for word in _COUNTRY_WORDS):
+        return "country"
+    if any(word in text for word in _PRODUCT_WORDS):
+        return "stock_code"
+    return None
+
+
+def _top_n_from_text(text: str, default: int = 5) -> int:
+    match = re.search(r"(?:top|TOP|Top|前)\s*(\d{1,2})", text)
+    if match:
+        return max(1, min(20, int(match.group(1))))
+    return default
+
 
 def parse_by_keywords(question: str) -> ParsedIntent | None:
     """无 LLM 时的降级解析：认日期 + 认几个关键词。
@@ -383,7 +549,22 @@ def parse_by_keywords(question: str) -> ParsedIntent | None:
         return None
 
     first, last = dataset_bounds()
+
+    # ── ① 比较类问题优先判（"比较 11 月和 10 月"里也有"销售额"这种 summary 词）──
+    if _is_comparison(text):
+        return _compare_by_keywords(text, first, last)
+
     start, end, notes = _dates_from_text(text, first, last)
+
+    # ── ② 某一时段的国家分布（**不承担变化归因**）───────────────────────
+    if any(word in text for word in _COUNTRY_WORDS):
+        return ParsedIntent(
+            intent=INTENT_SALES_BREAKDOWN_BY_COUNTRY,
+            params={"start": start.isoformat(), "end": end.isoformat(),
+                    "top_n": _top_n_from_text(text)},
+            assumptions=tuple(notes),
+            confidence=0.5,
+        )
 
     if any(word in text for word in _RANK_WORDS):
         return ParsedIntent(
@@ -408,6 +589,107 @@ def parse_by_keywords(question: str) -> ParsedIntent | None:
             confidence=0.5,
         )
     return None
+
+
+def _compare_by_keywords(text: str, first: _dt.date, last: _dt.date) -> ParsedIntent | None:
+    """降级路径下的两区间比较。**宁可返回 None（没听懂），也不猜一个区间去汇总。**
+
+    能认的形状：
+        「比较 2011-11 和 2011-10」                     → 两个区间 → custom
+        「2011-11-01 到 11-15 与 2011-10-01 到 10-15」   → 两个区间（靠"到/至/~"合对）
+        「2011年11月的环比」/「本月比上月」              → 一个或零个区间 → 由程序推上一期
+        三个及以上区间（"比较 9 月、10 月、11 月"）      → **认输**（本版只做两区间）
+    """
+    comparison_type = _comparison_type_from_text(text)
+    attribution = _attribution_dimension_from_text(text)
+    ranges = _date_ranges_from_text(text, first, last)
+
+    if len(ranges) > 2:
+        return None                       # 三个区间比不了 —— 不挑两个凑合
+    if len(ranges) == 2:
+        current, previous = ranges[0], ranges[1]
+        if comparison_type == "custom":
+            comparison_type = "custom"    # 两个都给了 → 就用给的
+    elif len(ranges) == 1:
+        if comparison_type == "custom":
+            return None                   # 只给一个区间、又没说要跟哪一期比 → 认输
+        current, previous = ranges[0], None
+    else:
+        if comparison_type == "custom":
+            return None
+        current = previous = None
+
+    params: dict[str, Any] = {"comparison_type": comparison_type, "attribution_dimension": attribution}
+    if current is not None:
+        params["current_start"], params["current_end"] = current[0].isoformat(), current[1].isoformat()
+    if previous is not None:
+        params["previous_start"], params["previous_end"] = previous[0].isoformat(), previous[1].isoformat()
+
+    notes = [f"降级解析：识别为「{comparison_type}」两区间比较（比较类型与日期均由关键词规则得出）。"]
+    return ParsedIntent(intent=INTENT_SALES_COMPARE, params=params, assumptions=tuple(notes), confidence=0.4)
+
+
+def _date_ranges_from_text(
+    text: str, first: _dt.date, last: _dt.date
+) -> list[tuple[_dt.date, _dt.date]]:
+    """把问句里出现的**每一个**时间段收成列表（比较类问题需要"两个区间"）。
+
+    相邻两个时间点之间若夹着"到/至/~/—"就当**一个**区间（`11-01 到 11-15`），
+    夹着"和/与/、/比"就当**两个**（`11 月和 10 月`）。
+    """
+    tokens: list[tuple[int, int, tuple[_dt.date, _dt.date]]] = []   # (起点, 终点, 窗口)
+    taken: list[tuple[int, int]] = []
+
+    for match in _ISO_DATE_RE.finditer(text):
+        parsed = _safe_date(*(int(part) for part in match.groups()))
+        if parsed:
+            tokens.append((match.start(), match.end(), (parsed, parsed)))
+            taken.append((match.start(), match.end()))
+
+    for match in _CN_DATE_RE.finditer(text):
+        year_text, month_text, day_text = match.groups()
+        if any(start <= match.start() < end for start, end in taken):
+            continue
+        if year_text:
+            year = int(year_text)
+        else:
+            previous = [item for item in tokens if item[0] < match.start()]
+            year = previous[-1][2][0].year if previous else last.year
+        parsed = _safe_date(year, int(month_text), int(day_text))
+        if parsed:
+            tokens.append((match.start(), match.end(), (parsed, parsed)))
+            taken.append((match.start(), match.end()))
+
+    for match in _MONTH_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in taken):
+            continue                 # `2011-11-21` 里的 `2011-11` 不算一个整月
+        year, month = int(match.group(1)), int(match.group(2))
+        if 1 <= month <= 12:
+            start = _dt.date(year, month, 1)
+            tokens.append((match.start(), match.end(), (start, _next_month_start(year, month) - _dt.timedelta(days=1))))
+
+    for match in _BARE_MONTH_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in taken):
+            continue                 # `2011年11月` 里的 `11月` 已经算过了
+        month = int(match.group(1))
+        if not 1 <= month <= 12:
+            continue
+        earlier = [item for item in tokens if item[0] < match.start()]
+        year = earlier[-1][2][0].year if earlier else last.year
+        start = _dt.date(year, month, 1)
+        tokens.append((match.start(), match.end(), (start, _next_month_start(year, month) - _dt.timedelta(days=1))))
+
+    tokens.sort(key=lambda item: item[0])
+    ranges: list[tuple[_dt.date, _dt.date]] = []
+    index = 0
+    while index < len(tokens):
+        if index + 1 < len(tokens) and _JOINER_RE.search(text[tokens[index][1]:tokens[index + 1][0]]):
+            ranges.append((tokens[index][2][0], tokens[index + 1][2][1]))
+            index += 2
+        else:
+            ranges.append(tokens[index][2])
+            index += 1
+    return ranges
 
 
 def _dates_from_text(text: str, first: _dt.date, last: _dt.date) -> tuple[_dt.date, _dt.date, list[str]]:
@@ -500,6 +782,8 @@ def _next_month_start(year: int, month: int) -> _dt.date:
 __all__ = [
     "ALL_INTENTS",
     "COMPUTE_INTENTS",
+    "INTENT_SALES_BREAKDOWN_BY_COUNTRY",
+    "INTENT_SALES_COMPARE",
     "INTENT_SALES_SUMMARY",
     "INTENT_SALES_TREND",
     "INTENT_TOP_PRODUCTS",
@@ -507,6 +791,8 @@ __all__ = [
     "IntentError",
     "PARAM_MODELS",
     "ParsedIntent",
+    "CountryBreakdownParams",
+    "SalesCompareParams",
     "SalesSummaryParams",
     "SalesTrendParams",
     "TopProductsParams",

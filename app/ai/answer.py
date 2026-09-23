@@ -36,13 +36,17 @@ from typing import Any
 # 不反向依赖：tools 不 import answer，所以这里 import 它没有环。
 from app.ai import tools as ai_tools
 
-# 三段的小标题（前端按 key 分区渲染，不靠解析中文标题）
+# 回答分区的小标题（前端按 key 分区渲染，不靠解析中文标题）
 SECTION_WHAT = "what"
+# 【主要贡献】也是**代码写的**（TASK-005）：连"主要是谁"都不让 LLM 判断 ——
+# 那本质上是个排序问题，而排序完全可以在代码里确定地做完。
+SECTION_CONTRIBUTION = "contribution"
 SECTION_WHY = "why"
 SECTION_ACTIONS = "actions"
 
 SECTION_TITLES = {
     SECTION_WHAT: "【发生了什么】",
+    SECTION_CONTRIBUTION: "【主要贡献】",
     SECTION_WHY: "【为什么】",
     SECTION_ACTIONS: "【建议行动】",
 }
@@ -84,17 +88,35 @@ def format_value(value: Any, style: str = "auto") -> str:
         return "—"
     if style == "money":
         return f"{float(value):,.2f}"
+    if style == "money_signed":
+        # 变化额必须**带符号**：+354,517.03 / -1,234.56。
+        # 少了这个 "+"，读者得自己从上下文猜方向 —— 而变化的方向正是这一段的重点。
+        return f"{float(value):+,.2f}"
     if style == "int":
         return f"{int(value):,}"
     if style == "qty":
         return f"{float(value):,.0f}"
     if style == "pct":
         return f"{float(value):.2f}"
+    if style == "pct_signed":
+        return f"{float(value):+.2f}"
     if isinstance(value, float):
         return f"{value:,.2f}"
     if isinstance(value, int):
         return f"{value:,}"
     return str(value)
+
+
+_COMPARISON_LABELS = {
+    "custom": "自定义两区间",
+    "wow": "周环比（本周 vs 上周）",
+    "mom": "月环比（本月 vs 上月）",
+    "yoy": "同比（与去年同期比）",
+}
+
+
+def comparison_label(value: str | None) -> str:
+    return _COMPARISON_LABELS.get(str(value or ""), str(value or "—"))
 
 
 def _display_lines(result: dict[str, Any]) -> list[str]:
@@ -128,6 +150,15 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
     elif tool == "top_products":
         lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天，口径 D16）")
         lines.append(f"排行口径：销售额降序取前 {params.get('top_n')} 名（按 StockCode 分组）")
+    elif tool == "sales_compare":
+        facts = result.get("facts") or {}
+        lines.append(f"比较类型：{comparison_label(facts.get('comparison_type'))}"
+                     f"（两个区间的日期由程序解析，**不由 LLM 解释**）")
+        if facts.get("comparison_status") != "ok":
+            lines.append("**数据不足，本次不给变化额与变化率**（不猜、不补、不偷偷截断）。")
+    elif tool == "sales_breakdown_by_country":
+        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天，口径 D16）")
+        lines.append(f"分布口径：按 Country（国家）分组，销售额降序取前 {params.get('top_n')} 名")
 
     lines.append("")
     lines.extend(_display_lines(result))
@@ -137,6 +168,14 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
         lines.append("")
         lines.append("明细：")
         for item in items:
+            if "country" in item:
+                lines.append(
+                    f"  #{item['rank']} {item['country']}"
+                    f"：{format_value(item['amount'], 'money')}{ai_tools.currency_unit()}"
+                    f"（{format_value(item['share'] * 100, 'pct')}%，"
+                    f"{item['orders']} 单 / {item['customers']} 位客户）"
+                )
+                continue
             lines.append(
                 f"  #{item['rank']} {item['stock_code']} {item['description'] or '(无描述)'}"
                 f"：{format_value(item['amount'], 'money')}{ai_tools.currency_unit()}"
@@ -169,6 +208,66 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
     return "\n".join(lines).strip()
 
 
+def _contributor_line(item: dict[str, Any]) -> str:
+    name = item["name"] if not item.get("label") else f"{item['name']}（{item['label']}）"
+    delta = f"{format_value(item['delta'], 'money_signed')}{ai_tools.currency_unit()}"
+    if item.get("contribution_share_status") == "not_available":
+        share = "贡献率不适用（总变化为 0）"
+    else:
+        share = f"对总变化的贡献率 {format_value(item['contribution_share_of_change'] * 100, 'pct_signed')}%"
+    return f"  · {name}：{delta}（{share}）"
+
+
+def render_contribution_text(result: dict[str, Any] | None) -> str:
+    """【主要贡献】—— **代码生成**：名单、排序、金额、贡献率全部来自确定性结果。
+
+    这一段存在的意义就是"不让 LLM 判断主要是谁"：
+    谁上榜是 `tools._rank_contributors()` 按 |变化额| 排出来的，
+    连"正贡献 / 负贡献"这两个标签都是代码贴的。LLM 只负责在【为什么】里解释可能的原因。
+    没有归因（没要求归因，或归因没过一致性校验）时返回空串 —— 这一段就**不出现**。
+    """
+    attribution = (result or {}).get("attribution")
+    if not attribution:
+        return ""
+    total = attribution["total_delta"]
+    lines = [
+        f"总变化：{format_value(total, 'money_signed')}{ai_tools.currency_unit()}"
+        f"（本期销售额 − 上一期销售额）",
+        f"归因维度：{attribution['dimension_field']}"
+        f"（{attribution['contributor_count']} 个取值，正/负各取 |变化额| 最大的前 {attribution['top_n']} 名）",
+        "",
+    ]
+    lines.append(f"正贡献者（共 {len(attribution['positive_contributors'])} 个）：")
+    lines.extend(
+        [_contributor_line(item) for item in attribution["positive_contributors"]]
+        or ["  · （没有正贡献者：所有维度都在下降或持平）"]
+    )
+    lines.append(f"负贡献者（共 {len(attribution['negative_contributors'])} 个）：")
+    lines.extend(
+        [_contributor_line(item) for item in attribution["negative_contributors"]]
+        or ["  · （没有负贡献者：所有维度都在上升或持平）"]
+    )
+    lines.append("")
+    lines.append(f"说明：{ai_tools.CONTRIBUTION_DENOMINATOR_NOTE}")
+    return "\n".join(lines)
+
+
+def render_llm_facts(result: dict[str, Any] | None) -> str:
+    """**给 LLM 的唯一输入**：事实段 + （有归因时的）主要贡献段。
+
+    两个都是**代码产生的文本**（不是 DataFrame、不是 Series、不是原始行）。
+    之所以把【主要贡献】也塞进来：让模型写【为什么】时有据可依 ——
+    但名单是排好的，它只能顺着说，不能另立"最主要的是谁"。
+    """
+    if result is None:
+        return ""
+    parts = [render_facts_text(result)]
+    contribution = render_contribution_text(result)
+    if contribution:
+        parts.append(contribution)
+    return "\n\n".join(part for part in parts if part)
+
+
 def render_unsupported_text(reason: str, *, profile: dict[str, Any]) -> str:
     """问到了数据里没有的东西 —— 如实说明**数据长什么样**，并明确说"答不了"。"""
     columns = " / ".join(profile.get("columns", []))
@@ -185,7 +284,8 @@ def render_unsupported_text(reason: str, *, profile: dict[str, Any]) -> str:
             f"商品编码 {profile.get('stock_code_count')} 个",
             "· **没有区域字段**（只有 Country，国别不能当区域用）",
             "",
-            "本版支持的三类问题：①某时间段卖了多少 ②某时间段的趋势 ③某时间段卖得最好的产品。",
+            "本版支持：①某时间段卖了多少 ②某时间段的趋势 ③某时间段卖得最好的产品 "
+            "④两个时间段比大小（含按国家/商品归因） ⑤某时间段各国销售额分布。",
         ]
     )
 
@@ -252,6 +352,11 @@ LLM_SYSTEM_PROMPT = """你是销售数据分析师。下面会给你一份**已�
 - 需要引用数字时，用它的名称（如"销售额""订单数""最高的一天"）。
 - 金额的币种是**英镑（GBP）**：提到金额单位只能写"英镑"，**不许写"元""人民币"**
   （数据来自英国零售商，写成人民币就是错的）。
+
+**第二重要的规矩：你已经看到的那份事实里，如果有【主要贡献】名单，那份名单不是你写的。**
+- 名单、排序、金额、贡献率都由程序算好了。你**不许**改名单、不许重排、不许补人、
+  更不许另立一个"其中最主要的是 X" —— 你没资格判断谁是主要贡献者，程序已经判断完了。
+- 你只能在【为什么】里解释"这些贡献者背后可能是什么原因"，且**不要复述名单和数字**。
 
 【为什么】这一段：解释你**推断**出的原因。只写 2~4 句，务必基于给你的事实，
   不要引入事实之外的任何信息（不要提天气、节假日、竞品，除非事实里就有）。
@@ -361,8 +466,12 @@ def compose(
     llm_error: dict[str, Any] | None,
     unsupported_reason: str | None,
     profile: dict[str, Any],
+    fallback_reason: str | None = None,
 ) -> dict[str, Any]:
-    """拼出最终回答：三段 + 逐段来源 + **闸门报告**。
+    """拼出最终回答：分段 + 逐段来源 + **闸门报告**。
+
+    `fallback_reason` 用于"不能问 LLM"的非降级情形（如窗口不完整导致数据不足）——
+    这时【为什么】/【建议行动】要写清"为什么不生成"，而不是甩一句"未接 LLM"。
 
     返回的每个字段都会原样落进 `state/conversations.json` —— 事后能回答
     "这段字是谁写的""那个数字当时核过没有"。
@@ -377,8 +486,29 @@ def compose(
 
     sections = [_section(SECTION_WHAT, what_text, "code")]
 
+    # ── 第二段【主要贡献】也是代码写的（有归因时才出现）──────────────────
+    # 位置刻意放在【为什么】之前：读者先看到"谁造成了变化"（事实），
+    # 再看"可能是什么原因"（推断）—— 顺序本身就说明了谁是事实、谁是猜测。
+    contribution_text = render_contribution_text(result)
+    if contribution_text:
+        attribution = result["attribution"]
+        sections.append(
+            _section(
+                SECTION_CONTRIBUTION,
+                contribution_text,
+                "code",
+                contributors={
+                    "dimension": attribution["dimension"],
+                    "total_delta": attribution["total_delta"],
+                    "positive": [item["name"] for item in attribution["positive_contributors"]],
+                    "negative": [item["name"] for item in attribution["negative_contributors"]],
+                    "decided_by": "代码排序（|变化额| 降序），LLM 未参与",
+                },
+            )
+        )
+
     # 合法数字集合：只从**代码产生的东西**里收集
-    allowed = collect_allowed_numbers(what_text, result)
+    allowed = collect_allowed_numbers(what_text, contribution_text, result)
 
     # ── 第二、三段：LLM 写的（过闸），或代码降级 ────────────────────────
     guard_report: dict[str, Any] = {
@@ -396,6 +526,8 @@ def compose(
         if unsupported_reason:
             # 这一支**不是**"没接 LLM"，而是"没有可推断的事实"——别把两种原因说成一回事
             reason = "（这个问题数据里没有对应的事实可依据，因此不生成推断与建议 —— 免得编。）"
+        elif fallback_reason:
+            reason = fallback_reason
         elif llm_error:
             reason = f"（未接 LLM：{llm_error.get('message', '')}）—— 本段不生成，以免编造。"
         else:
@@ -450,16 +582,20 @@ __all__ = [
     "GUARD_POLICY",
     "LLM_SYSTEM_PROMPT",
     "SECTION_ACTIONS",
+    "SECTION_CONTRIBUTION",
     "SECTION_TITLES",
     "SECTION_WHAT",
     "SECTION_WHY",
     "build_llm_prompt",
     "collect_allowed_numbers",
+    "comparison_label",
     "compose",
     "currency_guard",
     "format_value",
     "number_guard",
     "parse_llm_sections",
+    "render_contribution_text",
     "render_facts_text",
+    "render_llm_facts",
     "render_unsupported_text",
 ]
