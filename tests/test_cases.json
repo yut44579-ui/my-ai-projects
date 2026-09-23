@@ -1,8 +1,8 @@
 {
   "seed": 42,
   "generated_for": "sales-report-agent / UCI Online Retail",
-  "anchor_date": "2011-12-12",
-  "anchor_note": "所有相对时间以 2011-12-12（周一，数据集最后一条记录 2011-12-09 之后的第一个周一）为基准。上周=2011-12-05~2011-12-11；上上周=2011-11-28~2011-12-04；上月=2011-11-01~2011-11-30；今年=2011-01-01~2011-12-09；去年=2010-12-01~2010-12-31。数据集范围 2010-12-01 08:26 ~ 2011-12-09 12:50，共 541,909 行。",
+  "anchor_date": "2011-12-01",
+  "anchor_note": "所有相对时间以 2011-12-01（周四）为基准——该日落在 2011-11-28~2011-12-04 这一周内，因此'上周' = 上一个自然周 2011-11-21~2011-11-27（周一~周日，7 天数据完整）。上周=2011-11-21~2011-11-27；上上周=2011-11-14~2011-11-20；上月=2011-11-01~2011-11-30；今年=2011-01-01~2011-11-30；去年=2010-12-01~2010-12-31。数据集范围 2010-12-01 08:26 ~ 2011-12-09 12:50，共 541,909 行。基准日刻意选在数据末尾（2011-12-09）之前，使'上周'落在完整周上，避免所有周报用例都指向只有 5 个交易日的残缺末尾周（TASK-001-FIX）。",
   "split_rule": "分层随机，random.seed(42) 后按类型分别抽样：normal 16→dev13/holdout3，edge 16→dev13/holdout3，needs_clarification 18→dev14/holdout4；合计 dev 40 / holdout 10。holdout 编号：n01,n04,n12,e04,e09,e15,c03,c04,c05,c10。",
   "cases": [
     {
@@ -13,12 +13,12 @@
       "reference": null,
       "expected": {
         "metrics": ["销售额", "订单数"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周，周一~周日）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周，周一~周日，7 天完整）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
       },
-      "notes": "大白话型，未给参考物。上周 5 个工作日（12-05~12-09，合计 17,706 行 / £300,605.22 / 632 张单）都有数据，12-10 是周六（全期周六无交易）、12-11 超出数据集末尾；报表应如实呈现，不因缺失日而报错。"
+      "notes": "大白话型，未给参考物。上周是完整自然周，7 天全在数据范围内。核对基准：原始 19,950 行；按已固化口径 D16（排除 C 开头取消单 / Quantity≤0 / UnitPrice≤0）后有效 19,654 行、销售额 £316,412.16——该数字已由 TASK-002A 独立 Oracle 核验（差值 0），可直接用作本用例的预期值。"
     },
     {
       "id": "n02",
@@ -28,7 +28,7 @@
       "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
       "expected": {
         "metrics": ["销售额", "订单数"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周，周一~周日）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周，周一~周日，7 天完整）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -73,7 +73,7 @@
       "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
       "expected": {
         "metrics": ["销售额", "订单数", "环比（vs 上上周）"],
-        "time_range": "本周 2011-12-05 ~ 2011-12-11，对比期 2011-11-28 ~ 2011-12-04",
+        "time_range": "本周 2011-11-21 ~ 2011-11-27，对比期 2011-11-14 ~ 2011-11-20（均为完整周）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -103,7 +103,7 @@
       "reference": {"kind": "excel", "path": "templates/sample_customer_rank.xlsx"},
       "expected": {
         "metrics": ["客户销售额排行"],
-        "time_range": "2011-01-01 ~ 2011-12-09（今年）",
+        "time_range": "2011-01-01 ~ 2011-11-30（今年至今）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -118,7 +118,7 @@
       "reference": null,
       "expected": {
         "metrics": ["国家销售额排行"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -133,7 +133,7 @@
       "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
       "expected": {
         "metrics": ["销售额", "订单数"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -193,7 +193,7 @@
       "reference": {"kind": "excel", "path": "templates/sample_weekly_sales.xlsx"},
       "expected": {
         "metrics": ["销售额", "订单数", "客单价（销售额/订单数）"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -208,7 +208,7 @@
       "reference": null,
       "expected": {
         "metrics": ["客户销售额 Top10"],
-        "time_range": "2011-01-01 ~ 2011-12-09（今年）",
+        "time_range": "2011-01-01 ~ 2011-11-30（今年至今）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -238,12 +238,12 @@
       "reference": null,
       "expected": {
         "metrics": ["日销售额"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周，按天分组）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周，按天分组，7 天完整）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
       },
-      "notes": "大白话型 + 日粒度。12-05~12-09 这 5 个工作日都有数据，12-10 为周六（全期无交易）、12-11 超出数据集末尾（止于 2011-12-09）；应输出 7 行（缺失日补 0 或标注无数据，规则需固化），不可只出 5 行造成误读。"
+      "notes": "大白话型 + 日粒度。7 天都在数据范围内：周一~周五（11-21~11-25）与周日（11-27）有交易，周六 11-26 无交易（该数据集全期 54 周周六均为 0 行）；应输出 7 行（无交易日补 0 或标注无数据，规则需固化），不可只出 6 行造成误读。"
     },
 
     {
@@ -265,16 +265,16 @@
       "id": "e02",
       "type": "edge",
       "split": "dev",
-      "user_input": "统计一下 12 月 10 号到 11 号的销售",
+      "user_input": "统计一下 11 月 26 号那天的销售",
       "reference": null,
       "expected": {
         "metrics": ["销售额", "订单数"],
-        "time_range": "2011-12-10 ~ 2011-12-11（周六~周日）",
+        "time_range": "2011-11-26（周六，单日）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
       },
-      "notes": "边界：空数据（两日 0 行）。原因有二且不同：12-10 是周六（该数据集全期周六均无交易），12-11 已超出数据集末尾（最后一条 2011-12-09）。需与 e01 '超范围' 区分：这里应给出 0 值并说明原因，而非当作数据源故障。"
+      "notes": "边界：空数据（日期在数据集范围内、但当天 0 行）。11-26 是周六，而该数据集全期 54 周的周六都没有任何交易。需与 e01 '整段超出数据范围' 区分：这里日期完全合法，只是当天无交易——应给出 0 值并说明原因，不得当作数据源故障报错，也不得静默输出空表。"
     },
     {
       "id": "e03",
@@ -344,7 +344,7 @@
       "reference": null,
       "expected": {
         "metrics": ["销售额"],
-        "time_range": "2010-11-29 ~ 2010-12-05（首周，实际仅 2010-12-01 一天有数据）",
+        "time_range": "2010-11-29 ~ 2010-12-05（首周，7 天中只有 4 天有数据）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -359,7 +359,7 @@
       "reference": null,
       "expected": {
         "metrics": ["销售额", "订单数", "客单价", "退货率"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -374,7 +374,7 @@
       "reference": null,
       "expected": {
         "metrics": ["销售额（含退货冲减）", "订单数"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -389,7 +389,7 @@
       "reference": null,
       "expected": {
         "metrics": ["销售额（含取消单）", "订单数"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -404,7 +404,7 @@
       "reference": null,
       "expected": {
         "metrics": ["下单客户数", "客户数按国家分布"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -449,7 +449,7 @@
       "reference": null,
       "expected": {
         "metrics": ["退货金额", "退货单数"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -479,7 +479,7 @@
       "reference": null,
       "expected": {
         "metrics": ["销售额"],
-        "time_range": "2011-12-05 ~ 2011-12-11（上周）",
+        "time_range": "2011-11-21 ~ 2011-11-27（上周）",
         "data_source": "Online Retail（data/Online Retail.xlsx 单表）",
         "output": "excel",
         "must_ask": false
@@ -607,11 +607,11 @@
       "reference": null,
       "expected": {
         "metrics": ["待确认"],
-        "time_range": "待确认（候选：自然周 2011-12-05~12-11 / 最近 7 天 2011-12-03~12-09）",
+        "time_range": "待确认（候选：自然周 2011-11-21~11-27 / 滚动 7 天 2011-11-24~11-30）",
         "data_source": "Online Retail",
         "output": "excel",
         "must_ask": true,
-        "clarify_about": "时间口径歧义：'上周' 指自然周（周一~周日）还是滚动最近 7 天；另数据实际只到 2011-12-09（周五），是否接受不完整周。同时指标未给，需问要算什么。"
+        "clarify_about": "时间口径歧义：'上周' 指自然周（周一~周日，即 2011-11-21~11-27）还是滚动最近 7 天（2011-11-24~11-30）？两者结果不同，需让用户选。同时指标未给（要销售额 / 订单数 / 客户数？），必须一并问清。"
       },
       "notes": "时间口径歧义 + 指标缺失（仅给时间不给指标）。"
     },
