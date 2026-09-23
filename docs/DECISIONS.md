@@ -132,3 +132,27 @@
   ```
 - **Hermes 裁决**：**维持现状**（D16 已定"不去重、只报告重复行数"，且影响 0.421%）。
 - ⚠️ **这是口径变更**，最终需**用户拍板**；若用户要求去重，须重新评审（改 D16 需走评审流程）。
+
+
+---
+
+## D18 · 002C 依赖披露裁决（2026-09-23）
+
+Hermes 裁决：**全部同意**。
+
+| 依赖 | 用途 | 裁决 |
+|---|---|---|
+| `fastapi 0.141.1` / `uvicorn 0.53.0` / `pydantic 2.13.5` | 接口层 + Spec 模型 | ✅ D17-1 已许可 |
+| `python-multipart 0.0.32` | `/api/upload` 处理 multipart 的**硬依赖** | ✅ 同意（指令要求文件上传，无法避免） |
+| `httpx 0.28.1` | `fastapi.testclient.TestClient` 的**硬依赖** | ✅ 同意（指令要求用 TestClient 写测试） |
+
+**Hermes 独立 API 冒烟结果（非自述）**：
+```
+/api/health 200 + 数据 SHA match=True + problems=[]
+真上传 23MB → HTTP 201 rows=541909 columns=8
+真执行 2011-11-21~11-27 → amount=316412.16 rows_in_range=19950 rows_excluded=296
+真下载 → 5998 字节 → openpyxl 读回 316412.16 / 19950 / 296
+执行记录 2 条；错误路径 422
+```
+
+**遗留待办**：仓库仍无 `requirements.txt` → 记入待办，建议 TASK-004A 完成后补（一次冻结依赖）。
