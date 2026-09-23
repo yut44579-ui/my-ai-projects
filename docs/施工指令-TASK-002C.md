@@ -21,7 +21,7 @@
 - `docs/TASKS.md`（只改状态）
 
 ## 禁止
-不做前端（004A）｜不接 LLM（005）｜不改 002A/002B 的计算与渲染逻辑｜不加数据库（用文件/ SQLite 即可）｜不引新依赖（fastapi/uvicorn 已装）
+不做前端（004A）｜不接 LLM（005）｜不改 002A/002B 的计算与渲染逻辑｜不加数据库（用文件/ SQLite 即可）｜依赖：**允许 fastapi / uvicorn / pydantic**（本项目既定技术栈，D17-1；若未安装可 `uv pip install`），**除此之外不得引入新依赖**
 
 ## Acceptance Criteria
 - AC-01 pytest 全绿（含 002A/002B 测试）
@@ -32,6 +32,10 @@
 - AC-04 错误路径可见：上传非 xlsx → 4xx 且带可读错误信息；execute 用不存在的 file_id → 404（贴响应）
 - AC-05 执行记录落盘，含 execution_id / 数据 SHA256 / 计算值 / 耗时
 - AC-06 git status 只含 Scope 内文件
+
+## 补充口径（D17）
+- 允许安装 fastapi/uvicorn/pydantic（D17-1）
+- 金额展示保留 2 位小数，内部计算全精度（D17-2）
 
 ## 报告格式
 Status 只能是 COMPLETED / FAIL / BLOCKED；含 curl 实测输出
