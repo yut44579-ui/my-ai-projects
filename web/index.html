@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>销售报表 Agent · 最小闭环</title>
+  <!-- 原生 JS，不引任何框架/CDN（TASK-004A 禁止引入 Vue/React） -->
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>销售报表 Agent</h1>
+    <div class="top__health" id="health" role="status">正在检查后端…</div>
+    <div class="top__note">
+      上传 → 建任务（冻结 Spec）→ 看 Spec → 执行 → 下载真 xlsx → 看执行记录。
+      页面上的每个数字都来自后端 HTTP 响应，前端不造数据。
+    </div>
+  </header>
+
+  <main>
+    <!-- ══ ① 数据：真实上传 ══════════════════════════════════════════ -->
+    <section class="block" id="block-data">
+      <h2><span class="no">①</span> 数据</h2>
+      <div class="row">
+        <input type="file" id="file-input" accept=".xlsx,.xlsm,.csv">
+        <button type="button" id="upload-btn" disabled>上传到后端</button>
+      </div>
+      <div class="status status--muted" id="data-status">尚未选择文件</div>
+      <table class="kv" id="data-info"></table>
+      <details id="data-columns-wrap" hidden>
+        <summary>列名（<span id="data-columns-count">0</span> 列）</summary>
+        <div class="chips" id="data-columns"></div>
+      </details>
+    </section>
+
+    <!-- ══ ② 建任务：真调 POST /api/tasks ═══════════════════════════ -->
+    <section class="block" id="block-task">
+      <h2><span class="no">②</span> 建任务</h2>
+      <p class="hint">
+        口径 = 时间区间 + 指标。指标目录<span id="metrics-source">（读取中…）</span>。
+        日期留空 / 指标全不选，后端会返回可读的 422 错误 —— 那是真实错误路径，不是前端假装。
+      </p>
+      <form id="task-form" class="form">
+        <label class="field">
+          <span>任务名（可空，留空由后端按区间命名）</span>
+          <input type="text" id="task-name" placeholder="例如：上周销售汇总">
+        </label>
+        <div class="row">
+          <label class="field">
+            <span>开始日期（含当天）</span>
+            <input type="date" id="task-start">
+          </label>
+          <label class="field">
+            <span>结束日期（含当天）</span>
+            <input type="date" id="task-end">
+          </label>
+        </div>
+        <fieldset class="field" id="task-metrics-field">
+          <legend>指标</legend>
+          <div class="chips" id="task-metrics"></div>
+        </fieldset>
+        <button type="submit" id="create-task-btn" disabled>创建任务</button>
+      </form>
+      <div class="status status--muted" id="task-status">尚未创建任务</div>
+      <table class="kv" id="task-info"></table>
+
+      <h3 class="sub">已有任务（后端 GET /api/tasks，刷新页面后从这里恢复）</h3>
+      <div class="status status--muted" id="task-list-status">读取中…</div>
+      <div class="table-wrap"><table class="grid" id="task-list"></table></div>
+    </section>
+
+    <!-- ══ ③ Report Spec：后端返回的真实 Spec ══════════════════════ -->
+    <section class="block" id="block-spec">
+      <h2><span class="no">③</span> Report Spec</h2>
+      <p class="hint">
+        下面的 Spec **整个对象**来自后端响应（建任务或 GET /api/tasks/{task_id}），
+        前端不内置任何 Spec 内容。
+        <button type="button" id="reload-spec-btn" class="link-btn" disabled>从后端重读</button>
+      </p>
+      <div class="status status--muted" id="spec-status">尚未选择任务</div>
+      <table class="kv" id="spec-info"></table>
+      <div class="table-wrap"><table class="grid" id="spec-metrics"></table></div>
+      <details id="spec-json-wrap">
+        <summary>后端返回的原始 Spec JSON</summary>
+        <pre class="json" id="spec-json"></pre>
+      </details>
+    </section>
+
+    <!-- ══ ④ 执行结果：真调 run 接口 ════════════════════════════════ -->
+    <section class="block" id="block-run">
+      <h2><span class="no">④</span> 执行结果</h2>
+      <div class="row">
+        <button type="button" id="run-btn" disabled>执行这个任务</button>
+        <a id="download-link" class="btn btn--ghost is-disabled" aria-disabled="true">下载报表 xlsx</a>
+      </div>
+      <div class="status status--muted" id="run-status">尚未执行</div>
+      <table class="kv" id="run-info"></table>
+    </section>
+
+    <!-- ══ ⑤ 执行记录：后端拉取，刷新后仍在 ═════════════════════════ -->
+    <section class="block" id="block-history">
+      <h2><span class="no">⑤</span> 执行记录</h2>
+      <div class="row">
+        <label class="field field--inline">
+          <input type="checkbox" id="history-all">
+          <span>显示全部任务的执行记录（GET /api/executions）</span>
+        </label>
+        <button type="button" id="history-refresh-btn">刷新</button>
+      </div>
+      <div class="status status--muted" id="history-status">尚未读取</div>
+      <div class="table-wrap"><table class="grid" id="history-table"></table></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span id="code-version">代码版本：—</span>
+    <span class="foot__sep">·</span>
+    <span>接口文档 <a href="/docs" target="_blank" rel="noreferrer">/docs</a></span>
+  </footer>
+
+  <script src="./api.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

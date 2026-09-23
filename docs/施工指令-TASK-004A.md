@@ -25,11 +25,22 @@
 **状态传递硬要求**：①→②→③→④→⑤ 每一步必须使用**前一步真实返回的数据**；
 无数据时显示空状态；未建任务时执行按钮不可用；无执行结果时下载按钮不可用；**请求进行中禁用相关按钮防重复提交**。
 
-## Scope
-新增：`web/index.html`（单页五区块）、`web/api.js`（接口层，集中所有请求）、`web/app.js`、`web/style.css`
-修改：`app/api.py` —— **仅**加静态挂载（`app.mount` 或等价做法），**不得改动既有 `/api/*` 路由逻辑**；
-      若静态挂载与既有路由冲突 → 报 BLOCKED，不得改既有逻辑；
-      另：`docs/TASKS.md`（只改状态）
+## Scope（本次为**合并派单**：002D 后端任务层 + 004A 前端）
+
+### TASK-002D（先做，后端任务层最小实现）
+- `app/api.py`：**新增**任务端点（**不得改既有 002C API 的行为语义**）
+  · `POST /api/tasks`  创建任务 `{file_id, name?, metrics, start, end}` → `{task_id, spec, status}`
+  · `GET  /api/tasks`  列表；`GET /api/tasks/{task_id}` 取单个（含 spec）
+- 任务持久化最小实现：`state/tasks.json`（原子写）
+- 002D 定向测试
+
+### TASK-004A（002D PASS 之后做）
+- 新增：`web/index.html`、`web/api.js`、`web/app.js`、`web/style.css`
+- 修改：`app/api.py` —— **仅**加静态前端挂载；不得改动既有 `/api/*` 路由逻辑
+- 修改：`docs/TASKS.md`（只改状态）
+
+**顺序硬要求**：先完成 002D → 跑 002D 定向测试 → **002D PASS 后**才做 004A。
+**不得**为了前端方便修改 002C 已实现的 API 语义（002D 新增与 004A 挂载属不同变更目的）。
 
 ## 禁止（违反即 FAIL）
 - ❌ mock 数据 / 假 API / 假下载 / `setTimeout` 假装成功 / 硬编码业务结果 / 占位 TODO
@@ -41,6 +52,8 @@
 - **AC-02** 真上传：浏览器选真实 `data/Online Retail.xlsx` → 页面显示后端返回的 file_id / 文件名 / **行数 541909**
 - **AC-03** 真建任务：显示后端返回的**真实 task_id**；构造一次失败（如缺参数）→ 页面显示可读错误
 - **AC-04** 真 Spec 展示：Spec 字段来自后端响应（贴响应 JSON 与页面显示对照）
+  ⚠️ **「人工构造 Spec」的含义**：005（AI Parser）尚未实现，创建任务的 Spec 由测试代码/Claude 预先构造**作为输入**；
+  **前端不得内置该 Spec** —— 页面展示的 Spec 必须来自 `POST /api/tasks` 或任务查询接口的**真实 HTTP 响应**。
 - **AC-05** 真执行：金额必须来自**浏览器实际收到的 API 响应**（不得读前端常量）；
             与独立 `curl` 使用**相同文件/相同参数**比较**原始数值**（允许显示格式差异，贴两侧原始值）
 - **AC-06** 真下载：点击下载得到文件 → **用 openpyxl 读回并打印数字**（证明不是空文件）
@@ -56,6 +69,35 @@
             关键词扫描仅作**辅助**证据，不作为唯一判据）
 - **AC-11** `git status --short` 只含 Scope 内文件
 
+## AC-09 证据分层（评审 R004 第二轮定稿）
+- **Claude 负责**：`httpx` 真 HTTP 集成测试，验证完整**后端**业务闭环（上传 → 建任务 → Spec → 执行 → 下载 → openpyxl 读回 → 执行记录）
+- **Hermes 负责**：用本机 Edge **CDP** 驱动真实页面完成十步**浏览器**闭环并保存证据
+- **禁止安装 Playwright**（用户已拍板）
+- 说明：HTTP 测试证明后端链路真实；CDP 证明前端真的把这些 API 串起来了 —— 两者验证对象不同，不互相冒充
+
+## 速度要求（本次特别注明）
+- **不必**跑全量 pytest（全量约 5 分钟）；只跑 **002D 定向测试 + 004A 新增测试 + 真 HTTP 集成测试**
+- 但**不得为了快而跳过 002D 的测试**：定向测试失败不得直接进入 004A
+- 优先把功能跑通，不要过度打磨风格、不要顺手重构
+
 ## 报告格式
-Status 只能是 COMPLETED / FAIL / BLOCKED；每条 AC 必须贴**实际命令输出或页面实测证据**
-（可用 Playwright/CDP 驱动页面完成 AC-09 并保存证据）。
+Status 只能是 COMPLETED / FAIL / BLOCKED；每条 AC 必须贴**实际命令输出或页面实测证据**。
+
+---
+
+## 附注（2026-09-23 · 按 R005 条件 #12 与 `decisions/003` D19-2 追加；**上文原文不改**）
+
+1. **AC-09 取证方式已由用户拍板（D19-2）**：**不装 Playwright**（保持依赖精简，D17-1 / 铁律 7）。
+   证据 = ① **httpx 打真服务**的十步闭环集成测试（真 HTTP、真上传、真下载 + openpyxl 读回数字）
+   ② **用户本人浏览器走查**并留截图。故文末"可用 Playwright/CDP 驱动页面"一句**作废**。
+2. **AC-01 / AC-05 里的 `curl`**：本机权限系统**拒绝 curl**，Claude Code 侧用 **httpx** 等价实现取证
+   （用户若想自己对照，可在输入框用 `! curl ...` 跑）。判据是"真 HTTP 响应"，不是"命令必须叫 curl"。
+3. **R005 条件 #12（值必须来自前一步响应，已落进 AC-09 原文）**：第 4/5/6/7/10 步用到的
+   `task_id` / `execution_id` / `download_url` / `spec` **一律取自上一步的 HTTP 响应体**，
+   禁止前端常量、禁止拼死的字符串 —— 验收时会拿响应 JSON 与页面显示逐个对照。
+4. **前置已满足**：002C 缺的任务层已由 **TASK-002D** 补齐 —— `POST /api/tasks`、`GET /api/tasks`、
+   `GET /api/tasks/{task_id}`、`POST /api/tasks/{task_id}/run`、`GET /api/tasks/{task_id}/runs`
+   （另新增：统一错误体 `{error:{code,message,detail}}`、`limit`/`offset` 分页、
+   `download_url` 相对路径即 `GET /api/download/{execution_id}`）。原第 3 步"→ 报 BLOCKED"的前置**已解除**。
+   ⚠️ 但**区块③的"AI 解析的 Spec"仍依赖 TASK-005（未实现）** → 004A 阶段用**人工构造的 Spec**
+   走 `POST /api/tasks` 的完整 Spec 路径兑现，**不得伪造 AI 解析结果**（铁律 0/5）。

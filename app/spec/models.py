@@ -51,6 +51,13 @@ _COMPARISON_OPS: frozenset[str] = frozenset({"yoy", "previous_period"})
 # 这里写成 Literal 是为了让校验/文档一眼看到合法取值；默认值仍从 metrics.py 取（单一来源）。
 ExclusionKey = Literal["cancelled", "negative_qty", "nonpositive_price"]
 
+# 时间区间的解释方式（R005 评审 required_change #1：schema 现在就冻结，只实现 absolute）
+# 详见 TimeRange 的 docstring —— 相对模式只声明不解析，解析实现属 TASK-007。
+TimeRangeMode = Literal["absolute", "last_week", "last_month"]
+
+# 解析相对区间（"上周"是哪一周）时用的默认时区。002D 只把它随 Spec 一起冻结，不参与计算。
+DEFAULT_TIMEZONE = "Asia/Shanghai"
+
 # D16 默认口径 = 三条排除规则全开（与 executor.compute_sales_amount 的默认开关一致）
 DEFAULT_EXCLUSIONS: tuple[str, ...] = tuple(rule.key for rule in EXCLUSION_RULES)
 
@@ -158,21 +165,53 @@ class DataSourceRef(_SpecBase):
 class TimeRange(_SpecBase):
     """报表的时间区间：**含首尾全天**（D16-2）。
 
+    mode 决定"这个区间怎么解释"（R005 评审要求：schema 现在就冻结，别等加调度时再破坏性改）：
+        "absolute"    直接给 start / end 两个绝对日期 —— **002D 唯一支持的形态**
+        "last_week"   "上周"：只声明，运行时按基准日解析（**解析实现属 TASK-007 调度**）
+        "last_month"  "上月"：同上
+    为什么现在就把相对模式写进 schema：项目最终目标是"每周自动出上周报表"（D9/CLAUDE.md），
+    若先只做绝对日期，将来加调度只能**破坏性**改 Spec 与前端展示；现在冻结 schema、
+    只实现 absolute，是代价最小的路径（相对模式的解析留给 TASK-007，届时用 mode 字段即可）。
+
     start / end 传 'YYYY-MM-DD' 字符串即可（pydantic 自动解析成 date）。
+    相对模式**不得**同时给 start/end（否则"到底按哪个算"会含糊 —— 含糊就报错，不猜）。
+    tz：解析相对区间时用哪个时区的"今天"（002D 只记录，不参与计算）。
     time_field 默认取 metrics.TIME_FIELD（= 'InvoiceDate'），口径单一来源（D12）。
     semantics 是一段**说明文字**，随 Spec 一起冻结，方便审计时一眼看出按什么口径解释区间。
     """
 
-    start: _dt.date
-    end: _dt.date
+    mode: TimeRangeMode = "absolute"
+    start: _dt.date | None = None
+    end: _dt.date | None = None
+    tz: str = Field(default=DEFAULT_TIMEZONE, min_length=1)
     time_field: str = Field(default=TIME_FIELD, min_length=1)
     semantics: str = Field(default=RANGE_SEMANTICS, min_length=1)
 
     @model_validator(mode="after")
-    def _check_order(self) -> "TimeRange":
-        if self.start > self.end:
-            raise ValueError(f"起始日期晚于结束日期：{self.start} > {self.end}")
+    def _check_shape(self) -> "TimeRange":
+        if self.mode == "absolute":
+            if self.start is None or self.end is None:
+                raise ValueError("mode='absolute' 时必须提供 start 与 end（两个绝对日期）")
+            if self.start > self.end:
+                raise ValueError(f"起始日期晚于结束日期：{self.start} > {self.end}")
+        elif self.start is not None or self.end is not None:
+            raise ValueError(
+                f"mode={self.mode!r} 是相对区间（运行时按基准日解析），不应同时提供 start/end"
+            )
         return self
+
+    def require_absolute(self) -> tuple[_dt.date, _dt.date]:
+        """返回 (start, end)；相对区间直接报错。
+
+        002D 只实现了 absolute 的**解析**；相对模式目前只有 schema（TASK-007 落地），
+        所以这里必须明确拒绝而不是拿 None 去算（宁可不产出，也不算出不可信的数字 —— D10）。
+        """
+        if self.mode != "absolute" or self.start is None or self.end is None:
+            raise ValueError(
+                f"时间区间 mode={self.mode!r} 的相对解析尚未实现（属 TASK-007 调度），"
+                f"当前只支持 mode='absolute' + start/end"
+            )
+        return self.start, self.end
 
 
 # ════════════════════════════════════════════════════════════════════════

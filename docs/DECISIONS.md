@@ -156,3 +156,62 @@ Hermes 裁决：**全部同意**。
 ```
 
 **遗留待办**：仓库仍无 `requirements.txt` → 记入待办，建议 TASK-004A 完成后补（一次冻结依赖）。
+
+
+---
+
+## D19 · 任务层（TASK-002D）评审裁决 + 用户拍板（2026-09-23）
+
+**依据**：`D:\GPT_Project_Reviews\reviews\005-task-layer-review.md` + `decisions\003-task-layer.md`
+（已登记进 `INDEX.md`）。
+**裁决**：`APPROVED_WITH_CONDITIONS` —— 12 条 `required_changes` **全部落地**；
+`re_review_required = true`，即**实现完成后必须再送一次评审**（尚未做，见本文末"未完成"）。
+**评审渠道（如实记录，不冒充）**：经用户授权，本次由 Claude 用
+`D:\GPT_Project_Reviews\tools\review_adapter\adapter.py`（DeepSeek）**自动提交**，
+**不是** ChatGPT 网页版人工评审。提交过程中适配器因"推理 token 吃光 max_tokens"
+返回过 `NEED_USER`，已备份并改为可用 `REVIEW_MAX_TOKENS` 调高（默认值不变），详见 reviews/005 附录。
+
+### D19-1 · 用户拍板①：D8 存储 → **正式推迟到 TASK-007**
+
+- 现状：`app/state.py` 用 **JSON 文件 + 进程内锁**（`uploads.json` / `executions.json` / `tasks.json`）。
+- 用户决定：**同意推迟**。D8 的 MySQL 落库归 **TASK-007（定时 + 审计）** 一并做。
+- 约束（写进 `scripts/serve.py` 头注释，不靠人记）：**必须单进程 `workers=1`**。
+  两个 worker 同时"读-改-写" JSON 会互相覆盖，现场表现是"执行记录凭空少几条"。
+- **可替换边界**：`app/state.py` 就是那个边界 —— `app/api.py` 只调它的函数、不碰文件格式；
+  TASK-007 换 MySQL 时改实现即可，**上层一行不动**（函数签名保持不变）。
+
+### D19-2 · 用户拍板②：AC-09 浏览器闭环 → **不装 Playwright**
+
+- 用户决定：**不引入 Playwright**（保持依赖精简，D17-1/铁律7）。
+- 替代取证（两条都要有，缺一不可）：
+  1. **httpx 打真服务**的十步业务闭环集成测试（真 HTTP、真上传、真下载、读回数字）；
+  2. **用户手动浏览器走查**并留截图（人眼确认五区块真实交互，非静态标题）。
+- 理由：AC-09 要的是"真闭环"证据，不是"某个自动化框架"；浏览器走查由人来做即可，
+  为此拉进一个重量级新依赖不划算。
+
+### D19-3 · 数据模型变更：`TimeRange` 增加 `mode`（R005 required_change #1/#2）
+
+**这是数据模型变更**（按铁律 0 本应先评审 —— 已在本次评审中一并披露并获准）：
+
+| 字段 | 变化 | 说明 |
+|---|---|---|
+| `mode` | **新增**（默认 `"absolute"`） | `absolute` / `last_week` / `last_month`；**只实现 `absolute`** |
+| `start` / `end` | 由必填改为 `date \| None` | `absolute` 必须两个都给且 start≤end；相对模式**不得**携带 |
+| `tz` | 新增（默认 `Asia/Shanghai`） | 相对时间要靠时区算，先冻结下来 |
+| `require_absolute()` | 新增方法 | 相对模式调用即抛错 —— 明确"未实现"，不假装支持 |
+
+- **向后兼容**：只给 `start`/`end` 的旧 Spec 照样通过校验（002A/002B 的测试不受影响）。
+- 相对时间（上周/上个月）的**解析**归 TASK-007，本阶段遇到就回 422 `relative_time_not_implemented`，
+  **不猜**（铁律4）。
+
+### D19-4 · 执行记录新增字段（审计链，D11）
+
+`resolved_range`（真正用于取数的区间）与 `base_date`（相对时间的基准日）落进执行记录；
+`task_id` / `spec_id` / `spec_version` 也一并记 —— 回答"这次跑的是哪个任务、哪版 spec、哪份区间"。
+`success` 与 `failed` 两种记录的**字段集合对齐**（失败也占位为 null），便于机器消费。
+
+### D19-5 · 未完成（不得当作已完成）
+
+- ⚠️ **再送评审未做**：`re_review_required = true`，002D 实现完成后须带证据再送一次评审。
+- ⚠️ **未 git commit**：002D 的改动只在工作区（002C 由 Hermes 提交为 `f799dc7`）。
+- ⚠️ 任务层**尚无 CORS / 鉴权**、**无并发压测**（单进程 JSON 的上限已在 serve.py 声明）。
