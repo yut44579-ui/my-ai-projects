@@ -19,6 +19,12 @@
     GET  /api/tasks/{task_id}            单个任务（含完整冻结 Spec；**刷新页面后靠它重读**）
     POST /api/tasks/{task_id}/run        用任务里**冻结的 Spec** 执行一次（复用同一套引擎）
     GET  /api/tasks/{task_id}/runs       该任务的执行历史（成功与失败都在）
+    ── 文档输入（TASK-003，新路径；上面 11 个端点一行没改）──
+    POST /api/documents                 上传 Word/PDF 并提取文本（实现见 app/api_documents.py）
+    GET  /api/documents                 文档列表（分页）
+    GET  /api/documents/{doc_id}        单个文档（include_text=true 时带全文）
+    GET  /api/documents/{doc_id}/text   全文（text/plain）
+    POST /api/documents/{doc_id}/summary 结构化摘要（规则抽取：原句摘录 + 词频关键词 + 正则关键事实）
 
 为什么要任务层（TASK-002D 的存在理由）：
     002C 只有 ad-hoc 路径（file_id → execute → execution_id），**没有"任务"这个实体** ——
@@ -62,7 +68,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import state
+from app import api_documents, state
 from app.engine import executor, loader, renderer
 from app.engine import metrics as engine_metrics
 from app.spec.models import (
@@ -1503,6 +1509,15 @@ def _relative_output_path(path: str | Path) -> str:
         return resolved.resolve().relative_to(PROJECT_ROOT).as_posix()
     except (ValueError, OSError):
         return resolved.name
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 文档输入（TASK-003：Word/PDF）—— 走**新路径** `/api/documents*`
+# ════════════════════════════════════════════════════════════════════════
+# 上面 11 个端点的语义一个字没改（Legacy Contract）。文档能力整个装在
+# app/api_documents.py 里，这里只把它挂上来 —— 位置必须在 mount("/") **之前**，
+# 否则 /api/documents* 会被静态目录吃掉（原因见下面那段注释）。
+app.include_router(api_documents.router)
 
 
 # ════════════════════════════════════════════════════════════════════════

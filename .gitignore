@@ -7,3 +7,6 @@ outputs/
 # 运行期数据（TASK-002C 起产生）：不是源码，不该进版本库
 state/
 data/uploads/
+
+# 测试提速用的落盘缓存（tests/conftest.py 生成，可由数据文件重新生成）
+data/.cache/

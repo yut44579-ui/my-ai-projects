@@ -1,0 +1,658 @@
+Gate 评审结论
+
+APPROVED_WITH_CONDITIONS
+
+我支持把 TASK-004 提前到 TASK-003 之前。
+
+原因很明确：当前 TASK-002 已经完成真实企业级 UI，并且对话入口已经存在，只是被 TASK-004 禁用。此时继续先做 Word/PDF，会让产品最核心的“自然语言 → 分析结果”体验继续处于不可用状态。
+
+但这次提前不能变成“先接个聊天框演示”。必须把 TASK-004 定义为：
+
+最小真实 Agent 闭环：自然语言 → 结构化 Intent → 白名单 Tool → 确定性计算 → LLM 组织回答。
+
+1. 是否应该调整顺序？
+结论：应该调整
+
+推荐顺序：
+
+002 企业 UI + Repository
+ ↓
+004 自然语言入口 ★
+ ↓
+005 销售分析扩展
+ ↓
+006 客户/产品分析
+ ↓
+007 文档输入
+ ↓
+008 异常发现
+ ...
+
+TASK-003 Word/PDF 并不是 TASK-004 的硬前置。
+
+因为第一版 Agent 完全可以：
+
+用户问题
+ +
+已有 Excel 数据
+ ↓
+LLM
+ ↓
+确定性分析
+ ↓
+回答
+
+而文档输入解决的是：
+
+“业务文档如何进入分析上下文”
+
+不是：
+
+“Agent 能不能对话”。
+
+这次调整还有一个实际好处
+
+可以尽早验证最关键的架构假设：
+
+LLM
+ ↓
+Intent
+ ↓
+Tool
+ ↓
+Deterministic Engine
+
+如果这个链路现在就跑通，后面的 Word/PDF、客户分析、异常分析都可以在同一套 Tool/Context 架构上扩展。
+
+2. 三个 Intent 够不够？
+结论：够，而且不要增加。
+
+当前三个非常合适：
+
+Intent	数据计算
+sales_summary	销售额、交易行数等
+sales_trend	pandas 时间聚合
+top_products	产品销售排行
+
+它们覆盖三个完全不同的能力：
+
+summary  → 单值/总体
+trend    → 时间序列
+ranking  → Top-N
+
+这比一下子做：
+
+客户、区域、产品、异常、预测、建议……
+
+更适合作为 Agent 第一条垂直链。
+
+暂时不要增加
+
+尤其不要现在加入：
+
+customer_analysis
+
+regional_analysis
+
+anomaly_detection
+
+forecast
+
+action_plan
+
+这些应该分别成为后续 Tool。
+
+否则 TASK-004 很容易从：
+
+“证明 Agent 架构成立”
+
+膨胀成：
+
+“把整个产品提前做完”。
+
+3. LLM Provider：DeepSeek API 还是本机？
+结论：第一版选 DeepSeek API，但必须做 Provider 抽象。
+
+当前阶段没有任何 LLM 接入，我不建议为了“本地化”再引入本地模型运行环境。
+
+你现在最需要验证的是：
+
+LLM 是否能够稳定完成 Intent 解析和答案组织。
+
+而不是：
+
+本机推理基础设施是否搭好。
+
+推荐结构
+
+不要：
+
+app/api.py
+ ↓
+直接调用 DeepSeek
+
+而是：
+
+LLMProvider
+    │
+    ├── DeepSeekProvider
+    └── LocalProvider（未来）
+
+TASK-004 第一版：
+
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=...
+
+API Key 放环境变量，不进入：
+
+Git
+
+前端
+
+JSON
+
+日志
+
+为什么不建议 Hermes 自己作为 Provider？
+
+Hermes 是你的编排/开发 Agent，不应该和产品运行时 Agent 混在一起。
+
+否则会变成：
+
+Hermes
+ ↓
+产品 Agent
+ ↓
+Hermes
+
+职责混乱，而且无法证明真正的产品 Agent 能独立运行。
+
+Hermes 可以负责验收，但不应该成为 sales-report-agent 的运行时模型。
+
+DeepSeek 余额有限怎么办？
+
+这反而进一步支持：
+
+只让 LLM 做两件非常小的事情
+
+Intent Parser
+
+最终答案组织
+
+所有数字计算不经过 LLM。
+
+因此 Token 消耗应该比较小。
+
+另外建议给 TASK-004 加：
+
+LLM_TIMEOUT
+LLM_MAX_TOKENS
+
+以及明确的 LLM 调用失败状态。
+
+不要做自动无限重试。
+
+4. 对话记录要不要落盘？
+结论：第一版需要，但不要为了它提前上数据库。
+
+否则刷新页面之后对话完全消失，企业分析产品的体验会比较奇怪。
+
+但当前又没有数据库，所以：
+
+TASK-004：
+
+继续 JSON。
+
+新增：
+
+state/conversations.json
+
+或者更合理：
+
+state/conversations/
+    <conversation_id>.json
+
+我更推荐后者。
+
+第一版保存什么？
+
+保存：
+
+conversation_id
+created_at
+updated_at
+
+messages:
+  role
+  content
+  timestamp
+
+analysis:
+  intent
+  parameters
+  execution_id
+  result_summary
+
+不要保存 API Key。
+
+同时建议保存：
+
+dataset_sha256
+
+这样未来可以知道：
+
+这条回答针对的是哪一版数据。
+
+这和你现在已有的 execution audit 思路是一致的。
+
+但不要保存“LLM 原始内部推理”
+
+只保存：
+
+用户问题
+
+结构化 Intent
+
+Tool 参数
+
+Tool 结果摘要
+
+最终回答
+
+不要把所谓 chain-of-thought 当成业务审计数据。
+
+5. “区域分析”怎么处理？
+
+这里答案非常明确：
+
+不要用 Country 偷换成区域。
+
+当前数据有：
+
+Country
+CustomerID
+
+但没有：
+
+Region
+Province
+City
+SalesArea
+
+所以用户问：
+
+“华南销售额是多少？”
+
+系统不能偷偷解释成：
+
+“那我用 Country 算吧。”
+
+这会制造语义错误。
+
+第一版规则
+用户问支持的数据：
+
+正常回答。
+
+例如：
+
+“英国销售额是多少？”
+
+因为存在 Country=United Kingdom。
+
+用户问不支持的数据：
+
+明确告诉用户：
+
+当前数据集没有“区域/省份/城市”等区域字段，因此无法计算“华南/华东”等区域销售额。当前可分析的地域维度是 Country。
+
+这样最好。
+
+Country 要不要作为一个 Intent？
+
+现在不用。
+
+可以先让 sales_summary 支持：
+
+JSON
+{
+  "country": "United Kingdom"
+}
+
+但必须通过 schema 校验和数据字段白名单。
+
+以后如果需要：
+
+country_summary
+
+再独立成 Tool。
+
+6. TASK-004 具体验收标准
+
+我建议直接采用下面这组 AC。
+
+AC-01：真实 LLM Provider
+
+启动服务后：
+
+LLM_PROVIDER=deepseek
+
+能够真实调用 DeepSeek。
+
+要求：
+
+API Key 来自环境变量
+
+前端不能看到 API Key
+
+失败时有明确错误
+
+不允许 mock LLM response
+
+AC-02：结构化 Intent
+
+输入：
+
+“2011 年 11 月 21 日到 27 日销售额是多少？”
+
+LLM 必须返回符合固定 schema 的结构化 Intent，例如：
+
+JSON
+{
+  "intent": "sales_summary",
+  "start_date": "2011-11-21",
+  "end_date": "2011-11-27"
+}
+
+必须通过 Pydantic/schema 校验。
+
+不能直接把 LLM 文本交给计算引擎。
+
+AC-03：白名单 Tool Registry
+
+只能执行：
+
+sales_summary
+sales_trend
+top_products
+
+输入：
+
+intent = unknown_xxx
+
+必须拒绝执行。
+
+不得让 LLM 任意指定 Python 函数、模块或代码。
+
+AC-04：确定性数字
+
+同一个：
+
+dataset
++
+intent
++
+parameters
+
+重复执行两次：
+
+result_1 == result_2
+
+数字必须来自程序计算。
+
+LLM 不得直接计算销售额。
+
+AC-05：sales_summary
+
+真实测试：
+
+2011-11-21 ～ 2011-11-27
+
+必须得到已经验证的：
+
+£316,412.16
+
+并与现有确定性计算结果一致。
+
+这里可以直接复用现有 metrics.py / executor。
+
+AC-06：sales_trend
+
+输入：
+
+“看一下 11 月第三周每天的销售趋势。”
+
+必须：
+
+InvoiceDate
+ ↓
+日期聚合
+ ↓
+sales amount
+ ↓
+按日期排序
+
+结果由 pandas 计算。
+
+必须证明：
+
+LLM 没有参与数字计算。
+
+AC-07：top_products
+
+例如：
+
+“11 月第三周卖得最多的 10 个产品是什么？”
+
+必须得到：
+
+TOP 10
+
+并且：
+
+排序由程序完成
+
+N 参数经过 schema 校验
+
+不能执行任意排序表达式
+
+AC-08：最终回答结构
+
+最终回答必须存在：
+
+【发生了什么】
+【为什么】
+【建议行动】
+
+其中：
+
+发生了什么
+
+必须使用 Tool 的程序计算结果。
+
+为什么
+
+明确标记为：
+
+推断
+
+不能把推断写成事实。
+
+建议行动
+
+是建议，不得伪装成数据事实。
+
+AC-09：不支持问题
+
+输入：
+
+“华南地区销售额是多少？”
+
+系统必须明确说明：
+
+当前数据没有区域字段
+无法计算华南/华东
+当前支持 Country 维度
+
+不得自动把 Country 当 Region。
+
+AC-10：LLM 失败
+
+模拟：
+
+API Key 错误
+
+timeout
+
+provider 500
+
+非法 JSON
+
+页面必须显示明确错误。
+
+不得：
+
+LLM失败
+ ↓
+假装分析成功
+AC-11：对话真实持久化
+
+完成一次真实对话：
+
+问题
+ ↓
+Intent
+ ↓
+Tool
+ ↓
+结果
+ ↓
+回答
+
+刷新页面后：
+
+conversation
+ ↓
+state
+ ↓
+重新加载
+
+能够恢复。
+
+AC-12：审计关联
+
+对话记录至少能够关联：
+
+conversation_id
+intent
+dataset_sha256
+execution_id（如果产生）
+timestamp
+
+确保以后能回答：
+
+“这个结论是基于哪份数据算出来的？”
+
+AC-13：安全边界
+
+确认：
+
+API Key 不进前端
+
+API Key 不进 Git
+
+API Key 不进入普通业务日志
+
+LLM 输出不能直接执行 Python
+
+LLM 输出不能直接执行 SQL
+
+Tool 只能从白名单注册表选择
+
+AC-14：真实浏览器闭环
+
+Hermes 使用 CDP：
+
+打开企业 UI
+ ↓
+输入自然语言
+ ↓
+发送
+ ↓
+看到 loading
+ ↓
+看到真实回答
+ ↓
+看到事实/推断/建议分区
+ ↓
+刷新
+ ↓
+恢复对话
+
+不得用 mock 数据证明。
+
+AC-15：回归
+
+现有：
+
+Excel 上传
+任务
+Spec
+确定性执行
+下载
+执行记录
+
+不得因为 TASK-004 引入 LLM 而回归。
+
+一个额外的架构要求
+
+TASK-004 不要把 Agent 逻辑继续塞进 app/api.py。
+
+建议至少：
+
+app/
+├── api.py
+├── agent/
+│   ├── parser.py
+│   ├── schemas.py
+│   ├── registry.py
+│   └── service.py
+├── llm/
+│   ├── base.py
+│   └── deepseek.py
+└── engine/
+
+这样以后：
+
+TASK-005 销售分析
+TASK-006 客户分析
+TASK-008 异常
+
+都是增加 Tool，而不是不断修改一个巨大的 Agent 文件。
+
+最终 Gate
+项目	判定
+004 提前到 003 前	通过
+三个 Intent	通过，不增加
+DeepSeek 第一版 Provider	通过
+Hermes 作为运行时模型	不采用
+对话 JSON 持久化	通过
+现在上数据库	不建议
+Country 冒充 Region	禁止
+Word/PDF 延后	可以
+LLM 直接算数字	禁止
+LLM 任意调用代码	禁止
+Gate：APPROVED_WITH_CONDITIONS
+开工前只需要锁定这 5 条：
+
+TASK 顺序调整为 002 → 004 → 003 → 005...。
+
+004 只做 3 个 Intent，不扩范围。
+
+DeepSeek 作为第一 Provider，但必须有 LLMProvider 抽象。
+
+对话暂存 JSON，并关联 dataset_sha256 / execution_id；数据库暂缓。
+
+严格执行 LLM → Intent → 白名单 Tool → 确定性计算 → LLM 组织，LLM 永远不负责数字计算。
+
+这样 TASK-004 做完之后，你就不再是“有一个企业级 UI 的报表工具”，而是第一次真正拥有了一个可以用自然语言驱动确定性销售分析的 Agent 最小闭环。

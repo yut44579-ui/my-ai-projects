@@ -160,14 +160,22 @@ def main() -> int:
         check(page.status_code == 200, "GET / 返回 200", f"status={page.status_code}")
         check(page.headers.get("content-type", "").startswith("text/html"), "响应是 HTML")
         html = page.text
-        for block_id, number in [
-            ("block-data", "① 数据"),
-            ("block-task", "② 建任务"),
-            ("block-spec", "③ Report Spec"),
-            ("block-run", "④ 执行结果"),
-            ("block-history", "⑤ 执行记录"),
+        # 三栏骨架 + 七个导航页（TASK-002 重做布局：旧的 5 个 block-* 区块已并入「数据管理」页）
+        for route in ("overview", "sales", "customers", "products", "anomaly", "weekly", "data", "settings"):
+            check(f'id="page-{route}"' in html, f"页面含 page-{route}")
+            check(f'id="nav-{route}"' in html, f"导航含 nav-{route}")
+        # 旧业务五步在新 UI 里仍然可达（数据管理页：上传 → 建任务 → Spec → 执行 → 记录）
+        for control, step in [
+            ("file-input", "① 上传"),
+            ("btn-upload", "① 上传"),
+            ("btn-create-task", "② 建任务"),
+            ("task-select", "③ Report Spec"),
+            ("spec-json", "③ Report Spec"),
+            ("btn-run-task", "④ 执行结果"),
+            ("btn-download", "④ 下载产出"),
+            ("exec-table-body", "⑤ 执行记录"),
         ]:
-            check(f'id="{block_id}"' in html and number in html, f"页面含区块 {number}（id={block_id}）")
+            check(f'id="{control}"' in html, f"数据管理页含 {step} 控件（id={control}）")
         for asset in ("/app.js", "/api.js", "/style.css"):
             asset_response = client.get(asset)
             check(asset_response.status_code == 200 and len(asset_response.content) > 0,

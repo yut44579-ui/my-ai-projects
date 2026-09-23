@@ -56,6 +56,34 @@ const API = (() => {
     return payload;
   }
 
+  // 有的端点回的是 text/plain（文档全文），不能按 JSON 解——但**错误体仍然是那套统一 JSON**，
+  // 所以这里只有"成功分支"不同，出错分支与 request() 逐字一致。
+  async function requestText(path) {
+    let response;
+    try {
+      response = await fetch(path);
+    } catch (err) {
+      throw new ApiError(0, "network_error", `连不上后端（${path}）：${err.message}`);
+    }
+    const body = await response.text();
+    if (!response.ok) {
+      let payload = null;
+      try {
+        payload = JSON.parse(body);
+      } catch (err) {
+        payload = null;
+      }
+      const error = payload && payload.error ? payload.error : null;
+      throw new ApiError(
+        response.status,
+        (error && error.code) || `http_${response.status}`,
+        (error && error.message) || body.slice(0, 400) || `HTTP ${response.status}`,
+        payload,
+      );
+    }
+    return body;
+  }
+
   const json = (body) => ({
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -124,6 +152,27 @@ const API = (() => {
     runTask: (taskId) => request(`/api/tasks/${encodeURIComponent(taskId)}/run`, { method: "POST" }),
     taskRuns: (taskId, params) => request(`/api/tasks/${encodeURIComponent(taskId)}/runs${query(params)}`),
     listExecutions: (params) => request(`/api/executions${query(params)}`),
+
+    // ── 文档输入（TASK-003：Word / PDF）────────────────────────────────
+    // 与表格上传是**两条平行管道**：/api/upload 只认表格，/api/documents 只认 .docx/.pdf。
+    // 各自拒收对方的格式，谁也没放宽（两条管道并存，不是替换）。
+    uploadDocument(file) {
+      const form = new FormData();
+      form.append("file", file, file.name);
+      return request("/api/documents", { method: "POST", body: form });
+    },
+    listDocuments: (params) => request(`/api/documents${query(params)}`),
+    // 列表/详情默认不带全文；要正文走下面两个（一个进 DOM，一个给人下载/另存）
+    getDocument: (docId, includeText) => request(
+      `/api/documents/${encodeURIComponent(docId)}`
+      + query({ include_text: includeText ? "true" : "" }),
+    ),
+    documentText: (docId) => requestText(`/api/documents/${encodeURIComponent(docId)}/text`),
+    documentSummary: (docId, params) => request(
+      `/api/documents/${encodeURIComponent(docId)}/summary${query(params)}`,
+      { method: "POST" },
+    ),
+    documentTextUrl: (docId) => `/api/documents/${encodeURIComponent(docId)}/text`,
 
     // 下载地址一律用**后端返回的相对 URL**（download_url）拼当前源，前端不自己拼路径
     downloadUrl: (relative) => new URL(relative, window.location.origin).href,
