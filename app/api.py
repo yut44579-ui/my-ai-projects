@@ -68,7 +68,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import api_chat, api_documents, state
+from app import api_chat, api_documents, prewarm, state
 from app.engine import executor, loader, renderer
 from app.engine import metrics as engine_metrics
 from app.spec.models import (
@@ -301,6 +301,9 @@ class CreateTaskRequest(BaseModel):
 app = FastAPI(
     title="sales-report-agent API",
     version=SERVICE_VERSION,
+    # 冷启动预热：启动时**后台**读一遍数据集（不阻塞就绪、不改任何端点形状）。
+    # 只做这一件事 —— 详见 app/prewarm.py 的说明。
+    lifespan=prewarm.lifespan,
     description=(
         "销售报表自动化的最小闭环接口：上传 → 看字段 → 执行（算数+渲染）→ 下载真实 xlsx。\n\n"
         "任务层（TASK-002D）：固化任务 → 看冻结 Spec → 按任务执行 → 看执行历史。\n\n"

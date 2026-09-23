@@ -33,6 +33,8 @@ import json
 import pathlib
 import re
 import sys
+import threading
+import time
 
 import pytest
 
@@ -42,7 +44,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import state  # noqa: E402
+from app import prewarm, state  # noqa: E402
 from app.ai import answer, intent as intent_module, llm, service, tools  # noqa: E402
 from app.api import app  # noqa: E402
 from app.engine import executor, loader  # noqa: E402
@@ -412,7 +414,7 @@ def test_AC04_LLM写的数字必须能在事实里找到出处_合规时放行(m
     # 引用一个**事实里确实有**的数字（销售额，写成中文数字更保险，但这里故意写成一个存在的数）
     facts_amount = executor.compute_sales_amount(*D16_WEEK_RANGE)["amount"]
     _llm_returns(
-        f"【为什么】\n这一周有效行占比较高，需求集中在少数几个单品上（区间金额 {facts_amount:,.2f} 元）。\n"
+        f"【为什么】\n这一周有效行占比较高，需求集中在少数几个单品上（区间金额 {facts_amount:,.2f} 英镑）。\n"
         f"【建议行动】\n- 关注头部单品\n- 复核取消单",
         monkeypatch,
     )
@@ -427,7 +429,8 @@ def test_AC04_LLM写的数字必须能在事实里找到出处_合规时放行(m
 
 def test_AC04_LLM自己编数字整段作废(monkeypatch):
     _llm_returns(
-        "【为什么】\n因为华南区贡献了 999999.99 元的销售额。\n【建议行动】\n- 加大投放 999999.99",
+        "【为什么】\n因为华南区贡献了 999999.99 英镑的销售额。\n"
+        "【建议行动】\n- 加大投放 999999.99",
         monkeypatch,
     )
     record = _ask("2011年11月21日到11月27日一共卖了多少", use_llm=True)
@@ -468,9 +471,50 @@ def test_数字闸门单元行为(monkeypatch):
     allowed = answer.collect_allowed_numbers({"amount": 1234.56}, "区间 2011-11-21 ~ 2011-11-27")
     assert "1234.56" in allowed and "1234.5" not in allowed
     assert answer.number_guard("没有任何数字", allowed)["passed"] is True
-    assert answer.number_guard("金额 1,234.56 元", allowed)["passed"] is True   # 千分位归一
-    bad = answer.number_guard("金额 1,234.57 元", allowed)
+    assert answer.number_guard("金额 1,234.56 英镑", allowed)["passed"] is True   # 千分位归一
+    bad = answer.number_guard("金额 1,234.57 英镑", allowed)
     assert bad["passed"] is False and bad["violations"] == ["1234.57"]
+
+
+def test_币种闸门单元行为():
+    """「元/人民币」是**事实错误**（数据集是英镑）→ 与编造数字同样处理：整段作废。"""
+    # 该拦的：人民币 / RMB / ¥ / 数字或中文数词 + 元 / （元） / 以元为单位
+    for bad in ("销售额是人民币", "按 RMB 计价", "合计 ¥123", "一百万元", "销售额（元）",
+                "以元为单位统计", "12 元"):
+        assert answer.currency_guard(bad), f"这段写错了币种却没被拦下：{bad}"
+    # 不该误伤的：这几个词里都有「元」，但都不是币种
+    for ok in ("这是基本的单元测试", "多种元素的组合", "一次性买齐", "销售额集中在一百多个单品上",
+               "元旦前后是旺季", "金额以英镑计价"):
+        assert answer.currency_guard(ok) == [], f"这段没写错币种却被拦下了：{ok}"
+
+    # 干净的段落整体放行；写错币种的段落整段作废（且 violations 不含数字）
+    allowed = answer.collect_allowed_numbers({"amount": 1234.56})
+    clean = answer.number_guard("销售额集中在若干单品上", allowed)
+    assert clean["passed"] is True and clean["currency_words"] == []
+    dirty = answer.number_guard("这一周的销售额以人民币结算", allowed)
+    assert dirty["passed"] is False and dirty["violations"] == []
+    assert dirty["currency_words"] == ["人民币"]
+
+
+def test_AC04_LLM写错币种整段作废(monkeypatch):
+    """真模型完全可能把单位写成「元」—— 事实段与闸门两道防线都必须挡住它。"""
+    _llm_returns(
+        "【为什么】\n这批货集中在少数几个单品上，贡献了大部分人民币销售额。\n"
+        "【建议行动】\n- 关注头部单品\n- 复核取消单",
+        monkeypatch,
+    )
+    record = _ask("2011年11月21日到11月27日一共卖了多少", use_llm=True)
+    assert record["facts"]["sales_amount"] == _executor_amount(*D16_WEEK_RANGE)   # 数字照样是对的
+
+    assert record["status"] == "degraded"
+    guard = record["answer"]["guard"]
+    assert guard["passed"] is False
+    assert guard["currency_words"] == ["人民币"]
+    assert guard["violations"] == []                    # 币种错、数字没错 —— 两类留痕能分清
+    why = record["answer"]["sections"][1]
+    assert why["source"] == "code" and "人民币" not in why["text"]
+    assert "币种" in why["text"] and "作废" in why["text"]   # 作废原因说清是哪一类越界
+    assert "币种" in record["notice"]
 
 
 def test_LLM段落切分(monkeypatch):
@@ -753,3 +797,124 @@ def test_AC09_新端点与既有端点并存():
         "/api/documents", "/api/documents/{doc_id}",
         "/api/documents/{doc_id}/text", "/api/documents/{doc_id}/summary",
     }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 11. 货币单位：**显式声明的英镑**（曾经错写成「元」的回归测试）
+# ════════════════════════════════════════════════════════════════════════
+# 数据集是英国零售商流水，8 列里**没有货币字段** —— 单位是"声明的口径"，不是算出来的。
+# 这一节的测试钉两件事：① 声明本身对不对（GBP/£/source=dataset_default）；
+# ② 全链路（事实段 / display 表 / 能力端点 / 前端取值点）**只认这一处**，任何地方
+# 再冒出「元」都要被抓住（前端那一半由 tests/test_web.py 的静态检查兜）。
+def test_货币单位是显式声明的英镑():
+    currency = tools.DATASET_CURRENCY
+    assert currency["code"] == "GBP"
+    assert currency["symbol"] == "£"
+    assert currency["name"] == "英镑"
+    # 关键：标明它不是"从数据里读到的"，否则下一个人会以为数据里有货币列
+    assert currency["source"] == "dataset_default"
+    assert currency["note"]
+    assert tools.currency_unit() == currency["name"] == "英镑"
+    # 画像与能力端点都从这一个常量出去（同源，不是各写一份）
+    assert tools.dataset_profile()["currency"] == currency
+
+
+def test_所有金额事实的单位都来自这一处声明():
+    start, end = D16_WEEK_RANGE
+    runs = [
+        tools.sales_summary(_dt.date.fromisoformat(start), _dt.date.fromisoformat(end)),
+        tools.sales_trend(_dt.date.fromisoformat(start), _dt.date.fromisoformat(end), "day"),
+        tools.top_products(_dt.date.fromisoformat(start), _dt.date.fromisoformat(end), 5),
+    ]
+    money_units = []
+    for result in runs:
+        for item in result["display"]:
+            if item.get("format") == "money":
+                money_units.append(item["unit"])
+        # 事实段（代码生成的那一段）里出现的每个金额都得带「英镑」
+        text = answer.render_facts_text(result, question="")
+        assert "英镑" in text
+        assert "元" not in text, (result["tool"], text)
+    assert money_units and set(money_units) == {tools.currency_unit()}
+
+
+def test_能力端点带出币种声明_前后端同一个出处():
+    caps = client.get("/api/chat/capabilities").json()
+    assert caps["currency"]["code"] == "GBP" and caps["currency"]["symbol"] == "£"
+    assert caps["data_profile"]["currency"] == caps["currency"]       # 两处同源
+    # 币种块里不许出现人民币口径的字样（「元」作为**金额单位**出现就算错）
+    assert answer.currency_guard(json.dumps(caps["currency"], ensure_ascii=False)) == []
+
+
+def test_提问链路里的金额单位是英镑不是元():
+    record = _ask("2011年11月21日到11月27日一共卖了多少？")
+    assert record["facts"]["sales_amount"] == _executor_amount(*D16_WEEK_RANGE)   # 数字照旧逐位相等
+    what = record["answer"]["sections"][0]["text"]
+    assert "英镑" in what and "元" not in what
+    # 工具返回的 display 表（前端事实表直接渲染它）也必须是英镑
+    assert {"英镑"} == {item["unit"] for item in record["tool"]["display"]
+                        if item.get("format") == "money"}
+
+
+def test_提示词告诉模型币种是英镑():
+    """写对单位不只是闸门的事：提示词也得说清楚，否则模型只能瞎猜一个「元」。"""
+    assert "英镑" in answer.LLM_SYSTEM_PROMPT
+    assert "人民币" in answer.LLM_SYSTEM_PROMPT        # 明确禁止写人民币
+    assert "元" not in answer.LLM_SYSTEM_PROMPT.replace("英镑", "").replace("人民币", "") \
+        or "不许写" in answer.LLM_SYSTEM_PROMPT          # 「元」只许出现在禁令里
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 12. 冷启动预热：**后台**读表，不改确定性（曾经首问要等 100 秒）
+# ════════════════════════════════════════════════════════════════════════
+def test_预热把数据读进缓存且不改确定性():
+    # 预热前后**逐位相同** —— 它只是提前调用同一个 load_raw()，没有第二条代码路径
+    before = _executor_amount(*D16_WEEK_RANGE)
+    report = tools.warm_up()
+    assert report["rows"] == DATASET_ROWS
+    assert report["column_count"] == 8
+    assert report["currency"] == "GBP"
+    assert report["seconds"] >= 0
+    assert _executor_amount(*D16_WEEK_RANGE) == before
+    # 再预热一次（缓存已热）结果一致：幂等，不会算出第二份数据
+    assert tools.warm_up()["rows"] == report["rows"]
+
+
+def test_冷启动预热接在app的lifespan上且不阻塞就绪(monkeypatch):
+    """**必须验"没阻塞"**：预热要是同步跑在启动里，服务会等 100 秒才肯接受连接。"""
+    calls: list[int] = []
+    monkeypatch.setattr(prewarm, "start_background", lambda: calls.append(1))
+
+    with TestClient(app) as inside:
+        assert inside.get("/api/health").status_code == 200
+
+    assert calls == [1], "app 启动时没有调预热（lifespan 没接上）"
+
+
+def test_预热在后台线程里跑_健康检查不用等它(monkeypatch):
+    released = threading.Event()
+    started = threading.Event()
+
+    def slow_warm_up() -> dict:
+        started.set()
+        released.wait(5)                      # 卡住预热，模拟"还在读 22MB"
+        return {"rows": 0, "column_count": 0, "first_day": "-", "last_day": "-",
+                "currency": "GBP", "seconds": 0.0}
+
+    monkeypatch.setattr(tools, "warm_up", slow_warm_up)
+    monkeypatch.setattr(prewarm, "STATE", {"started": False, "done": False, "report": None, "error": None})
+    monkeypatch.setattr(prewarm, "_THREAD", None)
+    try:
+        with TestClient(app) as inside:
+            t0 = time.perf_counter()
+            assert inside.get("/api/health").status_code == 200
+            elapsed = time.perf_counter() - t0
+            assert elapsed < 1.0, f"启动被预热拖住了：health 用了 {elapsed:.2f} 秒"
+            assert started.wait(5), "预热线程没起来"
+            assert prewarm.STATE["done"] is False, "预热还在跑，却已经标记完成"
+    finally:
+        released.set()                        # 放行，让后台线程正常收尾（别留一个真去读表的线程）
+        for _ in range(100):
+            if prewarm.STATE["done"]:
+                break
+            time.sleep(0.05)

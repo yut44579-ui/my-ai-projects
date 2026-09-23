@@ -58,6 +58,12 @@
   const int = new Intl.NumberFormat("zh-CN");
 
   const fmtMoney = (value) => (typeof value === "number" && isFinite(value) ? money.format(value) : "—");
+  // 币种符号**只从后端声明取**（capabilities.currency，数据里没有货币字段）。
+  // 后端没给就返回空串：宁可金额前面什么都不写，也不自作主张补一个货币符号。
+  const currencySymbol = () => {
+    const currency = (state.capabilities || {}).currency || {};
+    return currency.symbol || "";
+  };
   const fmtInt = (value) => (typeof value === "number" && isFinite(value) ? int.format(value) : "—");
   const fmtBytes = (value) => {
     if (typeof value !== "number" || !isFinite(value)) return "—";
@@ -218,6 +224,13 @@
     // 能力清单与**数据边界**都来自后端（页面不写死"支持哪三类问题"这种话）
     state.capabilities = await API.chatCapabilities();
     renderInertControls();
+    renderCurrency();
+  }
+
+  function renderCurrency() {
+    // KPI 卡片上的币种图标也跟着后端的声明走（原本那个写死的符号是错的：这是英镑数据集）
+    const icon = $("kpi-currency");
+    if (icon) icon.textContent = currencySymbol() || "¤";
   }
 
   async function refreshAll() {
@@ -463,7 +476,7 @@
     const items = [
       `最近一次成功执行：<span class="k">${escapeHtml(taskName(latest.task_id))}</span>` +
         ` · 区间 ${escapeHtml(text(range.start))} ~ ${escapeHtml(text(range.end))}` +
-        ` · 销售额 <b>¥${fmtMoney(latest.amount_display)}</b>`,
+        ` · 销售额 <b>${currencySymbol()}${fmtMoney(latest.amount_display)}</b>`,
       `覆盖 ${fmtInt(latest.rows_in_range)} 行：有效 ${fmtInt(latest.rows_valid)} 行，排除 ${fmtInt(latest.rows_excluded)} 行` +
         `（排除金额 ${fmtMoney(latest.excluded_amount)}）`,
       `数据快照：${latest.data_snapshot_match ? "SHA256 一致" : "SHA256 不一致"}（${escapeHtml(shortHash(latest.data_sha256))}）`,
@@ -1253,11 +1266,15 @@
     // 数字闸门的报告也显示出来：这是"LLM 没自己造数"的直接证据
     const guard = payload.guard;
     if (guard) {
+      // 越界有两类：编造的数字、写错的币种（后端声明的是英镑）。两类都要如实说。
+      const caught = [];
+      if (guard.violations && guard.violations.length) caught.push(`越界数字 ${guard.violations.join("、")}`);
+      if (guard.currency_words && guard.currency_words.length) caught.push(`写错的币种 ${guard.currency_words.join("、")}`);
       box.appendChild(
         line(
           guard.checked
             ? `数字闸门：已核对（合法数字 ${guard.allowed_count} 个）—— ${
-              guard.passed ? "模型写的内容全部可追溯" : `拦下越界数字 ${guard.violations.join("、")}，相关段落已作废`
+              guard.passed ? "模型写的内容全部可追溯" : `拦下${caught.join("；")}，相关段落已作废`
             }`
             : "数字闸门：本次 LLM 未参与，未启用核对",
           "note-line",
@@ -1657,13 +1674,20 @@
     const llmText = llm.configured ? `${llm.model || "LLM"} 已就绪` : "LLM 未配置（只能走关键词降级）";
     const names = caps.intents.map((item) => item.title).join(" / ");
     const profile = caps.data_profile || {};
+    // 币种**取自后端声明**（数据里没有货币字段，单位不能在前端猜、也不在前端写死）：
+    // 后端没声明就一个币种字都不写 —— 宁可不显示，也不编一个默认单位出来。
+    const currency = caps.currency || {};
+    const currencyText = currency.name
+      ? `金额单位：${currency.name}${currency.symbol ? `（${currency.symbol}，${currency.code || ""}）` : ""}`
+      : "";
 
     setText("nl-note", `自然语言入口：可问 ${names}（数字全部由程序算，LLM 只负责听懂问题与组织语言）· ${llmText}`);
-    setText("chat-source", `POST /api/chat · 白名单工具 ${caps.intents.length} 个`);
+    setText("chat-source", `POST /api/chat · 白名单工具 ${caps.intents.length} 个${currencyText ? ` · ${currencyText}` : ""}`);
     setText(
       "hero-nl-note",
       `本版支持 ${names}；数据范围 ${text(profile.first_day)} ~ ${text(profile.last_day)}，`
-      + `问数据里没有的维度（如区域）会被明确拒绝。`,
+      + `问数据里没有的维度（如区域）会被明确拒绝。`
+      + (currencyText ? ` ${currencyText}。` : ""),
     );
   }
 

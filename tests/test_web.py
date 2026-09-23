@@ -31,6 +31,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.ai.answer import currency_guard  # noqa: E402
 from app.api import app  # noqa: E402
 
 WEB_DIR = PROJECT_ROOT / "web"
@@ -210,6 +211,30 @@ def test_frontend_has_no_hardcoded_business_numbers() -> None:
         body = read(name)
         for number in FORBIDDEN_NUMBERS:
             assert number not in body, f"{name} 里写死了业务数字：{number}"
+
+
+def test_frontend_currency_comes_from_backend() -> None:
+    """金额单位（英镑）**只能**从 capabilities 的 currency 声明取，前端不许自己写死单位。
+
+    数据里没有货币字段 —— 前端硬编码一个「元/¥」就是"猜一个单位"，
+    不但会跟后端事实段对不上，还会把英镑的数字说成人民币。
+    """
+    js = read("app.js")
+    assert "caps.currency" in js, "前端没有读后端声明的 currency（单位从哪来？）"
+    assert "currency.symbol" in js, "没有用声明里的符号"
+    assert 'id="kpi-currency"' in read("index.html"), "KPI 币种图标没有可被 JS 填写的落点"
+
+
+def test_frontend_has_no_wrong_currency_marks() -> None:
+    """四份前端源码里**不许出现任何写死的错误币种字样**（沿用后端那把尺子：answer.currency_guard）。
+
+    为什么复用后端函数而不是在前端测试里另写一条正则：币种错误只在**一处**定义
+    （`tools.DATASET_CURRENCY` 声明的是英镑），"什么算写错单位"也该只有一处定义 ——
+    否则两边尺子不一致，闸门挡得住模型、挡不住前端。
+    """
+    for name in ("app.js", "api.js", "index.html", "style.css"):
+        found = currency_guard(read(name))
+        assert found == [], f"{name} 里出现写死的错误币种字样：{found}"
 
 
 def test_kpi_and_trend_come_from_backend() -> None:

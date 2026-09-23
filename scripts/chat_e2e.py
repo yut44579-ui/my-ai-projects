@@ -21,8 +21,14 @@
 预期末行：`🎉 TASK-004 自然语言闭环全部通过`
 
 耗时说明（别以为是卡住了）：
-    进程内参考值要读一次 22MB Excel（约 100 秒），服务进程第一次提问时也要读一次。
-    本机实测冷启动整条约 5 分钟，其中绝大部分是这两次读表，不是模型慢。
+    进程内参考值要读一次 22MB Excel（约 100 秒）；服务进程**启动时会在后台自己读一次**
+    （见 app/prewarm.py —— 这一步现在与脚本的参考值计算、与服务接受请求**并行**发生，
+    所以它不再是"用户提问时干等"的那 100 秒）。本机实测整条约 4 分钟，绝大部分是读表。
+
+本脚本额外验两件事（不在 TASK-004 原始范围里，是后续两个小修）：
+    · 币种：事实段/display/能力端点说的是**英镑**（数据集是 UCI Online Retail，GBP），不是「元」；
+    · 冷启动：服务**启动就预热**（日志里有那一行）、预热期间 /api/health 一直 200、
+      预热之后首次碰数据只要几秒（修复前这一刻要现读 Excel ≈ 100 秒）。
 """
 
 from __future__ import annotations
@@ -107,9 +113,13 @@ def main() -> int:
     check(ref_month > ref_week, "整月金额 > 单周金额（参考值自身先自洽）")
     print(f"   数据集：{ref_rows} 行 / {len(ref_columns)} 列：{' / '.join(ref_columns)}")
 
+    # 服务日志落文件（不用 PIPE）：① 管道没人读会写满卡住服务；② 要验"启动预热真的跑了"
+    # 就必须能读到服务进程的启动日志。
+    log_path = os.path.join(sandbox, "server.log")
+    log_file = open(log_path, "w", encoding="utf-8", errors="replace")
     proc = subprocess.Popen(
         [PY, "-m", "uvicorn", "app.api:app", "--host", "127.0.0.1", "--port", str(args.port)],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=ENV,
+        stdout=log_file, stderr=subprocess.STDOUT, env=ENV,
     )
     try:
         client = httpx.Client(base_url=base, timeout=600.0)
@@ -151,10 +161,34 @@ def main() -> int:
               "app.js 真的调了 /api/chat（不是只有后端能跑）")
         check(client.get("/style.css").status_code == 200, "style.css 正常 serve")
 
-        # ── 【2】能力与数据边界 ────────────────────────────────────────────
-        step("2 GET /api/chat/capabilities（能问什么 / 数据边界 / LLM 接没接）")
+        # ── 【1b】冷启动预热：真进程里"启动就后台读表、不挡就绪" ────────────────
+        step("1b 冷启动预热（真进程）")
+        print("   等启动日志里的预流行…（进程首次读 22MB Excel，约 100 秒）")
+        prewarm_line = ""
+        health_never_failed = True
+        deadline = time.time() + 300
+        while time.time() < deadline and not prewarm_line:
+            try:
+                with open(log_path, encoding="utf-8", errors="replace") as handle:
+                    for row in handle:
+                        if "[预热] 数据集已读入缓存" in row:
+                            prewarm_line = row.strip()
+                            break
+            except OSError:
+                pass
+            if client.get("/api/health").status_code != 200:
+                health_never_failed = False
+            time.sleep(1.0)
+        check(bool(prewarm_line), "**启动时真的预热了（日志里有那一行）**", prewarm_line)
+        check(health_never_failed, "**预热期间 /api/health 一直是 200（预热不挡服务就绪）**")
+        cold_started = time.time()
         caps = client.get("/api/chat/capabilities")
+        cold_seconds = time.time() - cold_started
         check(caps.status_code == 200, "能力端点 200")
+        # 修复前：冷启动后第一次碰数据要现读 22MB Excel ≈ 100 秒（这一问就是用户干等的那一下）
+        check(cold_seconds < 20,
+              "**预热后首次碰数据只花几秒（修复前这一刻要 ~100 秒现读 Excel）**",
+              f"{cold_seconds:.1f}s")
         caps = caps.json()
         names = [item["name"] for item in caps["intents"]]
         check(names == ["sales_summary", "sales_trend", "top_products"],
@@ -163,6 +197,13 @@ def main() -> int:
         check(profile["rows"] == ref_rows, "画像行数与直接读表一致", f"{profile['rows']} == {ref_rows}")
         check(profile["columns"] == ref_columns, "画像列名与真实数据一致")
         check(profile.get("has_region_field") is False, "**画像如实标注：没有区域字段**")
+        # 币种**显式声明**：数据集 8 列里没有货币字段，单位只能声明不能猜（曾经错写成「元」）
+        currency = caps.get("currency") or {}
+        check(currency.get("code") == "GBP" and currency.get("symbol") == "£",
+              "**能力端点显式声明币种 GBP / £（不是人民币）**", str(currency.get("code")))
+        check(currency.get("source") == "dataset_default",
+              "声明里写明出处：这是数据集默认口径，不是从数据里读出来的")
+        check(profile.get("currency") == currency, "画像与顶层声明**同源**（一处定义，两处引用）")
         check("不会用 Country 代替" in caps["unsupported"]["reason"] or
               "Country" in caps["unsupported"]["reason"],
               "能力端点明说不会拿 Country 顶替区域")
@@ -212,6 +253,13 @@ def main() -> int:
               "**第一段【发生了什么】由代码写（数字不经过模型的手）**")
         check(f"{ref_month:,.2f}" in by_key.get("what", {}).get("text", ""),
               "代码段里写着那个金额（人能看到出处）", f"{ref_month:,.2f}")
+        what_text = by_key.get("what", {}).get("text", "")
+        check("英镑" in what_text and "元" not in what_text,
+              "**事实段用的是英镑，全段没有「元」（这个数据集是 GBP，不是人民币）**")
+        display_units = {item.get("unit") for item in (tool.get("display") or [])
+                         if item.get("format") == "money"}
+        check(display_units == {"英镑"},
+              "事实表（前端直接渲染的那份 display）金额单位也是声明的那一个", str(display_units))
 
         guard = (record.get("answer") or {}).get("guard") or {}
         check(guard.get("checked") is True, "数字闸门这次确实开了（LLM 参与时才开）")
@@ -420,6 +468,7 @@ def main() -> int:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
             proc.kill()
+        log_file.close()
 
 
 if __name__ == "__main__":

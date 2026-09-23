@@ -33,6 +33,7 @@ D16 口径有三条排除规则（取消单 / 负数量 / 非正价格）与"含
 from __future__ import annotations
 
 import datetime as _dt
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -73,7 +74,36 @@ def _empty_window_note(rows_in_range: int, start: _dt.date, end: _dt.date) -> li
 
 
 # ════════════════════════════════════════════════════════════════════════
-# 数据集画像（全部**从数据里算**，没有一个是写死的常量）
+# ════════════════════════════════════════════════════════════════════════
+# 货币单位：**显式声明**，不是从数据里推出来的（全项目唯一出处）
+# ════════════════════════════════════════════════════════════════════════
+# 数据集是 UCI Online Retail（英国零售商的交易流水），8 列里**没有货币字段** ——
+# "金额是什么币种"这件事数据自己没说，只能由我们声明，所以这里把**出处**（source）
+# 一起写出来：它不是"从数据读到的"，是"数据集自带的默认口径"。
+#
+# 之前事实段把它写成「元」是**错的**（把英镑当人民币）——数值没错，单位错了。
+# 现在事实段（answer.py）、display 表、能力端点、前端**都只从这一处取值**，
+# 别处不许再出现「元」/「£」的硬编码。
+DATASET_CURRENCY: dict[str, str] = {
+    "code": "GBP",
+    "symbol": "£",
+    "name": "英镑",
+    "source": "dataset_default",
+    "note": "数据集为英国零售商流水（UCI Online Retail），金额以英镑计价；"
+            "文件里没有货币列，币种是**数据集口径声明**，不是从数据里读出来的。",
+}
+
+
+def currency_unit() -> str:
+    """金额在文字/表格里跟的单位（`1,509,496.33英镑` 的那个「英镑」）。
+
+    与其它单位（`行`/`件`/`个`/`%`）一样紧贴数字不加空格 —— 保持全表同一种排版。
+    """
+    return DATASET_CURRENCY["name"]
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 数据集画像（rows/边界/去重计数都**从数据里算**；`currency` 是声明，见上）
 # ════════════════════════════════════════════════════════════════════════
 _profile_cache: dict[str, Any] | None = None
 
@@ -84,6 +114,9 @@ def dataset_profile() -> dict[str, Any]:
     为什么不在代码里写 `DATA_LAST_DAY = 2011-12-09` 这种常量：数据集是外部资产，
     写死的常量一旦与文件脱钩（换了数据忘了改常量），所有"数据边界"的话就都成了假话。
     这里每次从 `loader.load_raw()` 现算（loader 自己有进程级缓存，不重复读盘）。
+
+    两处例外，都是**声明**而不是"算出来的"，如实摆在画像里（`has_region_field`
+    与 `currency`）：数据里没有的信息不能假装是从数据里读的。
     """
     global _profile_cache
     if _profile_cache is not None:
@@ -101,6 +134,7 @@ def dataset_profile() -> dict[str, Any]:
         "customer_count": int(frame["CustomerID"].nunique(dropna=True)),
         "stock_code_count": int(frame["StockCode"].nunique(dropna=True)),
         "has_region_field": False,
+        "currency": dict(DATASET_CURRENCY),
     }
     _profile_cache = profile
     return dict(profile)
@@ -119,6 +153,29 @@ def reset_cache() -> None:
     """清掉画像缓存（测试用：换了数据集要能重算）。"""
     global _profile_cache
     _profile_cache = None
+
+
+def warm_up() -> dict[str, Any]:
+    """把数据集读进**进程级缓存**（冷启动预热；服务启动时在后台线程里调一次）。
+
+    为什么需要它：`loader.load_raw()` 第一次要读 22MB Excel（本机约 100 秒），
+    冷启动后的**第一问**全卡在这一步上（热态只要 7~10 秒，因为缓存已建好）。
+    预热只是**把这一次读盘提前到启动时**，读表/口径/计算的代码路径一个字没改：
+    确定性与"第一次提问时现读"完全一致（同一个 `load_raw()`，同一个 `_CACHE`）。
+
+    返回一份人看的简报（行数/边界/币种/耗时），供启动日志与测试断言用。
+    """
+    started = time.perf_counter()
+    rows = int(len(loader.load_raw()))          # ① 最贵的一步：22MB Excel 读盘 + 形状校验
+    profile = dataset_profile()                 # ② 画像（三列 nunique 扫描），顺带确认边界算得出来
+    return {
+        "rows": rows,
+        "column_count": profile["column_count"],
+        "first_day": profile["first_day"],
+        "last_day": profile["last_day"],
+        "currency": profile["currency"]["code"],
+        "seconds": round(time.perf_counter() - started, 1),
+    }
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -211,10 +268,10 @@ def sales_summary(start: _dt.date, end: _dt.date) -> dict[str, Any]:
         "facts": facts,
         "notes": notes,
         "display": [
-            {"label": "销售额", "value": amount, "unit": "元", "format": "money"},
+            {"label": "销售额", "value": amount, "unit": currency_unit(), "format": "money"},
             {"label": "订单数（去重发票号）", "value": order_count, "unit": "单", "format": "int"},
             {"label": "客户数（去重客户号）", "value": customer_count, "unit": "位", "format": "int"},
-            {"label": "客单价（销售额 ÷ 订单数）", "value": avg_order, "unit": "元", "format": "money",
+            {"label": "客单价（销售额 ÷ 订单数）", "value": avg_order, "unit": currency_unit(), "format": "money",
              "derived": True},
             {"label": "有效行数", "value": facts["rows_valid"], "unit": "行", "format": "int"},
             {"label": "被排除行数", "value": facts["rows_excluded"], "unit": "行", "format": "int"},
@@ -320,15 +377,15 @@ def sales_trend(start: _dt.date, end: _dt.date, granularity: str = "day") -> dic
         "series": {"value_key": "amount", "points": points},
         "notes": notes,
         "display": [
-            {"label": "区间销售额合计", "value": total, "unit": "元", "format": "money"},
+            {"label": "区间销售额合计", "value": total, "unit": currency_unit(), "format": "money"},
             {"label": f"{bucket_label}数", "value": len(points), "unit": "个", "format": "int"},
-            {"label": f"最高一个{bucket_label}", "value": facts["max_bucket_amount"], "unit": "元",
+            {"label": f"最高一个{bucket_label}", "value": facts["max_bucket_amount"], "unit": currency_unit(),
              "format": "money",
              "note": f"起始 {facts['max_bucket_start']}" if facts["max_bucket_start"] else ""},
-            {"label": f"最低一个{bucket_label}", "value": facts["min_bucket_amount"], "unit": "元",
+            {"label": f"最低一个{bucket_label}", "value": facts["min_bucket_amount"], "unit": currency_unit(),
              "format": "money",
              "note": f"起始 {facts['min_bucket_start']}" if facts["min_bucket_start"] else ""},
-            {"label": f"{bucket_label}均额", "value": facts["avg_bucket_amount"], "unit": "元",
+            {"label": f"{bucket_label}均额", "value": facts["avg_bucket_amount"], "unit": currency_unit(),
              "format": "money", "derived": True},
         ],
         "selfcheck": {
@@ -428,10 +485,10 @@ def top_products(start: _dt.date, end: _dt.date, top_n: int = 5) -> dict[str, An
         "notes": notes,
         "display": [
             {"label": "上榜商品数", "value": len(items), "unit": "个", "format": "int"},
-            {"label": f"TOP{len(items)} 合计销售额", "value": top_amount, "unit": "元", "format": "money"},
+            {"label": f"TOP{len(items)} 合计销售额", "value": top_amount, "unit": currency_unit(), "format": "money"},
             {"label": "占区间总销售额", "value": facts["top_share"] * 100, "unit": "%", "format": "pct",
              "derived": True},
-            {"label": "区间总销售额", "value": detail_total, "unit": "元", "format": "money"},
+            {"label": "区间总销售额", "value": detail_total, "unit": currency_unit(), "format": "money"},
             {"label": "区间内出现过的商品编码数", "value": facts["product_count"], "unit": "个", "format": "int"},
         ],
         "selfcheck": {
@@ -487,9 +544,11 @@ def run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "DATASET_CURRENCY",
     "TOOLS",
     "ToolSpec",
     "WEEK_START_WEEKDAY",
+    "currency_unit",
     "dataset_bounds",
     "dataset_profile",
     "reset_cache",
@@ -497,4 +556,5 @@ __all__ = [
     "sales_summary",
     "sales_trend",
     "top_products",
+    "warm_up",
 ]

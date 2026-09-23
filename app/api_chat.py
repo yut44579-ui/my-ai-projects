@@ -115,6 +115,9 @@ def chat_capabilities() -> dict:
                       "**不会用 Country 代替区域**。",
         },
         "llm": llm.status(),
+        # 币种**显式声明**（同一个对象也随 data_profile 一起出去，两处同源）：
+        # 数据集 8 列里没有货币字段，单位只能声明、不能猜 —— 事实段与前端都取这里。
+        "currency": profile["currency"],
         "data_profile": profile,
         "examples": [
             "2011年11月一共卖了多少？",

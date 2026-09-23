@@ -32,6 +32,10 @@ import json
 import re
 from typing import Any
 
+# 货币单位**只从 tools 取**（`DATASET_CURRENCY` 是全项目唯一出处）。
+# 不反向依赖：tools 不 import answer，所以这里 import 它没有环。
+from app.ai import tools as ai_tools
+
 # 三段的小标题（前端按 key 分区渲染，不靠解析中文标题）
 SECTION_WHAT = "what"
 SECTION_WHY = "why"
@@ -48,7 +52,28 @@ SECTION_TITLES = {
 # 否则闸门会白白放行 "16" 这个 token，模型写"16 元"就溜过去了。
 _NUMBER_RE = re.compile(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?")
 
+# 币种词：数据集声明的是**英镑**（见 `tools.DATASET_CURRENCY`）。
+# 模型要是写出「元/人民币/RMB/¥」，那是**事实错误** —— 和假数字一样处理：整段作废。
+# 「元」单独扫会误伤「单元/元素/多元」，所以只盯它作为**金额单位**出现的写法
+# （前面跟着数字或中文数词、后面跟着括号/顿号/句读、或者直接写「（元）」）。
+_FOREIGN_CURRENCY_RE = re.compile(
+    r"人民币|RMB|[¥￥]"
+    r"|(?:[\d０-９]|[一二三四五六七八九十百千万亿几])\s*元"
+    r"|元[/）)】」、，。;；:：]|（元）|\(元\)|以元为单位"
+)
+
 GUARD_POLICY = "LLM 段落里出现的每一个数字，都必须能在确定性计算结果里找到出处"
+
+
+def currency_guard(text: str) -> list[str]:
+    """扫一段 LLM 输出里**写错币种**的词（返回命中的词，空列表 = 干净）。
+
+    为什么和数字闸门放在一起：这两件事是同一个规矩的两面 ——
+    「LLM 只负责组织语言，事实（数字与单位）一律以确定性结果为准」。
+    """
+    if not text:
+        return []
+    return sorted(set(_FOREIGN_CURRENCY_RE.findall(text)))
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -114,7 +139,7 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
         for item in items:
             lines.append(
                 f"  #{item['rank']} {item['stock_code']} {item['description'] or '(无描述)'}"
-                f"：{format_value(item['amount'], 'money')} 元"
+                f"：{format_value(item['amount'], 'money')}{ai_tools.currency_unit()}"
                 f"（{format_value(item['share'] * 100, 'pct')}%，"
                 f"{format_value(item['qty'], 'qty')} 件 / {item['orders']} 单）"
             )
@@ -131,7 +156,7 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
                 # 桶跨越了问句区间 → 把"实际算了哪几天"写出来，不让标签误导
                 span += f"（只统计 {point['covered_start']} ~ {point['covered_end']}，不完整）"
             lines.append(
-                f"  {span}：{format_value(point['amount'], 'money')} 元"
+                f"  {span}：{format_value(point['amount'], 'money')}{ai_tools.currency_unit()}"
                 f"（{point['orders']} 单）"
             )
 
@@ -193,16 +218,24 @@ def collect_allowed_numbers(*sources: Any) -> set[str]:
 
 
 def number_guard(text: str, allowed: set[str]) -> dict[str, Any]:
-    """扫一段 LLM 输出里的数字，返回检查报告（`passed=False` 时调用方必须丢弃这段）。"""
+    """扫一段 LLM 输出里的数字与币种，返回检查报告（`passed=False` 时调用方必须丢弃这段）。
+
+    两类越界：
+        violations      编造的数字（不在确定性结果里的 token）
+        currency_words  把币种写错（写成「元/人民币」之类；数据集声明的币种见 tools）
+    """
     if not text:
-        return {"checked": True, "passed": True, "violations": [], "numbers_found": []}
+        return {"checked": True, "passed": True, "violations": [],
+                "currency_words": [], "numbers_found": []}
     found = _NUMBER_RE.findall(text)
     normalized = [_normalize_number(token) for token in found]
     violations = sorted({token for token in normalized if token not in allowed})
+    currency_words = currency_guard(text)
     return {
         "checked": True,
-        "passed": not violations,
+        "passed": not violations and not currency_words,
         "violations": violations,
+        "currency_words": currency_words,
         "numbers_found": sorted(set(normalized)),
     }
 
@@ -214,9 +247,11 @@ LLM_SYSTEM_PROMPT = """你是销售数据分析师。下面会给你一份**已�
 你要写两段中文分析，除此之外什么都不要写。
 
 **最重要的规矩：绝对不要在回答里写任何阿拉伯数字（0-9）。一个都不许出现。**
-- 不要写"12,345.67 元"，要写"销售额"；不要写"3 个"，要写"三个"（中文数字可以）。
+- 不要写"12,345.67 英镑"，要写"销售额"；不要写"3 个"，要写"三个"（中文数字可以）。
 - 不要自己算任何比例、差额、平均值 —— 你没看到原始数据，算了就是编。
 - 需要引用数字时，用它的名称（如"销售额""订单数""最高的一天"）。
+- 金额的币种是**英镑（GBP）**：提到金额单位只能写"英镑"，**不许写"元""人民币"**
+  （数据来自英国零售商，写成人民币就是错的）。
 
 【为什么】这一段：解释你**推断**出的原因。只写 2~4 句，务必基于给你的事实，
   不要引入事实之外的任何信息（不要提天气、节假日、竞品，除非事实里就有）。
@@ -296,6 +331,27 @@ def _fallback_actions(reason: str) -> str:
     return f"{reason}\n为避免编造，本段不生成建议 —— 请直接看【发生了什么】里的事实。"
 
 
+def _dropped_section_reason(report: dict[str, Any]) -> str:
+    """整段作废时给用户看的原因（**说清是哪一类越界**，别让人以为只是"没内容"）。
+
+    只写"哪一类"，**不把越界的数字/词抄进正文** —— 正文里一旦出现那个数字，
+    哪怕标着"这是编的"，也等于让一个不可追溯的数混进了回答（AC-04 的读法就是这么严）。
+    具体命中了什么，留在 `guard.violations` / `guard.currency_words` 里（机器可读、
+    前端在核对结论那一行展示），正文只负责说"这段被作废了，因为什么"。
+    """
+    problems = []
+    if report.get("violations"):
+        problems.append("无法追溯到计算结果的数字")
+    if report.get("currency_words"):
+        problems.append("写错的币种")
+    if not problems:
+        return "（模型这一段没能给出可用内容。）"
+    return (
+        "（模型这一段里出现了" + "、".join(problems) +
+        "，已按「LLM 只负责组织语言、事实以确定性结果为准」的规则整段作废。）"
+    )
+
+
 def compose(
     *,
     question: str,
@@ -332,6 +388,7 @@ def compose(
         "passed": True,
         "by_section": {},
         "violations": [],
+        "currency_words": [],
     }
     why_text, actions_text = "", ""
 
@@ -355,7 +412,9 @@ def compose(
             if not report["passed"]:
                 guard_report["passed"] = False
                 guard_report["violations"].extend(report["violations"])
+                guard_report["currency_words"].extend(report["currency_words"])
         guard_report["violations"] = sorted(set(guard_report["violations"]))
+        guard_report["currency_words"] = sorted(set(guard_report["currency_words"]))
 
         if guard_report["by_section"].get(SECTION_WHY, {}).get("passed") and why_raw.strip():
             why_text, why_source = why_raw.strip(), "llm"
@@ -363,7 +422,7 @@ def compose(
             why_source = "code"
             if why_raw.strip():
                 why_text = _fallback_why(
-                    "（模型这一段里出现了无法追溯到计算结果数字，已按「LLM 绝不碰数字」的规则整段作废。）",
+                    _dropped_section_reason(guard_report["by_section"].get(SECTION_WHY, {})),
                     result,
                 )
             else:
@@ -375,7 +434,7 @@ def compose(
             actions_source = "code"
             if actions_raw.strip():
                 actions_text = _fallback_actions(
-                    "（模型这一段里出现了无法追溯到计算结果的数字，已按「LLM 绝不碰数字」的规则整段作废。）"
+                    _dropped_section_reason(guard_report["by_section"].get(SECTION_ACTIONS, {}))
                 )
             else:
                 actions_text = _fallback_actions("（模型这一段没能给出可用内容。）")
@@ -397,6 +456,7 @@ __all__ = [
     "build_llm_prompt",
     "collect_allowed_numbers",
     "compose",
+    "currency_guard",
     "format_value",
     "number_guard",
     "parse_llm_sections",

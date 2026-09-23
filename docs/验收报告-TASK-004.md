@@ -9,6 +9,9 @@
 
 **PASS**（全量 pytest 169 绿 + 真 HTTP/真 DeepSeek 闭环 111 项全过 + 真 Edge 渲染 25 项全过）
 
+> ⚠️ 上面这三个数字是**首轮**的。用户复验后提了两个小修（金额单位 / 冷启动），
+> 已做完并重跑 —— **以文末「补丁 · 复验项」一节为准：pytest 181 / e2e 119 / Edge 27**。
+
 **唯一没做的一项**：AC-07 里"用 CDP 点按实测"按项目约定归 Hermes（本项目不装 Playwright）。
 我这边用 Edge 自带 `--headless --dump-dom` 把 JS 执行完的 DOM 抓下来做了**等价的渲染层验收**（见下面 AC-07）。
 
@@ -226,3 +229,84 @@ cd /d/sales-report-agent && ./.venv/Scripts/python.exe scripts/serve.py --port 8
 | 新能力挂载 | 复刻 `api_documents.py` 的"新文件 + 新路径 + api.py 只加两行、mount 之前"套路 | 没往 `api.py` 里塞端点 |
 | 前端 | `api.js` 的 `request/json/query/ApiError`、`.badge/.empty/.code/.table/.table-wrap`、三态与错误条 | 没引框架、没为聊天单造视觉、没写死能力文案 |
 | 浏览器验收 | **本机 Edge 自带 `--headless --dump-dom`** | 没装 Playwright（用户拍板过） |
+
+---
+
+# 补丁 · 复验项（2026-09-23，用户实测发现的两个问题）
+
+> 触发：用户真跑页面时发现 ①`【发生了什么】`把金额单位写成「元」（数据集是英镑）；
+> ②服务重启后第一问要等约 100 秒。本节的数字全部来自重跑，不是估算。
+
+## 一、金额单位：英镑（GBP），且**只有一处声明**
+
+**错在哪**：数据集是 UCI Online Retail（英国零售商流水），金额是**英镑**。原来事实段、
+display 表、前端 KPI 卡片都写/显示了人民币口径（`元` / `¥`）—— **数字本身一直是对的**
+（1,509,496.33 与直接调 executor 位级相等），错的只是单位标签。
+
+**怎么修的（单一声明，不是把「元」批量替换成「英镑」）**：
+
+| 位置 | 改动 |
+|---|---|
+| `app/ai/tools.py` | 新增 `DATASET_CURRENCY = {code: GBP, symbol: £, name: 英镑, source: dataset_default, note: …}` + `currency_unit()`；**8 处** display 的 `unit` 改为 `currency_unit()`；`dataset_profile()` 带出 `currency` |
+| `app/ai/answer.py` | 事实段的明细/逐点两处 `… 元` → `currency_unit()`；提示词告诉模型"币种是英镑、不许写元/人民币"；**新增币种闸门** `currency_guard()`（与数字闸门同一规矩：模型写错单位 = 整段作废，`guard.currency_words` 留痕） |
+| `app/api_chat.py` | `GET /api/chat/capabilities` 顶层加 `currency`（与 `data_profile.currency` **同一个对象**，同源） |
+| `web/app.js` | `currencySymbol()` 从 `capabilities.currency` 取符号；KPI 卡片图标改为 JS 从声明填；能力清单旁显示「金额单位：英镑（£，GBP）」 |
+| `web/index.html` | KPI 图标的写死 `¥` → 中性占位 `¤`（后端声明没到之前不预设任何币种） |
+
+**为什么放 `source: "dataset_default"`**：数据集 8 列里**没有货币字段**，单位不是"从数据读出来的"，
+是**声明的口径**。声明里写明出处，免得下一个人以为数据里有货币列（和 `has_region_field: false`
+同一个道理：数据里没有的信息不能假装是从数据里读的）。
+
+**前端那两处写死的 `¥` 是同一类错**（`app.js` 执行详情的「销售额 ¥…」、`index.html` KPI 图标），
+一并修了 —— 用后端的 `currency_guard()` 当尺子扫四份前端源码，现在**一个错误币种字样都没有**
+（`tests/test_web.py::test_frontend_has_no_wrong_currency_marks` 把这条钉死；连注释里也不许出现）。
+
+**证据**：e2e 里加 5 项（能力端点声明 GBP/£、`source=dataset_default`、画像同源、事实段含英镑且无「元」、
+display 单位 == 声明）；真 Edge 渲染出来的 DOM 里是 `销售额：1,509,496.33英镑`、单位列 `英镑`、KPI 图标 `£`。
+
+## 二、冷启动：启动时**后台**预热（不改读表与计算的任何一行）
+
+**判断：值得修，而且只用一种最轻的做法。** 100 秒全部是 `loader.load_raw()` 第一次读 22MB Excel；
+热态 7~10 秒的耗时是两次 LLM 往返，与数据无关。
+
+做法：`app/prewarm.py`（新文件，只做一件事）→ `app/api.py` 加 **两行**（import + `lifespan=prewarm.lifespan`）。
+- **提前**：启动就调 `tools.warm_up()`（内部还是那个 `loader.load_raw()` + 进程级 `_CACHE`，**读表/口径/计算的代码路径一个字没改**）；
+- **后台线程 + daemon**：不阻塞应用就绪 —— 预热 96.3 秒期间 `/api/health` 一直 200（e2e 实测）；
+- **失败不影响可用**：预热抛错只记日志，第一问会照旧现读。
+
+**没做 `/api/health` 的状态位**：`/api/health` 是冻结的 Legacy Contract（响应形状逐键断言过），
+加字段就是动形状；而"等 100 秒"这件事已经被预热从用户身上挪走了，不需要客户端再轮询。
+
+**实测数字**：预热 96.3 秒（后台）→ 预热完成后首次碰数据 **2.6 秒**（修复前这一刻要现读 Excel ≈ 100 秒）。
+
+## 三、本轮改动文件 + 重跑结果
+
+| 文件 | 改动 |
+|---|---|
+| `app/ai/tools.py` | 币种声明与 `currency_unit()`、8 处单位、`dataset_profile().currency`、`warm_up()` |
+| `app/ai/answer.py` | 事实段单位、提示词、`currency_guard()` + 闸门报告 `currency_words`、作废原因（**只写哪一类，不把越界数字抄进正文**） |
+| `app/ai/service.py` | 降级说明同时覆盖"数字"与"币种"两类越界 |
+| `app/api_chat.py` | capabilities 顶层 `currency` |
+| `app/api.py` | **+2 行**：`prewarm` import 与 `lifespan=` |
+| `app/prewarm.py` | **新文件**：后台预热 + `STATE` 观察点 |
+| `web/app.js` / `web/index.html` | 币种从声明取；KPI 图标 `¥` → `¤`（JS 填 £）；闸门结论区分两类越界 |
+| `tests/test_chat.py` | +10 用例（币种声明/单位/闸门/提示词/预热 3 条），既有两条 fixture 的「元」改「英镑」 |
+| `tests/test_web.py` | +1 用例（前端无错误币种字样），+1 断言（KPI 币种落点） |
+| `scripts/chat_e2e.py` | 服务日志落文件、新增【1b 冷启动预热】步、币种断言（111 → **119 项**） |
+| `outputs/_chat_web_check.py` | 真 Edge 检查加币种两项（25 → **27 项**） |
+
+| 重跑 | 结果 |
+|---|---|
+| 全量 pytest | **181 passed**（63.38s；本轮 +11 用例） |
+| `scripts/chat_e2e.py` | **119 项断言全过，0 失败**，239s |
+| 真 Edge 无头渲染 | **27 项全过** |
+
+## ⚠️ 遗留（这轮没动，等 Gate 定）
+
+1. **Excel 报表模板里那一行写着「销售额（元）」** —— 在**冻结资产** `app/engine/renderer.py` 的行定义与
+   模板 `.xlsx` 里（`_TEMPLATE_ROWS`），本轮**一个字节没碰**。同一份产品里"聊天说英镑、下载的报表说元"
+   是矛盾的，但改它属于动冻结资产 + 动模板文件，**请 Gate 定要不要开一个改名小任务**。
+2. `app/engine/docs.py` 里识别**上传文档**金额的正则含 `元/万元/美元` —— 那是"文档里写的字"的识别，
+   与销售数据集的币种无关，未动。
+3. 预热的开销：服务启动后后台要读 96 秒（CPU/IO 各一次）。多次重启服务会重复付这个成本 ——
+   如果想要"启动即秒开 + 不重复读"，下一步是给 loader 加磁盘缓存（那是动冻结资产，需要 Gate 批）。

@@ -223,8 +223,9 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
     elif not payload["guard"]["passed"]:
         status = STATUS_DEGRADED
         notice = (
-            "结果由确定性计算得出；模型本轮写的内容里出现了**无法追溯到计算结果的数字**，"
-            "已按「LLM 绝不碰数字」的规则整段作废（见 guard.violations）。" + _boundary_note(profile)
+            "结果由确定性计算得出；模型本轮写的内容里出现了**无法追溯到计算结果的数字"
+            "或写错的币种**，已按「LLM 只负责组织语言、事实以确定性结果为准」的规则整段作废"
+            "（见 guard.violations / guard.currency_words）。" + _boundary_note(profile)
         )
     else:
         status = STATUS_OK

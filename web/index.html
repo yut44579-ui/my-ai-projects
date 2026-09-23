@@ -172,7 +172,8 @@
       <!-- 区块B · KPI 行 + 趋势图 -->
       <div class="kpi-row">
         <div class="card kpi">
-          <div class="kpi-head"><span class="kpi-ico ico-blue">¥</span><span class="kpi-label">最近一次成功销售额</span></div>
+          <!-- 币种图标由 capabilities.currency 决定（¤ 只是"后端还没声明"时的中性符号，不预设任何具体币种） -->
+          <div class="kpi-head"><span class="kpi-ico ico-blue" id="kpi-currency">¤</span><span class="kpi-label">最近一次成功销售额</span></div>
           <div class="kpi-value" id="kpi-amount">—</div>
           <div class="kpi-sub" id="kpi-amount-sub">尚无成功执行记录</div>
         </div>
