@@ -335,6 +335,38 @@ def test_Intent日期反了要拒绝(monkeypatch):
     assert record["error"]["code"] == "intent_invalid_params"
 
 
+def test_可选参数写成null按未指定处理_非空非法值仍然拒绝(monkeypatch):
+    """TASK-006 撞到的**真实事故**：问「2011年11月购买次数最多的5个客户」时，
+    真 DeepSeek 返回 `"metric": null`（它想表达"这个操作不需要排序指标"）——
+    而 metric 是有默认值的字段，让 pydantic 见到 null 就把一个好好的问题判成非法参数。
+
+    规矩：**有默认值的字段被写成 null = 没填**（用默认值，并在 assumptions 里写明）；
+    **非空的非法取值**照旧拒绝 —— 这条修复不许把闸门放松。
+    """
+    _llm_returns(
+        "【为什么】\n略\n【建议行动】\n- 略",
+        monkeypatch,
+        intent_json='{"intent":"sales_trend","params":{"start":"2011-11-01","end":"2011-11-30",'
+                    '"granularity":null},"assumptions":[],"confidence":0.9}',
+    )
+    record = _ask("2011年11月的销售趋势", use_llm=True)
+    assert record["status"] == "ok", record["notice"]
+    assert record["params"]["granularity"] == "day"           # 默认值生效
+    assert any("null" in item for item in record["intent"]["assumptions"])   # 留痕
+
+    # 反例：非空的非法取值 → 仍然报错（拒绝的时候还要点名是哪个字段）
+    _llm_returns(
+        "【为什么】\n略\n【建议行动】\n- 略",
+        monkeypatch,
+        intent_json='{"intent":"sales_trend","params":{"start":"2011-11-01","end":"2011-11-30",'
+                    '"granularity":"hourly"},"assumptions":[],"confidence":0.9}',
+    )
+    record = _ask("2011年11月按小时看趋势", use_llm=True)
+    assert record["status"] == "error"
+    assert record["error"]["code"] == "intent_invalid_params"
+    assert "granularity" in record["error"]["message"]
+
+
 # ════════════════════════════════════════════════════════════════════════
 # 4. AC-03 数据不支持的维度 → 明确告知，且**不许用 Country 顶替**
 # ════════════════════════════════════════════════════════════════════════
@@ -782,18 +814,28 @@ def test_AC08_app_ai里没有密钥字面量或提交痕迹():
     assert ".env" in ignored
 
 
-def test_AC08_工具白名单恰好五个且都在注册表里():
-    """白名单是**穷举**的：表外的东西一律调不动（TASK-005 加两个，名字也钉死）。"""
+def test_AC08_工具白名单恰好七个且都在注册表里():
+    """白名单是**穷举**的：表外的东西一律调不动。
+
+    TASK-005 加两个（compare / country），TASK-006 再加两个（customer / product）——
+    每次加的都是**评审批准**的那几个，名字钉死在这里，多一个都进不来。
+    """
     assert set(tools.TOOLS) == set(intent_module.COMPUTE_INTENTS)
     assert set(tools.TOOLS) == {
         "sales_summary", "sales_trend", "top_products",
         "sales_compare", "sales_breakdown_by_country",
+        # TASK-006：客户与商品各一个 Intent，内部用 operation 收口
+        "customer_analysis", "product_analysis",
     }
     with pytest.raises(KeyError):
         tools.run_tool("delete_everything", {})
     # 归因**不是**一个独立 Intent（评审明确要求别开 sales_attribution）
     assert "sales_attribution" not in intent_module.ALL_INTENTS
     assert "sales_attribution" not in intent_module.COMPUTE_INTENTS
+    # TASK-006 同样不许裂成"一个 operation 一个 Intent"
+    for banned in ("customer_top", "customer_repeat", "new_customer", "churn_customer",
+                   "rfm", "product_trend", "product_return", "product_association"):
+        assert banned not in intent_module.ALL_INTENTS, banned
 
 
 def test_引擎不依赖ai层():
@@ -1424,14 +1466,18 @@ def test_T005_回答分区四段且顺序固定(no_llm):
     assert answer.SECTION_TITLES["contribution"] == "【主要贡献】"
 
 
-def test_T005_能力端点如实列出五个意图(no_llm):
+def test_T005_能力端点如实列出七个意图(no_llm):
     body = client.get("/api/chat/capabilities").json()
     names = [item["name"] for item in body["intents"]]
     assert names == ["sales_summary", "sales_trend", "top_products",
-                     "sales_compare", "sales_breakdown_by_country"]
+                     "sales_compare", "sales_breakdown_by_country",
+                     # TASK-006 追加的两个（顺序 = COMPUTE_INTENTS 追加顺序）
+                     "customer_analysis", "product_analysis"]
     assert "sales_attribution" not in names
     titles = {item["name"]: item["title"] for item in body["intents"]}
     assert titles["sales_compare"] and titles["sales_breakdown_by_country"]
+    assert titles["customer_analysis"] == "客户分析"
+    assert titles["product_analysis"] == "商品分析"
     assert any("区域" in word for word in body["unsupported"]["dimensions"])
 
 

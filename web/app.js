@@ -1786,6 +1786,22 @@
     if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: "start" });
   }
 
+  // 深链提问：`#/overview?ask=<问题>` —— 页面加载完成后自动把问题填进输入框并提问。
+  // 为什么值得有这一条：① 一条链接就能把"问好的问题"分享出去；
+  // ② 让"真浏览器 + 真 HTTP + 真数据"的取证成为一条命令（Edge 自带
+  //    `--headless --virtual-time-budget=… --dump-dom "<url>#/overview?ask=…"`），
+  //    不必为此装 Playwright。
+  // 问题原文**原样**来自 URL（不做任何改写/补全），与手动输入走同一个 askQuestion。
+  function askFromHash() {
+    const query = (window.location.hash || "").split("?")[1] || "";
+    const question = (new URLSearchParams(query).get("ask") || "").trim();
+    if (!question) return false;
+    const input = $("hero-nl-input") || $("nl-input");
+    if (input) input.value = question;
+    askQuestion(question).then(scrollToChat);
+    return true;
+  }
+
   function bindChat() {
     // 两个输入框（顶栏 + hero）走**同一个**提交函数，行为完全一致
     const pairs = [["nl-input", "nl-ask"], ["hero-nl-input", "hero-nl-btn"]];
@@ -1807,7 +1823,9 @@
     });
 
     // 示例 chips：问题原文写在 HTML 的 data-question 上（**不是** JS 里另抄一份）
-    ["chip-summary", "chip-trend", "chip-products"].forEach((id) => {
+    // TASK-006 补了"客户排行 / 退货分析"两个 chip —— 现有能力要能被点到，
+    // 不能只存在于后端接口里。
+    ["chip-summary", "chip-trend", "chip-products", "chip-customers", "chip-returns"].forEach((id) => {
       const chip = $(id);
       if (!chip) return;
       chip.addEventListener("click", () => {
@@ -1857,6 +1875,9 @@
     renderAiConclusion();
     await refreshAll();
     if (state.selectedTaskId) await selectTask(state.selectedTaskId);
+    // 深链提问放在最后：能力清单与页面骨架都已就绪，自动提问走的是**和手动点击
+    // 完全同一条**链路（同样的 askQuestion、同样的渲染）。
+    askFromHash();
   }
 
   document.addEventListener("DOMContentLoaded", () => {

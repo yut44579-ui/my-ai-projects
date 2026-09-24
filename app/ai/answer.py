@@ -116,6 +116,23 @@ def comparison_label(value: str | None) -> str:
     return _COMPARISON_LABELS.get(str(value or ""), str(value or "—"))
 
 
+# ── TASK-006：客户 / 商品分析里"这次做的是哪一种"的人话标题 ─────────────────
+# 只在回答正文里出现（前端的事实表用的是后端 display，不读这里）——
+# 操作名是内部词，用户看到的必须是"这是什么分析"，并且把口径一并说清。
+_CUSTOMER_OPERATION_LABELS = {
+    "top": "客户排行（按区间内的金额/订单数排序，排序由程序做）",
+    "purchase_frequency": "购买频次（购买次数 = 客户号 + distinct 发票号，**不是行数**）",
+    "repeat_rate": "复购率（复购客户 = 购买次数 ≥ 2）",
+    "new_customers": "数据集内新客（**整个数据集**内首次有效购买落在目标区间）",
+    "inactive_customers": "沉睡客户（规则型：参考日 − 最后一次购买日 ≥ 阈值天数，不是预测）",
+}
+_PRODUCT_OPERATION_LABELS = {
+    "top": "商品排行（按区间内的销售额/数量/订单数排序，排序由程序做）",
+    "trend": "指定商品趋势（每个商品**分别**聚合，不合并成一条序列）",
+    "return": "退货 / 取消分析（「数量为负」与「取消单」两个口径**分开**给，不合并）",
+}
+
+
 def _display_lines(result: dict[str, Any]) -> list[str]:
     lines = []
     for item in result.get("display", []):
@@ -127,6 +144,43 @@ def _display_lines(result: dict[str, Any]) -> list[str]:
             f"· {item['label']}：{format_value(item['value'], item.get('format', 'auto'))}{unit}{suffix}{tail}"
         )
     return lines
+
+
+def _point_line(point: dict[str, Any]) -> str:
+    """趋势里的一个点 → 一行（`partial` 的写法与销售额趋势**完全一致**）。"""
+    span = point["period_start"]
+    if point.get("period_end") and point["period_end"] != point["period_start"]:
+        span = f"{point['period_start']} ~ {point['period_end']}"
+    if point.get("partial"):
+        # 桶跨越了问句区间 → 把"实际算了哪几天"写出来，不让标签误导
+        span += f"（只统计 {point['covered_start']} ~ {point['covered_end']}，不完整）"
+    return (
+        f"  {span}：{format_value(point['amount'], 'money')}{ai_tools.currency_unit()}"
+        f"（{point['orders']} 单）"
+    )
+
+
+def _customer_item_line(item: dict[str, Any]) -> str:
+    """客户明细一行 —— 三种问法带的字段不同（沉睡带"距今天数"、新客带"首次购买"）。"""
+    head = f"  #{item['rank']} 客户 {item['customer_id']}"
+    if "days_since_last_purchase" in item:
+        return (
+            f"{head}：距参考日已 {item['days_since_last_purchase']} 天未购买"
+            f"（最后一次有效购买 {item['last_purchase']}），"
+            f"区间内成交 {format_value(item['sales_amount'], 'money')}{ai_tools.currency_unit()}"
+            f" / {item['purchase_count']} 次购买"
+        )
+    if "first_purchase" in item:
+        return (
+            f"{head}（数据集内首次购买 {item['first_purchase']}）："
+            f"{format_value(item['sales_amount'], 'money')}{ai_tools.currency_unit()}"
+            f" / {item['purchase_count']} 次购买"
+        )
+    return (
+        f"{head}：{format_value(item['sales_amount'], 'money')}{ai_tools.currency_unit()}"
+        f"（{item['purchase_count']} 次购买 / {item['rows']} 行 / "
+        f"平均每单 {format_value(item['avg_order_amount'], 'money')}{ai_tools.currency_unit()}）"
+    )
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -163,6 +217,30 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
     elif tool == "sales_breakdown_by_country":
         lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天）")
         lines.append(f"分布口径：按国家分组，销售额降序取前 {params.get('top_n')} 名")
+    elif tool == "customer_analysis":
+        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天）")
+        lines.append(
+            f"分析类型：{_CUSTOMER_OPERATION_LABELS.get(str(params.get('operation')), str(params.get('operation')))}"
+        )
+        # **客户覆盖范围由代码说清楚**（AC-05）：覆盖率是程序算的，不是模型猜的。
+        scope = (result.get("facts") or {}).get("customer_scope") or {}
+        if scope:
+            lines.append(
+                f"客户范围：本次客户分析只覆盖**有 CustomerID** 的成交"
+                f"（{scope['valid_customer_id_nonnull_rows']} 行有效成交 / "
+                f"{format_value(scope['customer_scope_sales_amount'], 'money')}{ai_tools.currency_unit()}），"
+                f"占该区间全部销售额 {format_value(scope['customer_scope_sales_share'] * 100, 'pct')}%；"
+                f"客户号为空的 {scope['valid_customer_id_null_rows']} 行"
+                f"（{format_value(scope['null_customer_sales_amount'], 'money')}{ai_tools.currency_unit()}）"
+                f"仍计入销售额，但**不计入**客户数与客户维度分析。"
+            )
+    elif tool == "product_analysis":
+        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天）")
+        lines.append(
+            f"分析类型：{_PRODUCT_OPERATION_LABELS.get(str(params.get('operation')), str(params.get('operation')))}"
+        )
+        if params.get("product_codes"):
+            lines.append(f"指定商品：{'、'.join(str(code) for code in params['product_codes'])}")
 
     lines.append("")
     lines.extend(_display_lines(result))
@@ -172,12 +250,24 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
         lines.append("")
         lines.append("明细：")
         for item in items:
+            if "customer_id" in item:
+                lines.append(_customer_item_line(item))
+                continue
             if "country" in item:
                 lines.append(
                     f"  #{item['rank']} {item['country']}"
                     f"：{format_value(item['amount'], 'money')}{ai_tools.currency_unit()}"
                     f"（{format_value(item['share'] * 100, 'pct')}%，"
                     f"{item['orders']} 单 / {item['customers']} 位客户）"
+                )
+                continue
+            if "return_rows" in item:
+                lines.append(
+                    f"  #{item['rank']} {item['stock_code']} {item['description'] or '(无描述)'}"
+                    f"：退货/取消 {item['return_rows']} 行"
+                    f"（其中数量为负 {item['negative_rows']} 行、取消单 {item['cancel_rows']} 行），"
+                    f"数量 {format_value(item['return_qty'], 'qty')} 件 / "
+                    f"涉及金额 {format_value(item['return_amount'], 'money')}{ai_tools.currency_unit()}"
                 )
                 continue
             lines.append(
@@ -187,21 +277,23 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
                 f"{format_value(item['qty'], 'qty')} 件 / {item['orders']} 单）"
             )
 
-    points = (result.get("series") or {}).get("points") or []
+    series = result.get("series") or {}
+    points = series.get("points") or []
     if points:
         lines.append("")
         lines.append(f"逐点明细（共 {len(points)} 个点）：")
-        for point in points:
-            span = point["period_start"]
-            if point.get("period_end") and point["period_end"] != point["period_start"]:
-                span = f"{point['period_start']} ~ {point['period_end']}"
-            if point.get("partial"):
-                # 桶跨越了问句区间 → 把"实际算了哪几天"写出来，不让标签误导
-                span += f"（只统计 {point['covered_start']} ~ {point['covered_end']}，不完整）"
-            lines.append(
-                f"  {span}：{format_value(point['amount'], 'money')}{ai_tools.currency_unit()}"
-                f"（{point['orders']} 单）"
-            )
+        lines.extend(_point_line(point) for point in points)
+    # 商品趋势：每个商品**一条独立序列**（合并成一条是另一个问题，这里不做）
+    for product in series.get("products") or []:
+        product_points = product.get("points") or []
+        lines.append("")
+        lines.append(
+            f"商品 {product['stock_code']} {product['description'] or '(无描述)'} 的逐点明细"
+            f"（共 {len(product_points)} 个点）："
+            if product_points
+            else f"商品 {product['stock_code']}：区间内没有任何有效成交，序列为空。"
+        )
+        lines.extend(_point_line(point) for point in product_points)
 
     notes = result.get("notes") or []
     if notes:

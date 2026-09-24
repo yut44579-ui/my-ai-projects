@@ -131,11 +131,19 @@ def _md_section(markdown: str, title: str) -> list[str]:
 # 1. 「报告」是输出形态，不是第 6 个计算型 Intent
 # ════════════════════════════════════════════════════════════════════════
 def test_T010_报告不是第六个计算型intent():
-    """Intent 数量克制是评审的硬要求：报告不许让 COMPUTE_INTENTS 胀成 6 个。"""
-    assert len(intent_module.COMPUTE_INTENTS) == 5
+    """Intent 数量克制是评审的硬要求：报告不许新增计算型 intent。
+
+    TASK-006 之后 `COMPUTE_INTENTS` 是 7 个 —— 那是**评审批准**的两个新增
+    （customer_analysis / product_analysis，各自用 operation 收口）。报告**没有**因此
+    多出第 8 个 intent，它也**没有**伸进这两个新能力：报告复用的仍是原来那五个工具。
+    """
+    assert len(intent_module.COMPUTE_INTENTS) == 7
     assert report.REPORT_TOOL not in intent_module.COMPUTE_INTENTS
-    # 报告复用的就是这五个既有工具，一个都没多
-    assert set(report.SUB_TOOLS) == set(intent_module.COMPUTE_INTENTS)
+    # 报告复用的仍是既有五个工具，一个都没多、也没被新 Intent 带跑
+    assert set(report.SUB_TOOLS) <= set(intent_module.COMPUTE_INTENTS)
+    assert set(report.SUB_TOOLS) == {
+        "sales_compare", "sales_summary", "sales_trend", "sales_breakdown_by_country", "top_products",
+    }
 
 
 def test_T010_能力端点的intents不增项_报告单列():
@@ -624,11 +632,13 @@ def test_T010_比较问法零回归且不被报告抢走(no_llm):
         assert record["answer"]["export"] is None, question
 
 
-def test_T010_五个意图在能力清单里的顺序与标题没变():
+def test_T010_七个意图在能力清单里的顺序与标题没变():
+    """既有五个的顺序不许被后来的 TASK 打乱（TASK-006 的两个只能**追加**在后面）。"""
     body = client.get("/api/chat/capabilities").json()
     assert [item["name"] for item in body["intents"]] == [
         "sales_summary", "sales_trend", "top_products",
         "sales_compare", "sales_breakdown_by_country",
+        "customer_analysis", "product_analysis",
     ]
     for item in body["intents"]:
         assert item["title"] == tools.TOOLS[item["name"]].title

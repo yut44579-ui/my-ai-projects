@@ -42,13 +42,23 @@ import json
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from app.ai import llm
 # 报告形态（TASK-010）的常量**只在 report.py 声明一处**，这里只是引用 ——
 # 周期、比较类型、趋势粒度的对应关系不许在解析层再抄一份。
 from app.ai.report import PERIOD_COMPARISON, PERIOD_MONTHLY, PERIOD_WEEKLY, report_period
-from app.ai.tools import dataset_bounds
+# 客户/商品分析的取值域与默认值也**只从 tools 取**（TASK-006）：参数层不另写一份白名单，
+# 免得"schema 允许的 operation"和"工具真正支持的 operation"两处漂移。
+from app.ai.tools import (
+    CUSTOMER_OPERATIONS,
+    CUSTOMER_TOP_METRICS,
+    DEFAULT_INACTIVE_DAYS,
+    PRODUCT_OPERATIONS,
+    PRODUCT_TOP_METRICS,
+    PRODUCT_TREND_MAX_CODES,
+    dataset_bounds,
+)
 
 # ════════════════════════════════════════════════════════════════════════
 # Intent 的名字（**白名单**：不在这个元组里的 intent 一律拒绝）
@@ -58,6 +68,17 @@ INTENT_SALES_TREND = "sales_trend"
 INTENT_TOP_PRODUCTS = "top_products"
 INTENT_SALES_COMPARE = "sales_compare"
 INTENT_SALES_BREAKDOWN_BY_COUNTRY = "sales_breakdown_by_country"
+# ── TASK-006：客户 / 商品维度（**只加这两个**，用 operation 参数收口）──────────
+# 评审明确反对"一个 operation 一个 Intent"：那会一路裂成 customer_top /
+# customer_repeat / new_customer / churn_customer / rfm / product_trend /
+# product_return / product_association…（Intent 爆炸）。所以：
+#   customer_analysis   operation ∈ top / purchase_frequency / repeat_rate /
+#                       new_customers / inactive_customers
+#   product_analysis    operation ∈ top / trend / return
+# 明确不做（写死在这里，免得以后顺手加）：RFM 分群、产品关联(lift)、churn 预测、任何 ML。
+# （"沉睡客户"是**规则型**判定，不是预测；对外文案里也不许把它写成"客户跑了"这类结论。）
+INTENT_CUSTOMER_ANALYSIS = "customer_analysis"
+INTENT_PRODUCT_ANALYSIS = "product_analysis"
 INTENT_UNSUPPORTED = "unsupported"
 
 COMPUTE_INTENTS: tuple[str, ...] = (
@@ -66,6 +87,8 @@ COMPUTE_INTENTS: tuple[str, ...] = (
     INTENT_TOP_PRODUCTS,
     INTENT_SALES_COMPARE,
     INTENT_SALES_BREAKDOWN_BY_COUNTRY,
+    INTENT_CUSTOMER_ANALYSIS,
+    INTENT_PRODUCT_ANALYSIS,
 )
 ALL_INTENTS: tuple[str, ...] = COMPUTE_INTENTS + (INTENT_UNSUPPORTED,)
 
@@ -81,6 +104,20 @@ WEEK_START_WEEKDAY = 0                      # Monday
 # 命中就直接回 unsupported，LLM 说什么都不作数（铁律1：理解需求可以靠 LLM，守边界必须靠代码）。
 # ════════════════════════════════════════════════════════════════════════
 _BANNED_DIMENSIONS: tuple[tuple[tuple[str, ...], str], ...] = (
+    # ── TASK-006：客户"属性类"维度 —— 数据里没有，**绝不用销售额 TOP 顶替 VIP**──
+    # 这一条是评审点名的"典型危险请求"：用户问「VIP 客户 TOP10」时，最糟的答法不是拒绝，
+    # 而是悄悄换成「销售额 TOP10」—— 用户拿到一个看着像答案、其实答另一个问题的名单。
+    # 放在**最前面**：这样「客户地区 / 客户渠道」命中的是"客户没有这些属性"这条更贴切的说明，
+    # 而不是下面那条泛泛的"数据集没有区域/渠道字段"（两条都对，但先说最准的那条）。
+    (
+        ("VIP", "vip", "Vip", "客户等级", "会员等级", "客户级别", "客户分层",
+         "大客户", "重点客户", "高价值客户", "企业客户", "个人客户", "普通客户",
+         "客户行业", "客户地区", "客户地域", "客户渠道", "客户生命周期"),
+        "数据集里客户只有 **CustomerID（一个客户号）**，**没有 VIP/客户等级/大客户/"
+        "企业或个人/会员等级/行业/地区/渠道/生命周期阶段这类属性字段** —— 客户维度只能做"
+        "数据里真有的：成交次数、金额、购买频次、首次/最后购买日期。"
+        "**不会用「销售额 TOP」顶替「VIP TOP」**（那是答非所问）。",
+    ),
     (
         ("区域", "大区", "片区", "地区", "华南", "华东", "华北", "华中",
          "西南", "西北", "东北", "东南", "长三角", "珠三角",
@@ -151,6 +188,85 @@ class CountryBreakdownParams(_DayRangeParams):
     top_n: int = Field(default=5, ge=1, le=20)
 
 
+# ════════════════════════════════════════════════════════════════════════
+# TASK-006：客户 / 商品分析的参数（**operation 收口**，不新开 Intent）
+#
+# 为什么用 Literal 而不是自由字符串：`operation` / `metric` 是 LLM 唯一能挑的东西，
+# 挑错就在这里被拒。评审的原话是"不要让 LLM 自由生成任意 operation"。
+# ════════════════════════════════════════════════════════════════════════
+class CustomerAnalysisParams(_DayRangeParams):
+    """客户分析参数。
+
+    metric 只在 operation=top 时决定"按什么排"；其余 operation 的排序指标是**固定的**
+    （频次榜按购买次数、新客榜按销售额…）—— 参数不会悄悄改变榜单的含义，
+    实际用了哪个指标写在结果的 `metric_used` 里。
+    """
+
+    operation: Literal[
+        "top", "purchase_frequency", "repeat_rate", "new_customers", "inactive_customers"
+    ] = "top"
+    metric: Literal["sales_amount", "order_count", "purchase_count"] = "sales_amount"
+    top_n: int = Field(default=5, ge=1, le=20)
+    # 沉睡客户的阈值天数（规则型判定：reference_date − 最后购买日 ≥ 这个天数）
+    inactive_days: int = Field(default=DEFAULT_INACTIVE_DAYS, ge=1, le=3650)
+    # 参考日（"今天"是哪天）。留空 = 数据集最后一天（数据的"今天"，与全项目的基准一致）
+    reference_date: _dt.date | None = None
+
+
+class ProductAnalysisParams(_DayRangeParams):
+    """商品分析参数。
+
+    `product_codes` **只对 operation='trend' 有意义**：给了就必须是趋势，
+    是趋势就必须给编码 —— 两者对不上直接报错（宁可说清怎么问，也不猜用户想看什么）。
+    """
+
+    operation: Literal["top", "trend", "return"] = "top"
+    metric: Literal["sales_amount", "quantity", "order_count"] = "sales_amount"
+    top_n: int = Field(default=5, ge=1, le=20)
+    product_codes: tuple[str, ...] = Field(default=(), max_length=PRODUCT_TREND_MAX_CODES)
+    granularity: Literal["day", "week"] = "day"
+
+    @field_validator("product_codes", mode="before")
+    @classmethod
+    def _normalize_codes(cls, value: Any) -> Any:
+        """把编码统一成字符串。
+
+        LLM 会把 `85123` 当数字吐出来（甚至 `85123.0`）—— 直接按字符串比会一个商品都匹配不上，
+        而"查不到任何数据"会被误当成"这个商品没卖过"。这里在**入口**收敛成字符串，
+        并去掉两端空白与小数点后的 .0。
+        """
+        if value is None:
+            return ()
+        if isinstance(value, (str, int, float)):
+            value = [value]
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("product_codes 必须是商品编码的数组")
+        normalized: list[str] = []
+        for item in value:
+            text = str(item).strip()
+            if text.endswith(".0") and text[:-2].isdigit():
+                text = text[:-2]
+            if not text:
+                raise ValueError("product_codes 里不能有空编码")
+            normalized.append(text)
+        if len(set(normalized)) != len(normalized):
+            raise ValueError(f"product_codes 里有重复编码：{sorted(normalized)}")
+        return tuple(normalized)
+
+    @model_validator(mode="after")
+    def _check_operation_shape(self) -> "ProductAnalysisParams":
+        if self.operation == "trend" and not self.product_codes:
+            raise ValueError(
+                "operation='trend' 必须同时给 product_codes（要说清楚看哪几个商品的趋势）"
+            )
+        if self.operation != "trend" and self.product_codes:
+            raise ValueError(
+                f"product_codes 只用于 operation='trend'，"
+                f"当前 operation={self.operation!r} 不应带商品编码（想排行用 operation='top'）"
+            )
+        return self
+
+
 class SalesCompareParams(BaseModel):
     """两区间比较的受控参数（**归因是这个参数的一个取值，不是新 Intent**）。
 
@@ -204,7 +320,38 @@ PARAM_MODELS: dict[str, type[BaseModel]] = {
     INTENT_TOP_PRODUCTS: TopProductsParams,
     INTENT_SALES_COMPARE: SalesCompareParams,
     INTENT_SALES_BREAKDOWN_BY_COUNTRY: CountryBreakdownParams,
+    INTENT_CUSTOMER_ANALYSIS: CustomerAnalysisParams,
+    INTENT_PRODUCT_ANALYSIS: ProductAnalysisParams,
 }
+
+
+def _check_operation_catalog() -> None:
+    """参数层的 Literal 白名单必须与 tools 的取值域**逐字一致**（导入时自检）。
+
+    为什么要有这一条：`Literal[...]` 是静态类型、写死在类定义里的，而工具支持的 operation
+    定义在 tools.py —— 两处一旦漂移，就会出现"schema 放行、工具报错"或者
+    "工具支持、schema 挡住"的怪事。这个自检让漂移在**导入时**就炸出来（api.py 的
+    `_check_metric_catalog` 是同一个套路），而不是等到某天某个问法上线才发现。
+    """
+    expected = {
+        "customer": (set(CUSTOMER_OPERATIONS), set(CustomerAnalysisParams.model_fields["operation"].annotation.__args__)),
+        "customer_metric": (set(CUSTOMER_TOP_METRICS), set(CustomerAnalysisParams.model_fields["metric"].annotation.__args__)),
+        "product": (set(PRODUCT_OPERATIONS), set(ProductAnalysisParams.model_fields["operation"].annotation.__args__)),
+        "product_metric": (set(PRODUCT_TOP_METRICS), set(ProductAnalysisParams.model_fields["metric"].annotation.__args__)),
+    }
+    for label, (from_tools, from_schema) in expected.items():
+        if from_tools != from_schema:
+            raise RuntimeError(
+                f"{label} 的取值域在 tools.py 与 intent.py 之间不一致："
+                f"tools={sorted(from_tools)} / schema={sorted(from_schema)}"
+            )
+    if DEFAULT_INACTIVE_DAYS != CustomerAnalysisParams.model_fields["inactive_days"].default:
+        raise RuntimeError("沉睡天数默认值在 tools.py 与 intent.py 之间不一致")
+    if PRODUCT_TREND_MAX_CODES != ProductAnalysisParams.model_fields["product_codes"].metadata[0].max_length:
+        raise RuntimeError("趋势商品编码上限在 tools.py 与 intent.py 之间不一致")
+
+
+_check_operation_catalog()
 
 
 class ParsedIntent(BaseModel):
@@ -283,10 +430,10 @@ def system_prompt() -> str:
     """把"数据现实"如实写进提示词 —— 模型知道边界，才可能正确回答"不支持"。"""
     first, last = dataset_bounds()
     return f"""你是销售数据问答的**意图解析器**。你的唯一输出是一段 JSON，不要解释、不要 markdown 代码块、不要多余文字。
-**你不做任何计算、不做任何排序、不判断"主要贡献者"** —— 那些由程序做。你只把问题翻译成结构化参数。
+**你不做任何计算、不做任何排序、不判断"主要贡献者"、不挑"最好的客户/商品"** —— 那些由程序做。你只把问题翻译成结构化参数。
 
-可用 intent 只有下面这 6 个，多一个都不许编（**没有 sales_attribution 这个 intent** ——
-"归因"是 sales_compare 的一个参数）：
+可用 intent 只有下面这 8 个，多一个都不许编（**没有 sales_attribution / customer_top / product_return
+这类 intent** —— "归因"是 sales_compare 的参数字段，客户与商品各只有一个 intent、用 operation 区分）：
 1. sales_summary —— 问某时间段的销售额/订单数/客户数。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}}
 2. sales_trend   —— 问某时间段按日或按周的趋势走势。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","granularity":"day"|"week"}}
 3. top_products  —— 问某时间段卖得最好的产品排行。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","top_n":整数(1-20)}}
@@ -299,7 +446,42 @@ def system_prompt() -> str:
    }}
 5. sales_breakdown_by_country —— 问**某一个时间段内**各个国家的销售额分布/占比/排名。
    params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","top_n":整数(1-20)}}
-6. unsupported   —— 问题涉及数据里不存在的维度/指标时用它。params: {{}}，并在 reason 里说明缺什么。
+6. customer_analysis —— 问**客户**维度的事（客户排行 / 购买次数 / 复购 / 新客 / 沉睡客户）。
+   params: {{
+     "start":"YYYY-MM-DD","end":"YYYY-MM-DD",
+     "operation": "top"|"purchase_frequency"|"repeat_rate"|"new_customers"|"inactive_customers",
+     "metric": "sales_amount"|"order_count"|"purchase_count",   ← 只有 operation=top 时决定排序指标
+     "top_n": 整数(1-20),
+     "inactive_days": 整数(天数，默认 90),                        ← 只有 operation=inactive_customers 时才填
+     "reference_date": "YYYY-MM-DD"|null                          ← 只有操作=沉睡且用户写了具体"截止哪天"时才填
+   }}
+   怎么选 operation：问"哪些客户买得最多/客户排行/TOP客户"→ top；问"购买了几次/买了几单/购买频次
+   最多"→ purchase_frequency；问"复购率/复购客户/回头客"→ repeat_rate；问"新客/新增客户"→ new_customers；
+   问"沉睡客户/长期没买的客户/多久没买了"→ inactive_customers。
+7. product_analysis —— 问**商品**维度的排行 / 趋势 / 退货。
+   params: {{
+     "start":"YYYY-MM-DD","end":"YYYY-MM-DD",
+     "operation": "top"|"trend"|"return",
+     "metric": "sales_amount"|"quantity"|"order_count",          ← 只有 operation=top 时决定排序指标
+     "top_n": 整数(1-20),
+     "product_codes": ["85123A","10002"],                        ← **只有 operation=trend 时才填**（最多 10 个）
+     "granularity": "day"|"week"                                 ← 只有 operation=trend 时才有意义
+   }}
+   怎么选 operation：问"哪些商品卖得好/商品排行"→ top（**也可以照旧用 top_products**）；
+   问"某个/某几个商品的变化趋势"→ trend（**必须把商品编码填进 product_codes**）；
+   问"退货/退款/取消单/退货率"→ return。
+8. unsupported   —— 问题涉及数据里不存在的维度/指标时用它。params: {{}}，并在 reason 里说明缺什么。
+
+**客户维度的边界（很容易答错，先看这条）**：
+- 数据里客户只有 **CustomerID（客户号）**。能做：成交次数、金额、购买频次、第一次/最后一次购买日期。
+- **数据里没有** VIP / 客户等级 / 大客户 / 企业或个人客户 / 会员等级 / 客户行业 / 客户地区 /
+  客户渠道 / 客户生命周期阶段 / RFM 分群 —— 问到这些一律 **unsupported**，
+  **绝对不许**把它们当成"销售额最高的客户"来回答（那是最糟的答法：用户拿到一个看着像答案的名单）。
+- 客户维度只覆盖**有客户号**的成交；没有客户号的行仍计入销售额（这件事程序会在结果里说明，你不用管）。
+- 说"沉睡客户 / 长期未购买客户"就行，**不要**把它说成"客户已经跑了/不会再买了"这类结论
+  （那是预测语气，本版只做规则型判定，不做预测）。
+- 退货有两个口径（数量为负 / 取消单），**都是程序算的**，你只负责填 operation='return'。
+- **排序与 TOP 名单由程序产出**：不要自己挑"最好的客户/商品"，也不要写"其中最重要的是 X"。
 
 **最容易犯的错，先看这一条（比下面的规则都重要）**：
 - 「比较一下2011年11月和2011年10月的销售额」「2011年11月比2011年10月销售额增长了多少」
@@ -344,6 +526,8 @@ sales_compare 的 comparison_type 怎么选（**这一条最容易错，请严�
 - 用户**没给**时间范围时：start={first}、end={last}，并在 assumptions 里写明"未指定时间范围，已用数据集全区间"。
   （**sales_compare 例外**：没给区间就按上面的规则留空，让程序去推。）
 - granularity 没说就 "day"；top_n 没说就 5。
+- **没让你填的可选字段直接省略，不要写 `null`**（写 null 会被当成"没填"，虽然程序能兜住，
+  但省略更清楚）。特别是 `metric`：它只在 operation=top 时决定排序指标，别的 operation 就别填。
 - assumptions：数组，写你为理解问题做的每一个**自行判断**（如"上个月"按数据集最后一天倒推）。
   没做判断就空数组。**不要**把用户已经说清楚的东西再复述一遍。
 
@@ -382,6 +566,9 @@ def parse(question: str, *, allow_llm: bool = True) -> tuple[ParsedIntent, dict[
             # 在这里被代码拉回来 —— 见 enforce_comparison_semantics 的注释。
             # 顺序：报告闸门在前（它不是比较类问题就不受影响；是报告就轮不到比较闸门出手）。
             enforced = enforce_comparison_semantics(after_report, question)
+            # **收口闸门③（TASK-006）**：商品分析的 operation 与商品编码必须配套 ——
+            # 见 enforce_product_semantics 的注释。
+            enforced = enforce_product_semantics(enforced, question)
             return enforced, {
                 "source": "llm",
                 "model": llm.model_name(),
@@ -429,11 +616,37 @@ def parse(question: str, *, allow_llm: bool = True) -> tuple[ParsedIntent, dict[
                 f"⑥做一份周报/月报。"
                 f"（LLM 未能参与解析：{llm_error['message']}）",
             )
-    # 同一两道收口闸门（降级路径也要过，顺序与 LLM 路径一致）
+    # 同三道收口闸门（降级路径也要过，顺序与 LLM 路径一致）
     parsed = enforce_report_semantics(parsed, question)
     parsed = enforce_comparison_semantics(parsed, question)
+    parsed = enforce_product_semantics(parsed, question)
     parsed = parsed.model_copy(update={"assumptions": tuple(parsed.assumptions) + ("由关键词匹配降级解析（LLM 未参与）",)})
     return parsed, {"source": "keyword", "model": None, "raw": None, "fallback": True, "llm_error": llm_error}
+
+
+def _drop_explicit_nulls(intent: str, params: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """把"显式写成 null 的可选参数"去掉（= 让默认值生效），并回报去掉了哪些键。
+
+    为什么要有这一条（**真实撞到的**）：问「2011年11月购买次数最多的5个客户」时，
+    模型返回 `"metric": null`（它想表达"这个操作不需要排序指标"）——
+    而 `metric` 是个有默认值的字段，让 pydantic 见到 null 会直接判非法参数，
+    于是一个好端端的问题变成 error。这不是"参数给错了"，是 JSON 里 null 与"未指定"的差别。
+
+    收紧的部分一点没松：**非空但取值非法**仍然报错（`metric: "whatever"` 照样拒），
+    **未知字段**仍然报错（extra=forbid 不动）。只有"这个字段有默认值、而模型给了 null"才按未填处理。
+    """
+    model = PARAM_MODELS.get(intent)
+    if model is None:
+        return params, []
+    cleaned: dict[str, Any] = {}
+    dropped: list[str] = []
+    for key, value in params.items():
+        field = model.model_fields.get(key)
+        if value is None and field is not None and not field.is_required():
+            dropped.append(key)
+            continue
+        cleaned[key] = value
+    return cleaned, dropped
 
 
 def _intent_from_json(raw: str) -> ParsedIntent:
@@ -450,6 +663,7 @@ def _intent_from_json(raw: str) -> ParsedIntent:
     params = payload.get("params") or {}
     if not isinstance(params, dict):
         raise IntentError("intent_invalid_params", f"params 必须是对象，收到 {type(params).__name__}")
+    params, null_keys = _drop_explicit_nulls(intent, params)
     assumptions = payload.get("assumptions") or []
     if not isinstance(assumptions, (list, tuple)):
         assumptions = [str(assumptions)]
@@ -457,10 +671,14 @@ def _intent_from_json(raw: str) -> ParsedIntent:
         confidence = float(payload.get("confidence") or 0.0)
     except (TypeError, ValueError):
         confidence = 0.0
+    notes = [str(item) for item in assumptions]
+    if null_keys:
+        # 不去掉也不报错，而是**说出来**：这次哪几个参数模型写成了 null、按未指定处理
+        notes.append(f"（模型把 {sorted(null_keys)} 写成了 null，已按「未指定」处理，用参数默认值）")
     return ParsedIntent(
         intent=intent,
         params=params,
-        assumptions=tuple(str(item) for item in assumptions),
+        assumptions=tuple(notes),
         confidence=max(0.0, min(1.0, confidence)),
         reason=str(payload.get("reason") or ""),
     )
@@ -498,8 +716,20 @@ def guard_unsupported(question: str) -> ParsedIntent | None:
 
     这是**代码**的判断，不是 LLM 的 —— 见文件顶部 _BANNED_DIMENSIONS 的说明。
     """
+    lowered = question.lower()
     for keywords, reason in _BANNED_DIMENSIONS:
-        hits = [word for word in keywords if word in question]
+        # 中文词按原样匹配；ASCII 词（VIP / vip / VIP客户里的 VIP）**不区分大小写** ——
+        # 用户写 "vip客户" 与 "VIP客户" 是同一个请求，不能因为大小写漏掉一个。
+        # 同一个词的大小写变体只报一次（否则 reason 里会写成「VIP/vip/Vip」）。
+        hits: list[str] = []
+        seen: set[str] = set()
+        for word in keywords:
+            key = word.lower() if word.isascii() else word
+            if key in seen:
+                continue
+            if word in question or (word.isascii() and word.lower() in lowered):
+                seen.add(key)
+                hits.append(word)
         if hits:
             return ParsedIntent(
                 intent=INTENT_UNSUPPORTED,
@@ -556,6 +786,111 @@ _SALESPERSON_RE = re.compile(
 # 只写了「X月」（没写年份）→ 年份沿用前一个日期（与 `_dates_from_text` 同一套规则）
 _BARE_MONTH_RE = re.compile(r"(?<![\d年\-/])(\d{1,2})\s*月")
 
+# ── TASK-006 的关键词（降级路径）────────────────────────────────────────
+# 降级路径的规矩不变：能识别的很少、绝不猜。下面的词表只用来把"明显在问客户/退货"的问题
+# 送到正确的 intent 上；识别不出来的仍然返回 None（由 parse() 抛 unparseable）。
+_INACTIVE_WORDS = ("沉睡", "休眠", "长期未购买", "长期没买", "很久没买", "多久没买", "不活跃")
+_NEW_CUSTOMER_WORDS = ("新客", "新客户", "新买家", "新增客户")
+_REPEAT_WORDS = ("复购", "回购", "重复购买", "回头客")
+_FREQUENCY_WORDS = ("购买频次", "购买次数", "下单次数", "买了几次", "买过几次", "频次")
+_CUSTOMER_WORDS = ("客户", "顾客", "买家")
+_CUSTOMER_RANK_WORDS = (
+    *_RANK_WORDS, "最高", "最多", "最大", "前几", "前10", "前20", "贡献最大", "买得最多",
+)
+_RETURN_WORDS = ("退货", "退款", "取消单", "取消订单", "退单", "冲销")
+# 商品编码：5 位数字 + 可选 1~2 个字母（如 85123A）。4 位年份（2011）因此不会被误当成编码。
+_STOCK_CODE_RE = re.compile(r"(?<!\d)(\d{5}[A-Za-z]{0,2})(?!\d)")
+_INACTIVE_DAYS_RE = re.compile(r"(\d{1,4})\s*(?:天|日)")
+# 只认「3 个月」这种写法（**必须带"个"**）：否则「2011年11月」里的 `11月` 会被当成"11 个月"。
+_INACTIVE_MONTHS_RE = re.compile(r"(\d{1,2})\s*个月")
+
+
+def _stock_codes_from_text(text: str) -> tuple[str, ...]:
+    """从问句里抠商品编码（只认"5 位数字 + 可选字母"这种形状，不做模糊匹配）。"""
+    seen: list[str] = []
+    for match in _STOCK_CODE_RE.finditer(text or ""):
+        code = match.group(1).upper()
+        if code not in seen:
+            seen.append(code)
+    return tuple(seen[:PRODUCT_TREND_MAX_CODES])
+
+
+def _inactive_days_from_text(text: str, default: int = DEFAULT_INACTIVE_DAYS) -> int:
+    """「90 天没买」「3 个月没买」→ 天数；说了就按说的算，没说用默认 90 天。"""
+    match = _INACTIVE_DAYS_RE.search(text or "")
+    if match:
+        return max(1, min(3650, int(match.group(1))))
+    match = _INACTIVE_MONTHS_RE.search(text or "")
+    if match:
+        # 「几个月没买」按 30 天/月折算 —— 这是**我们的换算规则**，写在结果的 notes 里
+        return max(1, min(3650, int(match.group(1)) * 30))
+    return default
+
+
+def _customer_intent_by_keywords(
+    text: str, start: _dt.date, end: _dt.date, notes: list[str]
+) -> ParsedIntent | None:
+    """把明显在问客户的问题送到 customer_analysis（只认几个关键词，认不出返回 None）。"""
+    if not any(word in text for word in _CUSTOMER_WORDS) and not any(
+        word in text for word in (*_INACTIVE_WORDS, *_NEW_CUSTOMER_WORDS, *_REPEAT_WORDS, *_FREQUENCY_WORDS)
+    ):
+        return None
+
+    params: dict[str, Any] = {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "top_n": _top_n_from_text(text),
+    }
+    if any(word in text for word in _INACTIVE_WORDS):
+        days = _inactive_days_from_text(text)
+        params["operation"] = "inactive_customers"
+        params["inactive_days"] = days
+        notes = [*notes, f"降级解析：按「沉睡客户」处理，阈值取 {days} 天（没说就默认 "
+                         f"{DEFAULT_INACTIVE_DAYS} 天；「X 个月」按 30 天/月折算）。"]
+    elif any(word in text for word in _NEW_CUSTOMER_WORDS):
+        params["operation"] = "new_customers"
+        notes = [*notes, "降级解析：按「数据集内新客」处理（首次购买落在目标区间）。"]
+    elif any(word in text for word in _REPEAT_WORDS):
+        params["operation"] = "repeat_rate"
+        notes = [*notes, "降级解析：按「复购率」处理（购买次数 = 客户号 + distinct 发票号）。"]
+    elif any(word in text for word in _FREQUENCY_WORDS):
+        params["operation"] = "purchase_frequency"
+        notes = [*notes, "降级解析：按「购买频次」处理。"]
+    elif any(word in text for word in _CUSTOMER_RANK_WORDS):
+        params["operation"] = "top"
+        notes = [*notes, "降级解析：按「客户排行」处理（排序由程序做）。"]
+    else:
+        return None                          # 只提了"客户"但看不出要哪一种 → 不猜
+
+    return ParsedIntent(
+        intent=INTENT_CUSTOMER_ANALYSIS, params=params, assumptions=tuple(notes), confidence=0.4
+    )
+
+
+def _product_intent_by_keywords(
+    text: str, start: _dt.date, end: _dt.date, notes: list[str]
+) -> ParsedIntent | None:
+    """退货 / 指定商品趋势 —— 这两件事**现有 Intent 覆盖不了**，必须送对。"""
+    if any(word in text for word in _RETURN_WORDS):
+        return ParsedIntent(
+            intent=INTENT_PRODUCT_ANALYSIS,
+            params={"start": start.isoformat(), "end": end.isoformat(),
+                    "operation": "return", "top_n": _top_n_from_text(text)},
+            assumptions=tuple([*notes, "降级解析：按「退货/取消分析」处理（两个口径由程序分开算）。"]),
+            confidence=0.4,
+        )
+    codes = _stock_codes_from_text(text)
+    if codes and any(word in text for word in _TREND_WORDS):
+        return ParsedIntent(
+            intent=INTENT_PRODUCT_ANALYSIS,
+            params={"start": start.isoformat(), "end": end.isoformat(), "operation": "trend",
+                    "product_codes": list(codes),
+                    "granularity": "week" if "周" in text else "day"},
+            assumptions=tuple([*notes, f"降级解析：按「指定商品趋势」处理，商品编码 {list(codes)} 由规则抠出。"]),
+            confidence=0.4,
+        )
+    return None
+
 
 def _is_comparison(text: str) -> bool:
     """是不是"两个时间段比大小"的问题？
@@ -578,8 +913,11 @@ _COMPARISON_HINTS = (
     "涨了", "跌了", "更高", "更低", "更多", "更少",
 )
 # 只吃**一个**时间窗口的 Intent —— 天生不该接"两个区间比大小"的问题
+# （TASK-006 的两个新 Intent 同样是单窗口的："11 月和 10 月哪个新客多"不该被当成
+#   "11 月的新客数"默默答出来 —— 那正是这道闸门要拦的答非所问。）
 _SINGLE_WINDOW_INTENTS = (
     INTENT_SALES_SUMMARY, INTENT_SALES_TREND, INTENT_TOP_PRODUCTS, INTENT_SALES_BREAKDOWN_BY_COUNTRY,
+    INTENT_CUSTOMER_ANALYSIS, INTENT_PRODUCT_ANALYSIS,
 )
 
 
@@ -636,6 +974,45 @@ def _comparison_unparseable() -> IntentError:
         "不猜、也不把两个区间合并求和。请写成「比较 2011-11 和 2011-10 的销售额」"
         "或「2011-11-01 到 11-15 与 2011-10-01 到 10-15 的销售额对比」。",
     )
+
+
+def enforce_product_semantics(parsed: ParsedIntent, question: str) -> ParsedIntent:
+    """**收口闸门（TASK-006）**：`product_analysis` 的 operation 与 product_codes 必须配套。
+
+    为什么要在代码里收一道口：LLM 很容易把 `product_codes` 顺手带在 `operation='top'` 上
+    （"哪些商品卖得好"这种问法里它也可能塞编码），而参数 schema 是**故意严格**的
+    （带了编码但 operation 不是 trend → 报错）。两条路都要对：
+      · 非 trend 却带了编码 → 在闸门里**清掉编码**（用户的意图就是排行，不该因此报错），
+        并在 assumptions 里写明"代码清掉了多余的编码"，留痕；
+      · trend 却没给编码 → 先从问句里抠（"85123A 的趋势"）；抠不到就交给 schema 报出
+        那句人话错误（"要说清楚看哪几个商品"）—— **不猜**用户想看哪个商品。
+    """
+    if parsed.intent != INTENT_PRODUCT_ANALYSIS:
+        return parsed
+    params = dict(parsed.params)
+    operation = str(params.get("operation") or "top")
+    codes = list(params.get("product_codes") or [])
+
+    if operation != "trend" and codes:
+        params.pop("product_codes", None)
+        return parsed.model_copy(update={
+            "params": params,
+            "assumptions": tuple(parsed.assumptions) + (
+                f"（解析结果里 operation={operation!r} 却带了商品编码 {codes}，"
+                f"代码已清掉 —— 商品编码只在 operation='trend' 时才有意义）",
+            ),
+        })
+    if operation == "trend" and not codes:
+        found = _stock_codes_from_text(question)
+        if found:
+            params["product_codes"] = list(found)
+            return parsed.model_copy(update={
+                "params": params,
+                "assumptions": tuple(parsed.assumptions) + (
+                    f"（问题里认出了商品编码 {list(found)}，代码已补进 product_codes）",
+                ),
+            })
+    return parsed
 
 
 def _report_unparseable(count: int) -> IntentError:
@@ -742,6 +1119,10 @@ def _attribution_dimension_from_text(text: str) -> str | None:
 
 def _top_n_from_text(text: str, default: int = 5) -> int:
     match = re.search(r"(?:top|TOP|Top|前)\s*(\d{1,2})", text)
+    if not match:
+        # TASK-006 补的形状：「销售额最高的 10 个客户」—— 数字后面跟着**量词 + 名词**才算 TOP N。
+        # 必须带量词与名词，否则「买了 10 件商品」这类句子里的数字会被误当成 TOP N。
+        match = re.search(r"(\d{1,2})\s*[个位名]\s*(?:客户|顾客|买家|商品|产品|国家|条)", text)
     if match:
         return max(1, min(20, int(match.group(1))))
     return default
@@ -774,6 +1155,16 @@ def parse_by_keywords(question: str) -> ParsedIntent | None:
             assumptions=tuple(notes),
             confidence=0.5,
         )
+
+    # ── ②′ TASK-006：客户 / 退货 / 指定商品趋势 ─────────────────────────
+    # 顺序很关键：这些词句里往往同时有"排行""趋势""销售额"（下面几条通用规则会先抢走），
+    # 所以必须在通用规则**之前**判。识别不出来仍然返回 None（不猜）。
+    customer_intent = _customer_intent_by_keywords(text, start, end, notes)
+    if customer_intent is not None:
+        return customer_intent
+    product_intent = _product_intent_by_keywords(text, start, end, notes)
+    if product_intent is not None:
+        return product_intent
 
     if any(word in text for word in _RANK_WORDS):
         return ParsedIntent(
@@ -995,6 +1386,8 @@ def _next_month_start(year: int, month: int) -> _dt.date:
 __all__ = [
     "ALL_INTENTS",
     "COMPUTE_INTENTS",
+    "INTENT_CUSTOMER_ANALYSIS",
+    "INTENT_PRODUCT_ANALYSIS",
     "INTENT_SALES_BREAKDOWN_BY_COUNTRY",
     "INTENT_SALES_COMPARE",
     "INTENT_SALES_SUMMARY",
@@ -1005,6 +1398,8 @@ __all__ = [
     "PARAM_MODELS",
     "ParsedIntent",
     "CountryBreakdownParams",
+    "CustomerAnalysisParams",
+    "ProductAnalysisParams",
     "SalesCompareParams",
     "SalesSummaryParams",
     "SalesTrendParams",
@@ -1012,6 +1407,7 @@ __all__ = [
     "WEEK_START_WEEKDAY",
     "build_report_intent",
     "enforce_comparison_semantics",
+    "enforce_product_semantics",
     "enforce_report_semantics",
     "guard_unsupported",
     "looks_like_comparison",

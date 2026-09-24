@@ -96,7 +96,9 @@
             <button class="chip-btn" id="chip-summary" data-question="2011年11月一共卖了多少？">销售汇总</button>
             <button class="chip-btn" id="chip-trend" data-question="2011年11月的销售趋势，按日看">销售趋势</button>
             <button class="chip-btn" id="chip-products" data-question="2011年11月卖得最好的5个产品">产品排行</button>
-            <span class="muted-sm" id="hero-nl-note">本版支持五类问题（汇总 / 趋势 / 产品排行 / 两区间比较 / 国家分布）；问数据里没有的维度（如区域）会被明确拒绝。</span>
+            <button class="chip-btn" id="chip-customers" data-question="2011年11月销售额最高的10个客户">客户排行</button>
+            <button class="chip-btn" id="chip-returns" data-question="2011年11月各商品的退货情况，前10名">退货分析</button>
+            <span class="muted-sm" id="hero-nl-note">本版支持七类问题（汇总 / 趋势 / 产品排行 / 两区间比较 / 国家分布 / 客户分析 / 商品分析）；问数据里没有的维度（如区域、VIP 等级）会被明确拒绝。</span>
           </div>
         </div>
         <div class="hero-facts" id="hero-facts">
@@ -223,16 +225,16 @@
           <div class="card-head"><h2>客户 TOP5</h2></div>
           <div class="empty">
             <div class="empty-ico">◍</div>
-            <div class="empty-title">客户维度分析尚未接入</div>
-            <div class="empty-hint">客户聚合与排行尚未接入数据，当前不放任何示例数据。</div>
+            <div class="empty-title">客户分析在「自然语言问答」里直接用</div>
+            <div class="empty-hint">客户排行、购买频次、复购率、数据集内新客、沉睡客户都能问（例：2011年11月销售额最高的10个客户）。本卡片不单独铺一张客户表。</div>
           </div>
         </div>
         <div class="card">
           <div class="card-head"><h2>产品排行</h2></div>
           <div class="empty">
             <div class="empty-ico">◈</div>
-            <div class="empty-title">产品维度分析尚未接入</div>
-            <div class="empty-hint">产品聚合与排行尚未接入数据，当前不放任何示例数据。</div>
+            <div class="empty-title">商品分析在「自然语言问答」里直接用</div>
+            <div class="empty-hint">商品排行、指定商品趋势、退货与取消分析都能问（例：2011年11月各商品的退货情况，前10名）。本卡片不单独铺一张商品表。</div>
           </div>
         </div>
       </div>
@@ -294,8 +296,8 @@
         <div class="card-head"><h2>客户分析</h2></div>
         <div class="empty">
           <div class="empty-ico">◍</div>
-          <div class="empty-title">客户维度分析尚未接入</div>
-          <div class="empty-hint">客户聚合、复购、流失判定尚未接入，本页当前不放任何客户数据。</div>
+          <div class="empty-title">客户分析走「自然语言问答」</div>
+          <div class="empty-hint">客户排行、购买频次、复购率、数据集内新客、沉睡客户都能直接问（例：2011年11月的复购率是多少？）。本页不单独铺一张客户明细表。</div>
         </div>
       </div>
       <div class="card">
@@ -320,8 +322,8 @@
         <div class="card-head"><h2>产品分析</h2></div>
         <div class="empty">
           <div class="empty-ico">◈</div>
-          <div class="empty-title">产品维度分析尚未接入</div>
-          <div class="empty-hint">产品排行、贡献度、退货率尚未接入，本页当前不放任何产品数据。</div>
+          <div class="empty-title">商品分析走「自然语言问答」</div>
+          <div class="empty-hint">商品排行、指定商品趋势、退货与取消分析都能直接问（例：85123A 和 10002 在2011年11月的销售趋势）。本页不单独铺一张商品明细表。</div>
         </div>
       </div>
     </section>

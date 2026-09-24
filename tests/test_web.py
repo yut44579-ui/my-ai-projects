@@ -295,9 +295,11 @@ def test_disabled_controls_explain_themselves() -> None:
         match = re.search(rf'<[^>]*id="{control}"[^>]*>', html)
         assert match, f"找不到控件 {control}"
         assert "disabled" in match.group(0), f"{control} 不是禁用状态（企业化能力尚未实现）"
-    # 自然语言入口（顶栏 + hero + 三个示例 chip）：TASK-004 已交付，必须可用
+    # 自然语言入口（顶栏 + hero + 示例 chip）：TASK-004 已交付、TASK-006 又补了两个 chip
+    # （客户排行 / 退货分析）—— 新能力必须在页面上点得到，不能只藏在后端接口里。
     for control in ("nl-input", "nl-ask", "hero-nl-input", "hero-nl-btn",
-                    "chip-summary", "chip-trend", "chip-products"):
+                    "chip-summary", "chip-trend", "chip-products",
+                    "chip-customers", "chip-returns"):
         match = re.search(rf'<[^>]*id="{control}"[^>]*>', html)
         assert match, f"找不到控件 {control}"
         assert "disabled" not in match.group(0), f"{control} 还是禁用的（TASK-004 已交付，应可用）"
@@ -456,3 +458,43 @@ def test_no_static_ornament_ids_in_html() -> None:
         and not html_id.startswith(STRUCTURAL_ID_PREFIXES)
     )
     assert not unused, f"index.html 里有没被 JS 用到的 id（疑似静态摆设）：{unused}"
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑫ TASK-006：客户 / 商品能力在页面上真的可达
+# ════════════════════════════════════════════════════════════════════════
+def test_T006_两个新chip把问题原文写在HTML上() -> None:
+    """新能力要能在页面上点一下就去问（问题原文写在 `data-question`，不是 JS 里另抄一份）。"""
+    html = read("index.html")
+    for chip_id, question_text in (
+        ("chip-customers", "客户"),
+        ("chip-returns", "退货"),
+    ):
+        match = re.search(rf'<button[^>]*id="{chip_id}"[^>]*data-question="([^"]+)"', html)
+        assert match, f"{chip_id} 缺少 data-question"
+        assert question_text in match.group(1), f"{chip_id} 的问法不对：{match.group(1)}"
+    js = read("app.js")
+    assert '"chip-customers"' in js and '"chip-returns"' in js, "新 chip 没绑点击事件"
+
+
+def test_T006_页面支持深链提问() -> None:
+    """`#/<route>?ask=<问题>` —— 真浏览器（Edge --headless --dump-dom）能靠它做端到端取证。
+
+    前端**不解释问题**：原文从 URL 取出来，交给与手动点击完全同一个提交函数。
+    """
+    js = read("app.js")
+    assert "askFromHash" in js
+    assert 'get("ask")' in js
+    assert "askQuestion(question)" in js
+    # 自动提问必须发生在能力清单与页面骨架就绪之后（否则渲染会踩到 null）
+    assert js.index("await refreshAll()") < js.index("askFromHash();")
+
+
+def test_T006_客户与商品页不再写尚未接入() -> None:
+    """TASK-006 交付后，页面上任何"客户/商品维度分析尚未接入"的说法都成了假话。"""
+    html = read("index.html")
+    assert "客户维度分析尚未接入" not in html
+    assert "产品维度分析尚未接入" not in html
+    assert "客户聚合与排行尚未接入" not in html
+    # 替代文案必须把用户指到真能用的入口
+    assert "自然语言问答" in html

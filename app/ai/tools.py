@@ -160,9 +160,14 @@ def dataset_bounds() -> tuple[_dt.date, _dt.date]:
 
 
 def reset_cache() -> None:
-    """清掉画像缓存（测试用：换了数据集要能重算）。"""
-    global _profile_cache
+    """清掉画像缓存（测试用：换了数据集要能重算）。
+
+    一并清掉 TASK-006 的"全数据集逐客户活动表"缓存 —— 两张表都来自 `loader.load_raw()`，
+    换了数据集只清一张就会出现"画像变了、首购日期还是旧的"这种半新半旧状态。
+    """
+    global _profile_cache, _activity_cache
     _profile_cache = None
+    _activity_cache = None
 
 
 def warm_up() -> dict[str, Any]:
@@ -301,33 +306,39 @@ def sales_summary(start: _dt.date, end: _dt.date) -> dict[str, Any]:
 
 
 # ════════════════════════════════════════════════════════════════════════
-# 工具 ②：sales_trend
+# 时间分桶：**全项目唯一**的一处（销售额趋势 / 商品趋势共用）
+#
+# 为什么必须只有一处：`partial`（桶不完整）与 `covered_start/covered_end`（桶实际覆盖了
+# 问句区间里的哪几天）是"别把半截桶当整桶比高低"这条纪律的落点。两处各写一遍，
+# 早晚会有一处忘了标 partial —— 那时用户看到的就是一个骗人的标签。
 # ════════════════════════════════════════════════════════════════════════
-def sales_trend(start: _dt.date, end: _dt.date, granularity: str = "day") -> dict[str, Any]:
-    """按日 / 按周聚合的销售额序列（确定性 groupby，同一套掩码）。"""
-    if granularity not in ("day", "week"):
-        raise ValueError(f"granularity 只支持 day/week，收到 {granularity!r}")
-
-    rows = _valid_rows(start, end)
-    time_column = engine_metrics.TIME_FIELD
-    stamps = pd.to_datetime(rows[time_column])
-
+def _bucket_of(stamps: pd.Series, granularity: str) -> tuple[pd.Series, str]:
+    """时间戳 → 桶起点序列 + 人话标签（day=当天 00:00；week=**周一**为起点）。"""
     if granularity == "day":
-        bucket = stamps.dt.normalize()
-        bucket_label = "天"
-    else:
-        # 周一为一周起点：先归零到当天 00:00，再减掉"今天是本周第几天"
-        offset = (stamps.dt.weekday - WEEK_START_WEEKDAY) % 7
-        bucket = stamps.dt.normalize() - pd.to_timedelta(offset, unit="D")
-        bucket_label = "周（周一为起点）"
+        return stamps.dt.normalize(), "天"
+    # 周一为一周起点：先归零到当天 00:00，再减掉"今天是本周第几天"
+    offset = (stamps.dt.weekday - WEEK_START_WEEKDAY) % 7
+    return stamps.dt.normalize() - pd.to_timedelta(offset, unit="D"), "周（周一为起点）"
 
+
+def _series_points(
+    rows: pd.DataFrame,
+    stamps: pd.Series,
+    start: _dt.date,
+    end: _dt.date,
+    granularity: str,
+) -> tuple[list[dict[str, Any]], str]:
+    """把有效行分桶 → 逐桶点（`partial` / `covered_*` 规则**只有这一处**）。
+
+    桶是"自然"的（整周/整日），但用户问的区间**不一定对齐桶边界**。
+    例：问 2011-11-01~11-30 按周看，第一个桶从周一 2011-10-31 开始 ——
+    它其实只装了 11-01~11-06 那几天。这里把"桶的完整跨度"和"落在问句区间内的跨度"
+    都写出来并标 `partial`，免得一个标签把人引到"10月31日也有这笔钱"的误读上。
+    """
+    bucket, bucket_label = _bucket_of(stamps, granularity)
     grouped = rows.assign(_bucket=bucket).groupby("_bucket", sort=True)
     points: list[dict[str, Any]] = []
     for key, block in grouped:
-        # 桶是"自然"的（整周/整日），但用户问的区间**不一定对齐桶边界**。
-        # 例：问 2011-11-01~11-30 按周看，第一个桶从周一 2011-10-31 开始 ——
-        # 它其实只装了 11-01~11-06 那几天。这里把"桶的完整跨度"和"落在问句区间内的跨度"
-        # 都写出来并标 `partial`，免得一个标签把人引到"10月31日也有这笔钱"的误读上。
         period_start = pd.Timestamp(key).date()
         period_end = period_start + _dt.timedelta(days=0 if granularity == "day" else 6)
         covered_start = max(period_start, start)
@@ -346,6 +357,24 @@ def sales_trend(start: _dt.date, end: _dt.date, granularity: str = "day") -> dic
                 "orders": int(block["InvoiceNo"].nunique(dropna=True)),
             }
         )
+    return points, bucket_label
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 工具 ②：sales_trend
+# ════════════════════════════════════════════════════════════════════════
+def sales_trend(start: _dt.date, end: _dt.date, granularity: str = "day") -> dict[str, Any]:
+    """按日 / 按周聚合的销售额序列（确定性 groupby，同一套掩码）。"""
+    if granularity not in ("day", "week"):
+        raise ValueError(f"granularity 只支持 day/week，收到 {granularity!r}")
+
+    rows = _valid_rows(start, end)
+    time_column = engine_metrics.TIME_FIELD
+    stamps = pd.to_datetime(rows[time_column])
+
+    # 分桶与"逐桶点"的规则**只有一处实现**（`_series_points`）——
+    # TASK-006 的商品趋势复用同一段代码，所以 partial/covered_* 的语义不可能漂移。
+    points, bucket_label = _series_points(rows, stamps, start, end, granularity)
 
     amounts = [point["amount"] for point in points]
     bucket_sum = float(sum(amounts))
@@ -425,15 +454,17 @@ def _dominant_description(series: pd.Series) -> str:
     return winners[0]
 
 
-def top_products(start: _dt.date, end: _dt.date, top_n: int = 5) -> dict[str, Any]:
-    """产品销售排行 TOP N（按 StockCode 分组，销售额降序）。
+def _product_table(rows: pd.DataFrame) -> pd.DataFrame:
+    """按 StockCode 分组的汇总表（**全项目唯一**的商品分组口径）。
 
     为什么按 StockCode 而不是 Description 分组：Description 在数据集里有空值、有同码多名，
     按它分组会把同一个商品拆成几行、还会多出一个 "NaN 商品"。StockCode 才是商品身份，
     Description 只作为**展示名**附上（取该码下出现次数最多的那个）。
-    """
-    rows = _valid_rows(start, end)
 
+    TASK-006 的 `product_analysis` 与既有的 `top_products` **共用这一处** ——
+    两条路径的分组/求和/展示名取值因此不可能对不上（AC-08 的兼容性由代码结构保证，
+    不是靠测试事后对齐）。
+    """
     grouped = rows.groupby("StockCode", dropna=False)
     table = grouped.agg(
         amount=("_amount", "sum"),
@@ -444,6 +475,14 @@ def top_products(start: _dt.date, end: _dt.date, top_n: int = 5) -> dict[str, An
     table["description"] = grouped["Description"].agg(
         lambda series: _dominant_description(series.dropna())
     )
+    return table
+
+
+def top_products(start: _dt.date, end: _dt.date, top_n: int = 5) -> dict[str, Any]:
+    """产品销售排行 TOP N（按 StockCode 分组，销售额降序）。"""
+    rows = _valid_rows(start, end)
+
+    table = _product_table(rows)
     table = table.sort_values(
         ["amount", "StockCode"], ascending=[False, True], kind="mergesort"
     )
@@ -1160,6 +1199,927 @@ def sales_breakdown_by_country(start: _dt.date, end: _dt.date, top_n: int = 5) -
 
 
 # ════════════════════════════════════════════════════════════════════════
+# 工具 ⑥：customer_analysis（TASK-006）
+#
+# 【一句话】客户维度只做「数据里真有的那几列」能算出来的确定性描述：
+#   客户号、成交次数（distinct InvoiceNo）、金额、购买频次、首次/最后一次购买日期。
+#
+# 【明确不做】（写在这里，免得以后有人顺手加）：
+#   ❌ RFM 分群（能算，但分箱口径复杂，收益不足）；❌ 产品关联 support/confidence/lift；
+#   ❌ churn 预测/任何 ML；❌ VIP / 客户等级 / 大客户 / 客户行业 / 客户地区 / 客户渠道 /
+#      客户生命周期阶段 —— 数据里**根本没有**这些字段，一律 unsupported（见 intent 的硬闸门），
+#      **绝不用「销售额 TOP」顶替「VIP TOP」**。
+#
+# 【CustomerID 空值是一等公民口径（本 TASK 的核心）】
+#   · 客户维度指标**只覆盖 CustomerID 非空**的成交行；
+#   · 销售额仍按既有口径（D16-6）：CustomerID 为空的行**不排除**、仍计入销售额，
+#     只是计不进客户数、也不进任何客户维度指标；
+#   · 所以每个客户分析结果都带 `customer_scope`：空/非空行数、客户范围内的金额、
+#     区间总金额、**覆盖率（代码算，不是 LLM 算）**。
+#     回答里因此能说清「本次客户分析覆盖有 CustomerID 的成交，占全部销售额 XX%」——
+#     覆盖范围由系统自己声明，不留给用户猜。
+# ════════════════════════════════════════════════════════════════════════
+CUSTOMER_OPERATIONS: tuple[str, ...] = (
+    "top",
+    "purchase_frequency",
+    "repeat_rate",
+    "new_customers",
+    "inactive_customers",
+)
+# 工具名写成常量（报告/收口闸门/兼容性说明都要引用，散落的字面量迟早拼错一个）
+CUSTOMER_ANALYSIS_TOOL = "customer_analysis"
+PRODUCT_ANALYSIS_TOOL = "product_analysis"
+TOP_PRODUCTS_TOOL = "top_products"
+
+# 整个数据集的逐客户活动表缓存（新客/沉睡都要它；见 `_dataset_customer_activity`）
+_activity_cache: dict[str, Any] | None = None
+
+# 排序指标的人话名字（只用在给用户看的说明里；键与 CUSTOMER_TOP_METRICS 一致）
+_CUSTOMER_METRIC_LABELS: dict[str, str] = {
+    "sales_amount": "销售额",
+    "order_count": "订单数（distinct InvoiceNo）",
+    "purchase_count": "购买次数（distinct InvoiceNo）",
+}
+# TOP 榜可用的排序指标。注意：本口径下 order_count 与 purchase_count **是同一件事**
+# （都 = 该客户在区间内的 distinct InvoiceNo）—— 两个名字都收，是为了让"问订单数"和
+# "问购买次数"得到同一个确定答案，而不是为了造出第二个口径。
+CUSTOMER_TOP_METRICS: tuple[str, ...] = ("sales_amount", "order_count", "purchase_count")
+DEFAULT_INACTIVE_DAYS = 90
+
+_CUSTOMER_SCOPE_BASIS = (
+    "行数按**区间内原始行**统计（与计算引擎 validations 的 customer_id_nulls 同口径）；"
+    "金额按**口径有效行**统计（与计算引擎的销售额同口径）。"
+)
+
+
+def _window_and_valid(start: _dt.date, end: _dt.date) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """一次取数拿到 `(区间内原始行, 口径有效行)` 两份 —— 客户/退货分析两边都要用。
+
+    为什么退货用**原始行**：退货/取消的行正是被 D16 三条排除规则挡掉的那些行，
+    只在有效行上看退货率，看的是一个空集。这个区别写在各自的 notes 里，别混。
+    """
+    window, valid = _valid_window(start, end)
+    rows = window.loc[valid].copy()
+    rows["_amount"] = engine_metrics.line_amount(rows)
+    return window, rows
+
+
+def _customer_label(value: Any) -> int | float:
+    """客户号的展示形态：整数就按整数写（17850），不是整数才保留小数。
+
+    为什么要转：数据里 CustomerID 是 float64（因为有空值），直接输出会变成 `17850.0` ——
+    对着一个整数客户号显示小数，会让人以为客户号有小数部分。
+    """
+    number = float(value)
+    return int(number) if number.is_integer() else number
+
+
+def _dataset_customer_activity() -> dict[str, Any]:
+    """整个数据集的逐客户活动表：首次/最后一次**有效**购买日期 + 空客户号行数。
+
+    「数据集内新客」与「沉睡客户」都需要**全数据集**视角 —— 这是与窗口内指标**两回事**，
+    所以单独一处、单独缓存，不跟窗口计算混在一起。
+
+    口径：与 `_valid_window()` 同一套掩码（三条排除规则全开），但**不加时间限制**
+    （"整个数据集里第一次买"本来就该看全部数据）。
+    """
+    global _activity_cache
+    if _activity_cache is not None:
+        return _activity_cache
+
+    frame = loader.load_raw()
+    rules = engine_metrics.resolve_enabled_rules()
+    hit_count = pd.concat(
+        {rule.key: rule.mask(frame).astype(bool) for rule in rules}, axis=1
+    ).sum(axis=1)
+    valid = frame.loc[hit_count == 0, ["CustomerID", engine_metrics.TIME_FIELD]]
+    stamps = pd.to_datetime(valid[engine_metrics.TIME_FIELD])
+
+    with_customer = valid.loc[valid["CustomerID"].notna()].assign(_stamp=stamps)
+    grouped = with_customer.groupby("CustomerID")["_stamp"]
+    first = grouped.min()
+    last = grouped.max()
+
+    _activity_cache = {
+        "first_purchase": {float(key): value.date() for key, value in first.items()},
+        "last_purchase": {float(key): value.date() for key, value in last.items()},
+        "customer_count": int(len(first)),
+        "dataset_rows": int(len(frame)),
+        "dataset_customer_id_null_rows": int(frame["CustomerID"].isna().sum()),
+        "dataset_customer_id_nonnull_rows": int(frame["CustomerID"].notna().sum()),
+    }
+    return _activity_cache
+
+
+def build_customer_scope(
+    window: pd.DataFrame, rows: pd.DataFrame, start: _dt.date, end: _dt.date
+) -> dict[str, Any]:
+    """客户维度的"覆盖范围"声明（**每个**客户分析结果都要带，AC-05）。
+
+    · `customer_id_null_rows` / `customer_id_nonnull_rows`：**区间内原始行**的空/非空客户号行数
+      （与 `executor` 的 validations.customer_id_nulls 同口径，可交叉核对）；
+    · `valid_customer_id_null_rows` …：**口径有效行**上的同一拆分 —— 金额拆分就是按这一层做的；
+    · `customer_scope_sales_amount` / `total_sales_amount` / `customer_scope_sales_share`：
+      客户范围内的金额、区间总金额、覆盖率 —— **全部代码算**，不给 LLM 算的机会。
+    """
+    in_range = int(len(window))
+    raw_null = int(window["CustomerID"].isna().sum())
+    valid_null = int(rows["CustomerID"].isna().sum())
+    valid_nonnull = int(len(rows) - valid_null)
+    total_amount = _amount_of(rows)
+    scope_amount = float(rows.loc[rows["CustomerID"].notna(), "_amount"].sum())
+    null_amount = float(rows.loc[rows["CustomerID"].isna(), "_amount"].sum())
+    activity = _dataset_customer_activity()
+    return {
+        "window_start": start.isoformat(),
+        "window_end": end.isoformat(),
+        "rows_in_range": in_range,
+        "customer_id_null_rows": raw_null,
+        "customer_id_nonnull_rows": int(in_range - raw_null),
+        "valid_rows": int(len(rows)),
+        "valid_customer_id_null_rows": valid_null,
+        "valid_customer_id_nonnull_rows": valid_nonnull,
+        "customer_scope_sales_amount": scope_amount,
+        "null_customer_sales_amount": null_amount,
+        "total_sales_amount": total_amount,
+        "customer_scope_sales_share": (scope_amount / total_amount) if total_amount else 0.0,
+        "dataset_rows": activity["dataset_rows"],
+        "dataset_customer_id_null_rows": activity["dataset_customer_id_null_rows"],
+        "dataset_customer_id_nonnull_rows": activity["dataset_customer_id_nonnull_rows"],
+        "basis": _CUSTOMER_SCOPE_BASIS,
+    }
+
+
+def _customer_table(rows: pd.DataFrame) -> pd.DataFrame:
+    """按 CustomerID 汇总的客户表（**全项目唯一**的客户聚合口径）。
+
+        sales_amount  区间内该客户的有效行金额合计
+        purchase_count **distinct InvoiceNo**（不是行数！一个订单 20 个商品行仍是 1 次购买）
+        order_count    同上 —— 本口径下与 purchase_count 是同一件事，两个名字都留着
+        rows           有效行数（只能说明"买了多少种/多少行"，**不代表购买次数**）
+    """
+    scoped = rows.dropna(subset=["CustomerID"])
+    grouped = scoped.groupby("CustomerID", sort=True)
+    table = pd.DataFrame(
+        {
+            "sales_amount": grouped["_amount"].sum(),
+            "purchase_count": grouped["InvoiceNo"].nunique(),
+            "rows": grouped.size(),
+        }
+    )
+    table["order_count"] = table["purchase_count"]
+    table["avg_order_amount"] = table["sales_amount"] / table["purchase_count"]
+    table.index.name = "CustomerID"
+    return table.reset_index()
+
+
+def _rank_customers(table: pd.DataFrame, metric: str, top_n: int) -> pd.DataFrame:
+    """按指标降序 + **客户号升序**并列打破（确定性的排序，问多少次结果都一样）。"""
+    return table.sort_values(
+        [metric, "CustomerID"], ascending=[False, True], kind="mergesort"
+    ).head(top_n)
+
+
+def _customer_items(ranked: pd.DataFrame, extra: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    extra = extra or {}
+    return [
+        {
+            "rank": rank,
+            "customer_id": _customer_label(row["CustomerID"]),
+            "sales_amount": float(row["sales_amount"]),
+            "purchase_count": int(row["purchase_count"]),
+            "order_count": int(row["order_count"]),
+            "rows": int(row["rows"]),
+            "avg_order_amount": float(row["avg_order_amount"]),
+            **{key: row[key] for key in extra},
+        }
+        for rank, (_, row) in enumerate(ranked.iterrows(), start=1)
+    ]
+
+
+def _scope_display(scope: dict[str, Any]) -> list[dict[str, Any]]:
+    """每个客户分析都带的那三行 —— 覆盖范围**由代码说清楚**，不让用户猜。"""
+    return [
+        {"label": "客户分析覆盖的销售额", "value": scope["customer_scope_sales_amount"],
+         "unit": currency_unit(), "format": "money"},
+        {"label": "区间总销售额（含无客户号行）", "value": scope["total_sales_amount"],
+         "unit": currency_unit(), "format": "money"},
+        {"label": "客户分析覆盖率", "value": scope["customer_scope_sales_share"] * 100,
+         "unit": "%", "format": "pct", "derived": True,
+         "note": "有客户号的成交金额 ÷ 区间总销售额"},
+    ]
+
+
+def _scope_notes(scope: dict[str, Any]) -> list[str]:
+    return [
+        f"**客户范围**：本次客户分析只覆盖**有 CustomerID** 的成交"
+        f"（有效行 {scope['valid_customer_id_nonnull_rows']} 行 / "
+        f"{scope['customer_scope_sales_amount']:.2f}{currency_unit()}），"
+        f"占该区间全部销售额 {scope['customer_scope_sales_share'] * 100:.2f}%；"
+        f"客户号为空的 {scope['valid_customer_id_null_rows']} 行有效成交"
+        f"（{scope['null_customer_sales_amount']:.2f}{currency_unit()}）"
+        f"仍计入销售额，但不计入客户数、也不进任何客户维度指标（D16-6）。",
+        f"**购买次数 = 客户号 + distinct InvoiceNo**（不是数据行数）："
+        f"同一个订单买了 20 种商品，算 **1 次**购买。{_CUSTOMER_SCOPE_BASIS}",
+    ]
+
+
+def customer_analysis(
+    start: _dt.date,
+    end: _dt.date,
+    operation: str = "top",
+    metric: str = "sales_amount",
+    top_n: int = 5,
+    inactive_days: int = DEFAULT_INACTIVE_DAYS,
+    reference_date: _dt.date | None = None,
+) -> dict[str, Any]:
+    """客户维度的确定性描述性分析（`operation` 决定做哪一种）。
+
+        top                 客户 TOP N（按 sales_amount / order_count / purchase_count 排）
+        purchase_frequency  购买频次分布 + 频次最高的客户
+        repeat_rate         复购率（复购客户 = 购买次数 ≥ 2）
+        new_customers       **数据集内新客**（全数据集首次有效购买落在目标区间）
+        inactive_customers  规则型沉睡客户（参考日 − 最后购买日 ≥ 阈值天数）
+
+    所有分支都只覆盖 CustomerID 非空的行，并带同一份 `customer_scope`（AC-05/AC-06）。
+    """
+    if operation not in CUSTOMER_OPERATIONS:
+        raise ValueError(f"customer_analysis 只支持 {list(CUSTOMER_OPERATIONS)}，收到 {operation!r}")
+    if metric not in CUSTOMER_TOP_METRICS:
+        raise ValueError(f"metric 只支持 {list(CUSTOMER_TOP_METRICS)}，收到 {metric!r}")
+
+    window, rows = _window_and_valid(start, end)
+    table = _customer_table(rows)
+    scope = build_customer_scope(window, rows, start, end)
+    scope_total = float(table["sales_amount"].sum())
+
+    base_params = {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "operation": operation,
+        "metric": metric,
+        "top_n": int(top_n),
+    }
+    common_facts: dict[str, Any] = {
+        "operation": operation,
+        "metric_requested": metric,
+        "top_n": int(top_n),
+        "customers_with_purchase": int(len(table)),
+        "customer_scope": scope,
+    }
+    # 分组求和 = 客户范围金额（对账：客户表没漏行、没重复计）
+    selfcheck: dict[str, Any] = {
+        "scope_source": "build_customer_scope（同一掩码下的行列拆分）",
+        "customer_table_total": scope_total,
+        "customer_scope_sales_amount": scope["customer_scope_sales_amount"],
+        "table_matches_scope": abs(scope_total - scope["customer_scope_sales_amount"])
+        <= max(_FLOAT_TOL, abs(scope_total) * _FLOAT_TOL),
+        "delta": abs(scope_total - scope["customer_scope_sales_amount"]),
+    }
+
+    items: list[dict[str, Any]] = []
+    display: list[dict[str, Any]] = []
+    notes: list[str] = _scope_notes(scope)
+
+    if operation == "top":
+        ranked = _rank_customers(table, metric, top_n)
+        top_amount = float(ranked["sales_amount"].sum())
+        facts = {
+            **common_facts,
+            "metric_used": metric,
+            "customer_count": int(len(table)),
+            "top_amount": top_amount,
+            "all_customers_amount": scope_total,
+            "top_share_of_customer_scope": (top_amount / scope_total) if scope_total else 0.0,
+            "best_customer_id": _customer_label(ranked["CustomerID"].iloc[0]) if len(ranked) else None,
+            "best_amount": float(ranked["sales_amount"].iloc[0]) if len(ranked) else 0.0,
+        }
+        items = _customer_items(ranked)
+        display = [
+            {"label": "区间内有成交的客户数", "value": len(table), "unit": "位", "format": "int"},
+            {"label": f"TOP{len(items)} 客户合计销售额", "value": top_amount, "unit": currency_unit(),
+             "format": "money"},
+            {"label": "占客户范围销售额", "value": facts["top_share_of_customer_scope"] * 100,
+             "unit": "%", "format": "pct", "derived": True},
+            *_scope_display(scope),
+        ]
+        notes.append(
+            f"排序：按{_CUSTOMER_METRIC_LABELS.get(metric, metric)}降序，并列时按客户号升序"
+            f"（**排序由代码做**，不是模型挑的）。"
+        )
+    elif operation == "purchase_frequency":
+        counts = table["purchase_count"]
+        distribution = (
+            table.groupby("purchase_count")
+            .agg(customers=("purchase_count", "size"), sales_amount=("sales_amount", "sum"))
+            .sort_index()
+        )
+        repeat_customers = int((counts >= 2).sum())
+        distribution_rows = [
+            {
+                "purchase_count": int(index),
+                "customers": int(row["customers"]),
+                "customer_share": (float(row["customers"]) / len(table)) if len(table) else 0.0,
+                "sales_amount": float(row["sales_amount"]),
+                "sales_share": (float(row["sales_amount"]) / scope_total) if scope_total else 0.0,
+            }
+            for index, row in distribution.iterrows()
+        ]
+        facts = {
+            **common_facts,
+            "metric_used": "purchase_count",
+            "customer_count": int(len(table)),
+            "max_purchase_count": int(counts.max()) if len(counts) else 0,
+            "avg_purchase_count": float(counts.mean()) if len(counts) else 0.0,
+            "repeat_customers": repeat_customers,
+            "repeat_rate": (repeat_customers / len(table)) if len(table) else 0.0,
+            "frequency_distribution": distribution_rows,
+        }
+        ranked = _rank_customers(table, "purchase_count", top_n)
+        items = _customer_items(ranked)
+        display = [
+            {"label": "区间内有成交的客户数", "value": len(table), "unit": "位", "format": "int"},
+            {"label": f"购买次数最多的 {len(items)} 位客户", "value": items[0]["purchase_count"] if items else 0,
+             "unit": "次", "format": "int", "note": "这是榜首的购买次数"},
+            {"label": "最高购买次数", "value": facts["max_purchase_count"], "unit": "次", "format": "int"},
+            {"label": "平均购买次数", "value": facts["avg_purchase_count"], "unit": "次", "format": "qty",
+             "derived": True},
+            {"label": "复购客户数（≥2 次）", "value": repeat_customers, "unit": "位", "format": "int"},
+            *_scope_display(scope),
+        ]
+        notes.append(
+            f"频次分布覆盖 {len(distribution_rows)} 种购买次数（1 次 … {facts['max_purchase_count']} 次），"
+            f"明细全在 facts.frequency_distribution 里，**没有截断**。"
+        )
+        notes.append("榜单固定按购买次数（distinct InvoiceNo）降序 —— 频次榜的排序指标不由参数决定。")
+    elif operation == "repeat_rate":
+        counts = table["purchase_count"]
+        repeat = table[counts >= 2]
+        repeat_customers = int(len(repeat))
+        repeat_amount = float(repeat["sales_amount"].sum())
+        facts = {
+            **common_facts,
+            "metric_used": "purchase_count",
+            "total_customers": int(len(table)),
+            "repeat_customers": repeat_customers,
+            "repeat_rate": (repeat_customers / len(table)) if len(table) else 0.0,
+            "single_purchase_customers": int(len(table) - repeat_customers),
+            "repeat_sales_amount": repeat_amount,
+            "repeat_sales_share": (repeat_amount / scope_total) if scope_total else 0.0,
+            "target_definition": "目标区间内至少有一次有效购买、且 CustomerID 非空的客户",
+        }
+        ranked = _rank_customers(repeat, "purchase_count", top_n)
+        items = _customer_items(ranked)
+        display = [
+            {"label": "客户数（目标区间内有成交）", "value": facts["total_customers"], "unit": "位", "format": "int"},
+            {"label": "复购客户数（购买次数 ≥ 2）", "value": repeat_customers, "unit": "位", "format": "int"},
+            {"label": "复购率", "value": facts["repeat_rate"] * 100, "unit": "%", "format": "pct", "derived": True,
+             "note": "复购客户数 ÷ 客户数"},
+            {"label": "只买过一次的客户数", "value": facts["single_purchase_customers"], "unit": "位", "format": "int"},
+            {"label": "复购客户贡献的销售额占比", "value": facts["repeat_sales_share"] * 100, "unit": "%",
+             "format": "pct", "derived": True},
+            *_scope_display(scope),
+        ]
+        selfcheck["repeat_rate_consistent"] = (
+            abs(facts["repeat_rate"] - (repeat_customers / len(table))) < 1e-12 if len(table) else True
+        )
+        selfcheck["repeat_plus_single_equals_total"] = (
+            facts["repeat_customers"] + facts["single_purchase_customers"] == facts["total_customers"]
+        )
+        notes.append(
+            "**复购的定义锁死**：购买次数 = 客户号 + distinct InvoiceNo（不是行数）；"
+            "复购客户 = 购买次数 ≥ 2；复购率 = 复购客户数 ÷ 目标区间内有成交的客户数。"
+        )
+    elif operation == "new_customers":
+        activity = _dataset_customer_activity()
+        first_map = activity["first_purchase"]
+        table = table.assign(first_purchase=table["CustomerID"].map(first_map))
+        unmapped = int(table["first_purchase"].isna().sum())
+        is_new = (table["first_purchase"] >= start) & (table["first_purchase"] <= end)
+        new_table, existing_table = table[is_new], table[~is_new]
+        new_amount = float(new_table["sales_amount"].sum())
+        facts = {
+            **common_facts,
+            "metric_used": "sales_amount",
+            "total_customers": int(len(table)),
+            "new_customers": int(len(new_table)),
+            "existing_customers": int(len(existing_table)),
+            "new_customer_share": (len(new_table) / len(table)) if len(table) else 0.0,
+            "new_sales_amount": new_amount,
+            "new_sales_share": (new_amount / scope_total) if scope_total else 0.0,
+            "definition": "CustomerID 非空，且该客户在**整个数据集**内的首次有效购买日期落在目标区间内",
+            "definition_label": "数据集内新客",
+            "existing_definition": "同一批客户里，首次有效购买日期早于目标区间开始的那些（数据集内老客）",
+            "first_purchase_basis": "整个数据集内首次有效购买日期（口径同 D16：排除取消单/数量≤0/单价≤0）",
+            "dataset_first_day": dataset_bounds()[0].isoformat(),
+        }
+        ranked = _rank_customers(new_table, "sales_amount", top_n) if len(new_table) else new_table
+        items = _customer_items(
+            ranked.assign(first_purchase=ranked["first_purchase"].astype(str)), extra=["first_purchase"]
+        )
+        display = [
+            {"label": "数据集内新客", "value": facts["new_customers"], "unit": "位", "format": "int"},
+            {"label": "数据集内老客", "value": facts["existing_customers"], "unit": "位", "format": "int"},
+            {"label": "新客占比", "value": facts["new_customer_share"] * 100, "unit": "%", "format": "pct",
+             "derived": True},
+            {"label": "新客带来的销售额", "value": new_amount, "unit": currency_unit(), "format": "money"},
+            *_scope_display(scope),
+        ]
+        selfcheck["first_purchase_all_mapped"] = unmapped == 0
+        selfcheck["new_plus_existing_equals_total"] = (
+            facts["new_customers"] + facts["existing_customers"] == len(table)
+        )
+        notes.append(
+            f"**「新客」一律指「数据集内新客」**：该客户在**整个数据集**里的首次有效购买落在目标区间内 —— "
+            f"**不是**「人生第一次购买」。数据集从 {facts['dataset_first_day']} 才开始，"
+            f"在此之前有没有买过，数据里没有、也推不出来。"
+        )
+    else:  # inactive_customers
+        activity = _dataset_customer_activity()
+        last_map = activity["last_purchase"]
+        reference = reference_date or dataset_bounds()[1]
+        table = table.assign(last_purchase=table["CustomerID"].map(last_map))
+        unmapped = int(table["last_purchase"].isna().sum())
+        table = table.assign(days_since_last_purchase=table["last_purchase"].map(
+            lambda day: (reference - day).days
+        ))
+        dormant = table[table["days_since_last_purchase"] >= inactive_days]
+        facts = {
+            **common_facts,
+            "metric_used": "days_since_last_purchase",
+            "inactive_days": int(inactive_days),
+            "reference_date": reference.isoformat(),
+            "reference_basis": "用户指定" if reference_date else "缺省 = 数据集最后一天（数据的「今天」）",
+            "rule": "reference_date − last_purchase_date ≥ inactive_days",
+            "total_customers": int(len(table)),
+            "inactive_customers": int(len(dormant)),
+            "inactive_rate": (len(dormant) / len(table)) if len(table) else 0.0,
+            "active_customers": int(len(table) - len(dormant)),
+            "max_days_since_purchase": int(table["days_since_last_purchase"].max()) if len(table) else 0,
+            "avg_days_since_purchase": float(table["days_since_last_purchase"].mean()) if len(table) else 0.0,
+            "last_purchase_basis": "该客户在**整个数据集**内最后一次有效购买日期",
+            "definition": "目标区间内有过有效购买、且距参考日已 ≥ inactivity_days 未再购买的客户（规则型判定）",
+        }
+        ranked = dormant.sort_values(
+            ["days_since_last_purchase", "CustomerID"], ascending=[False, True], kind="mergesort"
+        ).head(top_n)
+        items = _customer_items(
+            ranked.assign(last_purchase=ranked["last_purchase"].astype(str)),
+            extra=["last_purchase", "days_since_last_purchase"],
+        )
+        display = [
+            {"label": f"沉睡客户数（≥ {inactive_days} 天未购买）", "value": facts["inactive_customers"],
+             "unit": "位", "format": "int"},
+            {"label": "目标客户数", "value": facts["total_customers"], "unit": "位", "format": "int"},
+            {"label": "沉睡占比", "value": facts["inactive_rate"] * 100, "unit": "%", "format": "pct",
+             "derived": True},
+            {"label": "阈值天数", "value": int(inactive_days), "unit": "天", "format": "int"},
+            {"label": "参考日期", "value": reference.isoformat(), "unit": "", "format": "auto"},
+            *_scope_display(scope),
+        ]
+        selfcheck["last_purchase_all_mapped"] = unmapped == 0
+        selfcheck["inactive_plus_active_equals_total"] = (
+            facts["inactive_customers"] + facts["active_customers"] == facts["total_customers"]
+        )
+        notes.append(
+            f"**沉睡客户是规则型判定，不是预测**：参考日（{reference.isoformat()}）减去该客户"
+            f"最后一次有效购买日期 ≥ {inactive_days} 天。没有任何概率、也没有「接下来会不会买」的推断 —— "
+            f"本版不做预测/机器学习。"
+        )
+        notes.append(
+            "「最后一次购买」取该客户在**整个数据集**里的最后一次有效购买（不限目标区间）——"
+            "目标区间只用来圈定「要观察哪些客户」。"
+        )
+
+    notes += _empty_window_note(int(len(rows)), start, end)
+
+    return {
+        "tool": "customer_analysis",
+        "params": {**base_params, "inactive_days": int(inactive_days),
+                   "reference_date": reference_date.isoformat() if reference_date else None},
+        "status": "ok",
+        "facts": facts,
+        "items": items,
+        "notes": notes,
+        "display": display,
+        "selfcheck": selfcheck,
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 工具 ⑦：product_analysis（TASK-006）
+#
+# operation:
+#   top     商品 TOP N —— metric=sales_amount 时**直接复用 top_products 的结果**
+#           （同参数逐字一致，兼容性由"同一段代码"保证，不是靠事后对齐）
+#   trend   指定商品的逐日/逐周趋势（分桶规则与 sales_trend **同一处实现**）
+#   return  退货/取消分析 —— 数量为负 与 C 开头的取消单**两个口径分开**，
+#           统一指标必须去重（并集），绝不相加
+#
+# 明确不做：产品关联（support/confidence/lift，组合爆炸）。
+# ════════════════════════════════════════════════════════════════════════
+PRODUCT_OPERATIONS: tuple[str, ...] = ("top", "trend", "return")
+PRODUCT_TOP_METRICS: tuple[str, ...] = ("sales_amount", "quantity", "order_count")
+PRODUCT_TREND_MAX_CODES = 10
+
+_PRODUCT_METRIC_COLUMN = {
+    "sales_amount": "amount",
+    "quantity": "qty",
+    "order_count": "orders",
+}
+
+
+def _product_top(start: _dt.date, end: _dt.date, metric: str, top_n: int) -> dict[str, Any]:
+    """商品排行。metric=sales_amount 走既有 `top_products`（保证 AC-08 一致）。"""
+    if metric == "sales_amount":
+        result = top_products(start, end, top_n)
+        # 只改"这次是谁算的"这几个字段，facts/items/display 逐字保留 ——
+        # 兼容性因此不是"测试对齐出来的"，而是**同一段代码**算出来的。
+        result["tool"] = PRODUCT_ANALYSIS_TOOL
+        result["params"] = {**result["params"], "operation": "top", "metric": metric}
+        result["facts"] = {**result["facts"], "operation": "top", "metric_used": metric}
+        result["notes"] = list(result["notes"]) + [
+            f"本结果与「{TOP_PRODUCTS_TOOL}（产品排行）」**同参数完全一致** —— "
+            f"两者调的是同一段分组/排序代码，不存在两套商品口径。"
+        ]
+        result["selfcheck"] = {**result["selfcheck"], "compat_with_top_products": {
+            "same_params": True,
+            "delegated_to": TOP_PRODUCTS_TOOL,
+            "note": "sales_amount 榜直接复用既有产品的分组排序结果（同一个函数调用）",
+        }}
+        return result
+
+    rows = _valid_rows(start, end)
+    table = _product_table(rows)
+    column = _PRODUCT_METRIC_COLUMN[metric]
+    top = _rank_products(table, metric, top_n)
+    total_amount = _amount_of(rows)
+    table_total = float(table["amount"].sum())
+
+    items = [
+        {
+            "rank": rank,
+            "stock_code": str(index),
+            "description": str(row["description"]),
+            "amount": float(row["amount"]),
+            "qty": float(row["qty"]),
+            "rows": int(row["rows"]),
+            "orders": int(row["orders"]),
+            "share": (float(row["amount"]) / table_total) if table_total else 0.0,
+        }
+        for rank, (index, row) in enumerate(top.iterrows(), start=1)
+    ]
+    lead = items[0] if items else None
+    facts: dict[str, Any] = {
+        "operation": "top",
+        "metric_used": metric,
+        "top_n": int(top_n),
+        "top_amount": float(top["amount"].sum()) if len(top) else 0.0,
+        "all_products_amount": table_total,
+        "total_amount": total_amount,
+        "product_count": int(len(table)),
+        "best_stock_code": lead["stock_code"] if lead else "",
+        "best_amount": lead["amount"] if lead else 0.0,
+        "best_description": lead["description"] if lead else "",
+    }
+    notes = [
+        "口径：含首尾全天；排除取消单、数量≤0、单价≤0 的行。",
+        f"按 StockCode 分组（Description 只作展示名，取该编码下出现次数最多者）；"
+        f"本次排序指标是 **{metric}**（不是销售额）—— 排序由代码做，不是模型挑的。",
+        _NONPRODUCT_NOTE,
+    ] + _empty_window_note(len(rows), start, end)
+    return {
+        "tool": PRODUCT_ANALYSIS_TOOL,
+        "params": {"start": start.isoformat(), "end": end.isoformat(),
+                   "operation": "top", "metric": metric, "top_n": int(top_n)},
+        "status": "ok",
+        "facts": facts,
+        "items": items,
+        "notes": notes,
+        "display": [
+            {"label": "上榜商品数", "value": len(items), "unit": "个", "format": "int"},
+            {"label": f"TOP{len(items)} 合计销售额", "value": facts["top_amount"], "unit": currency_unit(),
+             "format": "money"},
+            {"label": "区间总销售额", "value": total_amount, "unit": currency_unit(), "format": "money"},
+            {"label": "区间内出现过的商品编码数", "value": facts["product_count"], "unit": "个", "format": "int"},
+        ],
+        "selfcheck": {
+            "detail_total_source": "同一掩码下 line_amount(rows).sum()",
+            "detail_total": total_amount,
+            "grouped_total": table_total,
+            "grouped_matches_detail": abs(table_total - total_amount)
+            <= max(_FLOAT_TOL, abs(total_amount) * _FLOAT_TOL),
+            "delta": abs(table_total - total_amount),
+        },
+    }
+
+
+def _rank_products(table: pd.DataFrame, metric: str, top_n: int) -> pd.DataFrame:
+    """按指标降序 + **StockCode 升序**并列打破（与既有产品排行同一套排序规则）。"""
+    column = _PRODUCT_METRIC_COLUMN[metric]
+    return table.sort_values(
+        [column, "StockCode"], ascending=[False, True], kind="mergesort"
+    ).head(top_n)
+
+
+def _product_trend(
+    start: _dt.date, end: _dt.date, product_codes: tuple[str, ...], granularity: str
+) -> dict[str, Any]:
+    """指定商品的逐日/逐周趋势：**每个商品分别聚合**，分桶规则复用 `_series_points`。"""
+    if not product_codes:
+        raise ValueError("product_analysis(operation='trend') 必须给 product_codes（要按商品分别聚合）")
+    if granularity not in ("day", "week"):
+        raise ValueError(f"granularity 只支持 day/week，收到 {granularity!r}")
+
+    rows = _valid_rows(start, end)
+    time_column = engine_metrics.TIME_FIELD
+    codes = [str(code) for code in product_codes]
+    scoped = rows.loc[rows["StockCode"].astype(str).isin(codes)]
+    window_total = _amount_of(rows)
+
+    products: list[dict[str, Any]] = []
+    series_products: list[dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
+    missing: list[str] = []
+    bucket_label = "天" if granularity == "day" else "周（周一为起点）"
+
+    for code in codes:
+        block = scoped.loc[scoped["StockCode"].astype(str) == code]
+        if block.empty:
+            missing.append(code)
+            products.append(
+                {"stock_code": code, "description": "", "total_amount": 0.0, "qty": 0.0,
+                 "orders": 0, "rows": 0, "bucket_count": 0, "partial_buckets": 0,
+                 "point_sum": 0.0}
+            )
+            series_products.append({"stock_code": code, "description": "", "points": []})
+            continue
+        stamps = pd.to_datetime(block[time_column])
+        points, bucket_label = _series_points(block, stamps, start, end, granularity)
+        description = _dominant_description(block["Description"].dropna())
+        products.append(
+            {
+                "stock_code": code,
+                "description": description,
+                "total_amount": float(block["_amount"].sum()),
+                "qty": float(block["Quantity"].sum()),
+                "orders": int(block["InvoiceNo"].nunique(dropna=True)),
+                "rows": int(len(block)),
+                "bucket_count": len(points),
+                "partial_buckets": int(sum(1 for point in points if point["partial"])),
+                "point_sum": float(math.fsum(point["amount"] for point in points)),
+            }
+        )
+        series_products.append(
+            {"stock_code": code, "description": description, "points": points}
+        )
+
+    products.sort(key=lambda item: (-item["total_amount"], str(item["stock_code"])))
+    items = [
+        {
+            "rank": rank,
+            "stock_code": item["stock_code"],
+            "description": item["description"],
+            "amount": item["total_amount"],
+            "qty": item["qty"],
+            "orders": item["orders"],
+            "rows": item["rows"],
+            "bucket_count": item["bucket_count"],
+            "partial_buckets": item["partial_buckets"],
+            "share": (item["total_amount"] / window_total) if window_total else 0.0,
+        }
+        for rank, item in enumerate(products, start=1)
+    ]
+
+    scoped_total = float(scoped["_amount"].sum())
+    bucket_count = max((item["bucket_count"] for item in products), default=0)
+    partial_total = sum(item["partial_buckets"] for item in products)
+    facts: dict[str, Any] = {
+        "operation": "trend",
+        "granularity": granularity,
+        "product_codes": codes,
+        "product_count": len(codes),
+        "bucket_count": bucket_count,
+        "partial_buckets": partial_total,
+        "products": products,
+        "codes_missing": missing,
+        "selected_amount": scoped_total,
+        "total_amount": window_total,
+        "selected_share": (scoped_total / window_total) if window_total else 0.0,
+    }
+    notes = [
+        f"按{bucket_label}聚合，**每个商品分别聚合**（不做跨商品的合并序列）；"
+        "空档（没有销售的日子/周）**不补零**，所以点数可能少于自然天数/周数。",
+        "口径：含首尾全天；排除取消单、数量≤0、单价≤0 的行。",
+        "**桶不完整**的标记规则与销售额趋势**同一处代码**：区间没对齐桶边界时，"
+        "首尾桶只装了区间内的部分天数，点里的 `partial=true`、`covered_start~covered_end` "
+        "是它实际覆盖的范围 —— 拿它和整桶比高低会得出错的结论。",
+    ]
+    if missing:
+        notes.append(
+            f"**有 {len(missing)} 个商品编码在区间内没有任何有效成交**：{'、'.join(missing)} —— "
+            "它们的序列是空的（不是「卖得少」，是这段时间确实没有）。"
+        )
+    notes += _empty_window_note(int(len(rows)), start, end)
+    return {
+        "tool": PRODUCT_ANALYSIS_TOOL,
+        "params": {"start": start.isoformat(), "end": end.isoformat(), "operation": "trend",
+                   "product_codes": codes, "granularity": granularity},
+        "status": "ok",
+        "facts": facts,
+        "items": items,
+        "series": {"value_key": "amount", "granularity": granularity, "products": series_products},
+        "notes": notes,
+        "display": [
+            {"label": "统计商品数", "value": len(codes), "unit": "个", "format": "int"},
+            {"label": "时间桶数", "value": bucket_count, "unit": "个", "format": "int",
+             "note": f"按{bucket_label}"},
+            {"label": "桶不完整的点数", "value": partial_total, "unit": "个", "format": "int"},
+            {"label": "所选商品销售额合计", "value": scoped_total, "unit": currency_unit(), "format": "money"},
+            {"label": "区间总销售额（全部商品）", "value": window_total, "unit": currency_unit(), "format": "money"},
+            {"label": "所选商品占区间销售额", "value": facts["selected_share"] * 100, "unit": "%",
+             "format": "pct", "derived": True},
+        ],
+        "selfcheck": {
+            "per_product_point_sum_matches_total": all(
+                abs(item["point_sum"] - item["total_amount"]) <= max(_FLOAT_TOL, abs(item["total_amount"]) * _FLOAT_TOL)
+                for item in products
+            ),
+            "selected_le_total": scoped_total <= window_total + _FLOAT_TOL,
+            "missing_codes": missing,
+        },
+    }
+
+
+def _product_return(start: _dt.date, end: _dt.date, top_n: int) -> dict[str, Any]:
+    """退货 / 取消分析：**两个口径分开**，统一指标必须去重（并集）。
+
+    为什么不能用有效行算：退货/取消的行**正是**被 D16 三条排除规则挡掉的那些行
+    （数量≤0、单号以 C 开头），所以这里刻意用**区间内原始行**做分母，并写明这件事。
+
+    两个口径为什么不能相加：
+        Quantity < 0        = "数量是负的"（退货/冲销）
+        InvoiceNo 以 C 开头 = "这是一张取消单"
+    两者**可能重叠**（本数据集里 C 单一定同时是负数量行）。相加会把同一行算两遍 ——
+    所以要么分开看，要么看**去重后的并集** `return_or_cancel_*`。这里两样都给，且并集是
+    `neg | cancel` 真算出来的，不是 a+b。
+    """
+    window, _valid = _valid_window(start, end)
+    return_items: list[dict[str, Any]] = []
+    window_rows = int(len(window))
+    window_invoices = int(window["InvoiceNo"].nunique(dropna=True)) if window_rows else 0
+    negative_rows = cancel_rows = overlap_rows = union_rows = 0
+    union_invoices = 0
+    negative_amount = cancel_amount = union_amount = 0.0
+
+    if window_rows:
+        quantity = window["Quantity"]
+        negative = quantity < 0
+        cancel = engine_metrics.mask_cancelled(window)
+        union = negative | cancel
+        overlap = negative & cancel
+        amount = engine_metrics.line_amount(window)
+        negative_rows = int(negative.sum())
+        cancel_rows = int(cancel.sum())
+        overlap_rows = int(overlap.sum())
+        union_rows = int(union.sum())
+        negative_amount = float(amount[negative].sum())
+        cancel_amount = float(amount[cancel].sum())
+        union_amount = float(amount[union].sum())
+        union_invoices = int(window.loc[union, "InvoiceNo"].nunique(dropna=True))
+
+        # 商品维度：只在**并集行**上分组（同一行只算一次）—— 这是"去重"在商品层的落点
+        blocked = window.loc[union].copy()
+        blocked["_amount"] = amount[union]
+        blocked["_is_negative"] = negative[union].astype(bool)
+        blocked["_is_cancel"] = cancel[union].astype(bool)
+        grouped = blocked.groupby("StockCode", dropna=False)
+        union_table = grouped.agg(
+            return_rows=("InvoiceNo", "size"),
+            negative_rows=("_is_negative", "sum"),
+            cancel_rows=("_is_cancel", "sum"),
+            return_qty=("Quantity", "sum"),
+            return_amount=("_amount", "sum"),
+            orders=("InvoiceNo", "nunique"),
+        )
+        union_table["description"] = grouped["Description"].agg(
+            lambda series: _dominant_description(series.dropna())
+        )
+        union_table = union_table.sort_values(
+            ["return_rows", "StockCode"], ascending=[False, True], kind="mergesort"
+        )
+        return_items = [
+            {
+                "rank": rank,
+                "stock_code": str(index),
+                "description": str(row["description"]),
+                "return_rows": int(row["return_rows"]),
+                "negative_rows": int(row["negative_rows"]),
+                "cancel_rows": int(row["cancel_rows"]),
+                "return_qty": float(row["return_qty"]),
+                "return_amount": float(row["return_amount"]),
+                "orders": int(row["orders"]),
+                "share": (float(row["return_rows"]) / union_rows) if union_rows else 0.0,
+            }
+            for rank, (index, row) in enumerate(union_table.head(top_n).iterrows(), start=1)
+        ]
+
+    rate = (lambda part: (part / window_rows) if window_rows else 0.0)
+    facts: dict[str, Any] = {
+        "operation": "return",
+        "top_n": int(top_n),
+        "window_rows": window_rows,
+        "window_invoices": window_invoices,
+        # ── 口径一：数量为负 ───────────────────────────────────────────
+        "negative_quantity_rows": negative_rows,
+        "negative_quantity_rate": rate(negative_rows),
+        "negative_quantity_amount": negative_amount,
+        # ── 口径二：C 取消单 ──────────────────────────────────────────
+        "cancel_invoice_rows": cancel_rows,
+        "cancel_invoice_rate": rate(cancel_rows),
+        "cancel_invoice_amount": cancel_amount,
+        # ── 两者的重叠与去重后的并集（不许相加）──────────────────────
+        "overlap_rows": overlap_rows,
+        "return_or_cancel_rows": union_rows,
+        "return_or_cancel_row_rate": rate(union_rows),
+        "return_or_cancel_invoices": union_invoices,
+        "return_or_cancel_invoice_rate": (union_invoices / window_invoices) if window_invoices else 0.0,
+        "return_or_cancel_amount": union_amount,
+        "definition": {
+            "negative_quantity_rate": "Quantity < 0 的行 ÷ 区间内原始行数",
+            "cancel_invoice_rate": "InvoiceNo 以 C 开头的行 ÷ 区间内原始行数",
+            "return_or_cancel_row_rate": "(Quantity < 0 或 InvoiceNo 以 C 开头) 的行 ÷ 区间内原始行数（**去重**）",
+            "denominator": "区间内**原始行**（不套 D16 排除规则 —— 退货/取消正是被那些规则挡掉的行）",
+        },
+    }
+    notes = [
+        f"**两个口径分开看，不许相加**：数量为负（Quantity < 0）与取消单（单号以 C 开头）"
+        f"是两种不同的业务信号，在本区间里前者 {negative_rows} 行、后者 {cancel_rows} 行，"
+        f"而**两者重叠**（同时满足）的有 {overlap_rows} 行 —— 直接相加会把这 {overlap_rows} 行算两遍。",
+        f"统一指标 `return_or_cancel_*` 是**去重后的并集**（真算的并集，不是 a+b）："
+        f"{union_rows} 行 / 占区间行数 {facts['return_or_cancel_row_rate'] * 100:.2f}%。",
+        f"分母是**区间内原始行**（{window_rows} 行），没有套 D16 的排除规则 ——"
+        f"退货/取消恰恰就是被那三条规则排除掉的行，套上去分母就空了。",
+        _NONPRODUCT_NOTE,
+    ]
+    notes += _empty_window_note(window_rows, start, end)
+    return {
+        "tool": PRODUCT_ANALYSIS_TOOL,
+        "params": {"start": start.isoformat(), "end": end.isoformat(), "operation": "return",
+                   "top_n": int(top_n)},
+        "status": "ok",
+        "facts": facts,
+        "items": return_items,
+        "notes": notes,
+        "display": [
+            {"label": "区间内原始行数", "value": window_rows, "unit": "行", "format": "int"},
+            {"label": "数量为负的行占比", "value": facts["negative_quantity_rate"] * 100, "unit": "%",
+             "format": "pct"},
+            {"label": "取消单（C 开头）行占比", "value": facts["cancel_invoice_rate"] * 100, "unit": "%",
+             "format": "pct"},
+            {"label": "退货或取消的行占比（去重）", "value": facts["return_or_cancel_row_rate"] * 100,
+             "unit": "%", "format": "pct", "derived": True},
+            {"label": "两个口径重叠的行数", "value": overlap_rows, "unit": "行", "format": "int"},
+            {"label": "退货/取消涉及金额（负值）", "value": union_amount, "unit": currency_unit(),
+             "format": "money"},
+        ],
+        "selfcheck": {
+            "union_equals_dedup": union_rows == negative_rows + cancel_rows - overlap_rows,
+            "union_le_window": union_rows <= window_rows,
+            "overlap_le_each": overlap_rows <= min(negative_rows, cancel_rows),
+            "negative_plus_cancel_if_summed": negative_rows + cancel_rows,
+            "double_count_if_summed": overlap_rows,
+        },
+    }
+
+
+def product_analysis(
+    start: _dt.date,
+    end: _dt.date,
+    operation: str = "top",
+    metric: str = "sales_amount",
+    top_n: int = 5,
+    product_codes: tuple[str, ...] = (),
+    granularity: str = "day",
+) -> dict[str, Any]:
+    """商品维度的三种确定性分析（`operation` 决定做哪一种）：top / trend / return。"""
+    if operation not in PRODUCT_OPERATIONS:
+        raise ValueError(f"product_analysis 只支持 {list(PRODUCT_OPERATIONS)}，收到 {operation!r}")
+    if metric not in PRODUCT_TOP_METRICS:
+        raise ValueError(f"metric 只支持 {list(PRODUCT_TOP_METRICS)}，收到 {metric!r}")
+    if len(product_codes) > PRODUCT_TREND_MAX_CODES:
+        raise ValueError(
+            f"product_codes 最多 {PRODUCT_TREND_MAX_CODES} 个（收到 {len(product_codes)} 个）——"
+            "一次比太多商品的趋势，图与表都读不了"
+        )
+    if operation == "top":
+        return _product_top(start, end, metric, top_n)
+    if operation == "trend":
+        return _product_trend(start, end, tuple(product_codes), granularity)
+    return _product_return(start, end, top_n)
+
+
+# ════════════════════════════════════════════════════════════════════════
 # 白名单注册表（service.py 只认这张表 —— 表外的东西调不动）
 # ════════════════════════════════════════════════════════════════════════
 @dataclass(frozen=True)
@@ -1202,6 +2162,22 @@ TOOLS: dict[str, ToolSpec] = {
         description="某时间段各国家销售额分布 TOP N + 占比（**不做变化归因**）",
         run=sales_breakdown_by_country,
     ),
+    # ── TASK-006：客户 / 商品（**各一个 Intent，用 operation 收口**）───────────
+    CUSTOMER_ANALYSIS_TOOL: ToolSpec(
+        name=CUSTOMER_ANALYSIS_TOOL,
+        title="客户分析",
+        description="客户维度（operation=top 客户排行 / purchase_frequency 购买频次 / "
+                    "repeat_rate 复购率 / new_customers 数据集内新客 / inactive_customers 沉睡客户）；"
+                    "**只覆盖有 CustomerID 的成交**，结果自带覆盖率说明；不含 VIP/等级/行业/地区",
+        run=customer_analysis,
+    ),
+    PRODUCT_ANALYSIS_TOOL: ToolSpec(
+        name=PRODUCT_ANALYSIS_TOOL,
+        title="商品分析",
+        description="商品维度（operation=top 商品排行 / trend 指定商品趋势 / return 退货与取消分析）；"
+                    "top 与既有产品排行同源，退货按「数量为负」「取消单」两个口径分开给",
+        run=product_analysis,
+    ),
 }
 
 
@@ -1218,14 +2194,26 @@ __all__ = [
     "ATTRIBUTION_TOP_N",
     "COMPARISON_TYPES",
     "CONTRIBUTION_DENOMINATOR_NOTE",
+    "CUSTOMER_ANALYSIS_TOOL",
+    "CUSTOMER_OPERATIONS",
+    "CUSTOMER_TOP_METRICS",
     "DATASET_CURRENCY",
+    "DEFAULT_INACTIVE_DAYS",
+    "PRODUCT_ANALYSIS_TOOL",
+    "PRODUCT_OPERATIONS",
+    "PRODUCT_TOP_METRICS",
+    "PRODUCT_TREND_MAX_CODES",
+    "TOP_PRODUCTS_TOOL",
     "TOOLS",
     "ToolSpec",
     "WEEK_START_WEEKDAY",
     "build_attribution",
+    "build_customer_scope",
     "currency_unit",
+    "customer_analysis",
     "dataset_bounds",
     "dataset_profile",
+    "product_analysis",
     "reset_cache",
     "resolve_compare_windows",
     "run_tool",
