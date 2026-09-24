@@ -212,7 +212,6 @@ button { font-family: inherit; }
 .nl-entry input:focus { border-color: var(--td-brand-color); background: var(--td-brand-color-focus); }
 .nl-entry input::placeholder { color: var(--text-3); }
 .nl-entry input:disabled { color: var(--text-4); cursor: not-allowed; }
-.nl-note { font-size: 11px; color: var(--text-2); white-space: nowrap; }
 
 .icon-btn {
   background: var(--bg-inset); border: 1px solid var(--border); color: var(--text-2);
@@ -556,12 +555,19 @@ button { font-family: inherit; }
   .rightpanel { border-left: 0; border-top: 1px solid var(--border); }
   .tri-row, .duo-row { grid-template-columns: minmax(0, 1fr); }
   .hero { grid-template-columns: minmax(0, 1fr); }
-  .nl-entry .nl-note, .brand-sub { display: none; }
+  .brand-sub { display: none; }
+  /* 数据源**不隐藏**，只收窄 + 省略号（hover 有完整信息）：
+     隐藏等于让用户看不到自己在哪个数据源上算数 */
+  .topbar .chip { max-width: 150px; }
 }
 @media (max-width: 860px) {
   .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid2 { grid-template-columns: minmax(0, 1fr); }
-  .nl-entry { display: none; }
+  /* 提问框继续保持可用（它是顶栏的核心入口）：只把最小宽度放小、品牌文字让位。
+     数据源的收窄规则与 ≤1100px 那条同源，不再重复写（写在后面会互相覆盖）。 */
+  .topbar { gap: 8px; padding: 0 10px; }
+  .topbar .brand-text { display: none; }
+  .topbar .nl-entry input { min-width: 80px; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -703,12 +709,13 @@ button { font-family: inherit; }
 .menu-item:disabled { color: var(--text-4); cursor: not-allowed; }
 .menu-sep { height: 1px; background: var(--border); margin: 6px 4px; }
 
-/* 顶栏的三个弹性元素：数据源可截断、提问框吃满剩余宽度 */
+/* 顶栏只留 5 个元素：Logo / 数据源 / 提问框（吃满剩余宽度）/ ☰ / 用户区。
+   分工：数据源可截断（hover 看全），提问框吃满剩余宽度，其余一律 flex: 0 0 auto —— 不换行、
+   不压缩，所以按钮文字永远不会被挤成竖排单字（用户反馈过的遮挡问题）。 */
 .topbar .chip { flex: 0 1 auto; min-width: 0; max-width: 260px; overflow: hidden; }
 .topbar .chip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topbar .nl-entry { flex: 1 1 auto; min-width: 0; }
 .topbar .nl-entry input { flex: 1 1 auto; min-width: 120px; width: auto; }
-.topbar .nl-note { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; max-width: 380px; }
 .topbar .btn, .topbar .icon-btn { flex: 0 0 auto; white-space: nowrap; }
 
 /* 表格工具条：一行放不下就换行（换行也不会切字） */
@@ -770,7 +777,8 @@ button { font-family: inherit; }
   .topbar .nl-note { display: none; }        /* 先让说明文字让位，别挤按钮 */
 }
 @media (max-width: 1100px) {
-  .topbar .chip span:last-child { display: none; }   /* 再窄就只留状态点（hover 仍有完整信息） */
+  /* 收窄而不是隐藏：数据源名称用省略号收尾，鼠标悬停仍有完整名字 */
+  .topbar .chip { max-width: 180px; }
   .brand-sub { display: none; }
   .user-name { display: none; }
 }

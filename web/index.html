@@ -34,12 +34,12 @@
       <span id="datasource-label">数据源：读取中…</span>
     </div>
 
+    <!-- 提问框**吃满剩余宽度**：能力清单那种长文案不在顶栏里铺 ——
+         它会把「分析」按钮挤成竖排单字（用户反馈过的遮挡问题）。
+         能力说明放在首页「本版支持…」那一行（hero-nl-note），由后端能力清单填充。 -->
     <div class="nl-entry">
       <input id="nl-input" type="text" placeholder="用自然语言提问，例如「2011年11月卖了多少」" autocomplete="off">
       <button id="nl-ask" class="btn btn-primary btn-sm">分析</button>
-      <!-- 这句是 JS 还没跑起来时的兜底文案；renderNlNote() 会用后端能力清单覆盖它。
-           两处都不写「LLM」——业务界面上只说「模型」，不说内部组件名。 -->
-      <span class="nl-note" id="nl-note">自然语言入口：可问销售汇总 / 趋势 / 产品排行 / 区间比较 / 国家分布（数字全部由程序算，文字由模型整理）</span>
     </div>
 
     <div class="topbar-actions">
@@ -75,8 +75,7 @@
       <a class="nav-item" id="nav-settings" href="#/settings"><span class="nav-ico">⚙</span>系统设置</a>
     </nav>
 
-    <!-- 左下角原来那三行（版本号 / 角色 / 权限与安全未启用）已撤掉：
-         它们是实现细节，不是用户要看的东西（前端展示规范）。 -->
+    <!-- 左下角不做版本号 / 角色 / 权限声明：那些是实现细节，不是用户要看的东西。 -->
   </aside>
 
   <!-- ═══ 中央工作区 ══════════════════════════════════════════════════ -->
@@ -113,7 +112,7 @@
         </div>
       </div>
 
-      <!-- 区块A2 · 自然语言问答（TASK-004）：完整链路，可折叠 -->
+      <!-- 区块A2 · 自然语言问答：完整链路，可折叠 -->
       <div class="card" id="chat-panel">
         <div class="card-head">
           <h2>自然语言问答</h2>
@@ -225,20 +224,24 @@
             <div class="empty-hint">核心结论只从真实执行记录里提取（销售额 / 覆盖行数 / 排除行数 / 耗时）。</div>
           </div>
         </div>
+        <!-- 这两张卡片是**真表格**（按销售额取前 5 名，数字与排序都来自后端），
+             不是一句"去别处看"的说明 —— 首页就该一眼看到客户与产品的真实情况。 -->
         <div class="card">
-          <div class="card-head"><h2>客户 TOP5</h2></div>
-          <div class="empty">
+          <div class="card-head"><h2>客户 TOP5</h2><a class="muted-sm" href="#/customers">查看全部客户</a></div>
+          <div id="ov-customers"></div>
+          <div class="empty" id="ov-customers-empty">
             <div class="empty-ico">◍</div>
-            <div class="empty-title">客户分析在「自然语言问答」里直接用</div>
-            <div class="empty-hint">客户排行、购买频次、复购率、数据集内新客、沉睡客户都能问（例：2011年11月销售额最高的10个客户）。本卡片不单独铺一张客户表。</div>
+            <div class="empty-title">还没有读到客户数据</div>
+            <div class="empty-hint">按销售额取前 5 名客户；完整客户表（可按客户号搜索、翻页、导出）在「客户分析」页。</div>
           </div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>产品排行</h2></div>
-          <div class="empty">
+          <div class="card-head"><h2>产品排行 TOP5</h2><a class="muted-sm" href="#/products">查看全部产品</a></div>
+          <div id="ov-products"></div>
+          <div class="empty" id="ov-products-empty">
             <div class="empty-ico">◈</div>
-            <div class="empty-title">商品分析在「自然语言问答」里直接用</div>
-            <div class="empty-hint">商品排行、指定商品趋势、退货与取消分析都能问（例：2011年11月各商品的退货情况，前10名）。本卡片不单独铺一张商品表。</div>
+            <div class="empty-title">还没有读到商品数据</div>
+            <div class="empty-hint">按销售额取前 5 名商品；完整产品表（含退货列，可搜索、翻页、导出）在「产品分析」页。</div>
           </div>
         </div>
       </div>
@@ -486,7 +489,7 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>② 建任务（把报表规格冻结下来）</h2></div>
+        <div class="card-head"><h2>② 建任务（把任务口径定下来）</h2></div>
         <div class="grid2">
           <label class="field">任务名称<input id="task-name" type="text" placeholder="例如：上周销售汇总"></label>
           <label class="field">数据文件<select id="task-file-id"><option value="">（还没有上传文件）</option></select></label>
@@ -505,21 +508,22 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>③ 报表规格（建任务时冻结下来，之后不会变）</h2></div>
+        <div class="card-head"><h2>③ 任务口径（建任务时定下来，之后不会变）</h2></div>
         <div class="row">
           <label class="field">选择任务
             <select id="task-select"><option value="">（还没有任务）</option></select>
           </label>
           <button id="btn-reload-tasks" class="btn">刷新任务列表</button>
         </div>
-        <div class="table-wrap" id="spec-json-wrap" hidden>
+        <!-- 这里原来直接铺一段规格 JSON —— 用户看到的应该是**业务口径**（用哪个文件、
+             哪段时间、算哪些指标），不是一串参数对象。技术实现留在代码与后端记录里。 -->
+        <div class="table-wrap" id="spec-summary" hidden>
           <div class="spec-meta" id="spec-meta"></div>
-          <pre class="code" id="spec-json"></pre>
         </div>
         <div class="empty" id="spec-empty">
           <div class="empty-ico">▤</div>
           <div class="empty-title">还没有选中任何任务</div>
-          <div class="empty-hint">先上传数据并建一个任务；选中后这里显示的就是这条任务冻结下来的取数规格（刷新后重新读取）。</div>
+          <div class="empty-hint">先上传数据并建一个任务；选中后这里显示这条任务定下来的数据口径（刷新后重新读取）。</div>
         </div>
       </div>
 
@@ -548,7 +552,7 @@
         <div class="row"><button id="btn-refresh-exec" class="btn">刷新</button></div>
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>执行编号</th><th>任务</th><th>状态</th><th class="num">销售额</th><th class="num">行数</th><th>时间</th></tr></thead>
+            <thead><tr><th>记录号</th><th>任务</th><th>状态</th><th class="num">销售额</th><th class="num">行数</th><th>时间</th></tr></thead>
             <tbody id="exec-table-body"></tbody>
           </table>
         </div>
@@ -562,11 +566,10 @@
       </details>
 
       <!--
-        ── 文档资料（TASK-003）────────────────────────────────────────────
+        ── 文档资料（Word / PDF）──────────────────────────────────────────
         与上面 ①~⑤ 那条"表格 → 算数 → 出 xlsx"的报表链路**不是一个东西**：
         这里收的是 Word / PDF 这类**文字资料**，产物是**可读的正文**（不是报表文件）。
-        所以它单独一张卡片、单独一条管道（/api/documents*，与 /api/upload 平行），
-        上面那条冻结的报表链路一个字段都没动。
+        所以它单独一张卡片、单独一条管道，上面那条报表链路的字段一个都没动。
       -->
       <div class="card">
         <div class="card-head"><h2>文档资料（Word / PDF）</h2><span class="muted-sm">真实文本提取</span></div>
@@ -591,7 +594,7 @@
           <div class="empty-hint">上传一份 Word 或 PDF，提取出来的正文会显示在这里。提不出文字的文件（扫描件、空文档）不算成功，不会被记成一条。</div>
         </div>
 
-        <!-- 正文查看器：只有点了「看正文」才出现，内容一律来自 GET /api/documents/{id}/text -->
+        <!-- 正文查看器：只有点了「看正文」才出现，内容一律来自后端的全文接口 -->
         <div id="doc-viewer" hidden>
           <div class="card-head"><h3 id="doc-viewer-title">正文</h3><span class="muted-sm" id="doc-viewer-meta"></span></div>
           <pre class="code doc-text" id="doc-viewer-text"></pre>
@@ -653,7 +656,7 @@
         <div class="rp-conclusion-q" id="ai-conclusion-question"></div>
         <div class="rp-conclusion-facts" id="ai-conclusion-facts"></div>
         <div class="rp-conclusion-why" id="ai-conclusion-why"></div>
-        <button class="btn btn-sm" id="btn-ai-conclusion">看完整链路</button>
+        <button class="btn btn-sm" id="btn-ai-conclusion">看完整回答</button>
       </div>
     </div>
 

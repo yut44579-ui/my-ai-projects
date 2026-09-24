@@ -873,10 +873,22 @@ def test_AC09_新端点与既有端点并存():
     }
     assert new_paths <= paths
 
-    # 端点总清单**精确**钉死：TASK-004 只许新增上面这 4 条，
+    # STEP A 申报新增的 6 条：业务表读 / 导出 / 数据源列表 / 单个数据源 / 导入检查 / 导入登记。
+    # 它们与既有端点零交集（新文件 api_datasets.py、新前缀 /api/tables），旧端点语义一个字没动。
+    stepa_paths = {
+        "/api/tables/{table}",
+        "/api/tables/{table}/export",
+        "/api/datasets",
+        "/api/datasets/{dataset_id}",
+        "/api/datasets/inspect",
+        "/api/datasets/import",
+    }
+    assert stepa_paths <= paths
+
+    # 端点总清单**精确**钉死：TASK-004 许新增上面那 4 条、STEP A 许新增这 6 条，
     # 其余路径（TASK-002C/002D 的 10 个 + TASK-003 的 4 个）必须原样还在。
     # 用集合相等而不是"包含若干条"：新增一条没申报的路径也会在这里被抓住。
-    assert paths - new_paths == {
+    assert paths - new_paths - stepa_paths == {
         "/api/upload", "/api/schema", "/api/execute", "/api/download/{execution_id}",
         "/api/executions", "/api/health",
         "/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/run",

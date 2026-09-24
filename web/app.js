@@ -79,7 +79,6 @@
     return `${(value / 1024 / 1024).toFixed(2)} MB`;
   };
   const fmtTime = (iso) => (iso ? String(iso).replace("T", " ").slice(0, 19) : "—");
-  const shortHash = (hash) => (hash ? `${String(hash).slice(0, 12)}…` : "—");
   const text = (value) => (value === null || value === undefined || value === "" ? "—" : String(value));
 
   function show(el) { if (el) el.hidden = false; }
@@ -482,9 +481,9 @@
         ` · 销售额 <b>${currencySymbol()}${fmtMoney(latest.amount_display)}</b>`,
       `覆盖 ${fmtInt(latest.rows_in_range)} 行：有效 ${fmtInt(latest.rows_valid)} 行，排除 ${fmtInt(latest.rows_excluded)} 行` +
         `（排除金额 ${fmtMoney(latest.excluded_amount)}）`,
-      `数据快照：${latest.data_snapshot_match ? "哈希一致" : "哈希不一致"}（${escapeHtml(shortHash(latest.data_sha256))}）`,
-      `产出：${escapeHtml(text(latest.excel_rel_path))} · ${fmtBytes(latest.excel_size_bytes)}` +
-        ` · 单元格回读校验 ${verification.passed ? "通过" : "未通过"}`,
+      `数据来源：${latest.data_snapshot_match ? "与登记时一致" : "与登记时不一致（请核对数据文件）"}`,
+      `报表文件已生成（${fmtBytes(latest.excel_size_bytes)}）` +
+        ` · 内容校验${verification.passed ? "通过" : "未通过"}`,
       `执行耗时 ${text(latest.seconds)} 秒`,
     ];
     items.forEach((html) => {
@@ -616,14 +615,11 @@
     if (!body) return;
     clear(body);
     [
-      ["文档编号", payload.doc_id],
       ["文件名", payload.filename],
       ["字符数", fmtInt(payload.chars)],
       ["块数", `${fmtInt(payload.blocks)} ${payload.block_unit || ""}`.trim()],
       ["标题", payload.title || "（未识别到标题）"],
-      ["数据哈希", payload.sha256],
-      ["落盘大小", fmtBytes(payload.size_bytes)],
-      ["落盘路径", payload.stored_path],
+      ["文件大小", fmtBytes(payload.size_bytes)],
     ].forEach(([key, value]) => {
       const row = document.createElement("tr");
       cell(row, key);
@@ -714,7 +710,7 @@
     // 摘要方法/说明也来自后端（前端不自己编）
     const note = document.createElement("p");
     note.className = "note";
-    note.textContent = `${summary.method || ""} · ${summary.note || ""} · 生成于 ${fmtTime(summary.generated_at)} · 原文 ${shortHash(summary.input_sha256)}`;
+    note.textContent = `${summary.method || ""} · ${summary.note || ""} · 生成于 ${fmtTime(summary.generated_at)}`;
     box.appendChild(note);
     show(box);
   }
@@ -894,8 +890,7 @@
 
   function renderSpec() {
     const task = state.selectedTask;
-    const wrap = $("spec-json-wrap");
-    const pre = $("spec-json");
+    const wrap = $("spec-summary");
     const meta = $("spec-meta");
     if (!task) {
       hide(wrap);
@@ -905,7 +900,7 @@
     }
     show(wrap);
     hide($("spec-empty"));
-    if (pre) pre.textContent = JSON.stringify(task.spec || {}, null, 2);
+    // 只画**业务口径**（哪个文件 / 哪段时间 / 算哪些指标），不把内部规格对象铺到界面上
     if (meta) {
       clear(meta);
       const summary = task.spec_summary || {};
@@ -1675,12 +1670,10 @@
     if (!body) return;
     clear(body);
     [
-      ["文件编号", payload.file_id],
       ["文件名", payload.filename],
       ["行数", fmtInt(payload.rows)],
       ["列数", fmtInt(payload.columns)],
-      ["数据哈希", payload.sha256],
-      ["落盘大小", fmtBytes(payload.size_bytes)],
+      ["文件大小", fmtBytes(payload.size_bytes)],
     ].forEach(([key, value]) => {
       const row = document.createElement("tr");
       cell(row, key);
@@ -1698,7 +1691,7 @@
     const metrics = [...document.querySelectorAll("#task-metrics input:checked")];
     const reasons = [];
     if (!name) reasons.push("填任务名称");
-    if (!fileId) reasons.push("先上传数据（或填文件编号）");
+    if (!fileId) reasons.push("先选择数据文件");
     if (!start || !end) reasons.push("选开始与结束日期");
     if (start && end && start > end) reasons.push("结束日期不能早于开始日期");
     if (!metrics.length) reasons.push("至少选一个指标");
@@ -1787,7 +1780,8 @@
       ? `金额单位：${currency.name}${currency.symbol ? `（${currency.symbol}，${currency.code || ""}）` : ""}`
       : "";
 
-    setText("nl-note", `自然语言入口：可问 ${allNames}（数字全部由程序算，文字由模型整理）`);
+    // 顶栏不再铺这段长文案（它会把「分析」按钮挤成竖排单字）——
+    // 能力清单只写在首页这一行，用户看得全，顶栏也不会被遮挡。
     setText(
       "hero-nl-note",
       `本版支持 ${allNames}；数据范围 ${text(profile.first_day)} ~ ${text(profile.last_day)}，`
@@ -2272,6 +2266,72 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════
+  // 首页「客户 TOP5 / 产品排行 TOP5」：**真数据**，不是一句"去别处看"
+  //
+  // 取数与业务表**同一个后端查询**（page_size=5 + 后端排序）—— 前端只渲染，
+  // 不拿全量数据自己排（那会形成第二套计算路径）。
+  // ══════════════════════════════════════════════════════════════════════
+  const OVERVIEW_TOPS = [
+    { table: "customers", rootId: "ov-customers", emptyId: "ov-customers-empty",
+      keys: ["customer_id", "sales_amount", "order_count"] },
+    { table: "products", rootId: "ov-products", emptyId: "ov-products-empty",
+      keys: ["stock_code", "description", "sales_amount"] },
+  ];
+
+  function renderMiniTable(rootId, payload, keys) {
+    const root = $(rootId);
+    if (!root) return 0;
+    clear(root);
+    const columns = (payload.columns || []).filter((column) => keys.indexOf(column.key) >= 0);
+    const rows = payload.items || [];
+    if (!rows.length) return 0;
+    const table = document.createElement("table");
+    table.className = "table";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    columns.forEach((column) => {
+      const th = document.createElement("th");
+      th.textContent = column.label || column.key;
+      if (column.align === "right") th.className = "num";
+      headRow.appendChild(th);
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+    const body = document.createElement("tbody");
+    rows.forEach((item) => {
+      const row = document.createElement("tr");
+      columns.forEach((column) => {
+        const td = cell(row, formatCell(item[column.key], column.format));
+        if (column.align === "right") td.className = "num";
+      });
+      body.appendChild(row);
+    });
+    table.appendChild(body);
+    const wrap = document.createElement("div");
+    wrap.className = "table-wrap";
+    wrap.appendChild(table);
+    root.appendChild(wrap);
+    return rows.length;
+  }
+
+  async function renderOverviewTops() {
+    for (const spec of OVERVIEW_TOPS) {
+      let payload = null;
+      try {
+        payload = await API.readTable(spec.table, {
+          page: 1, page_size: 5, sort: "sales_amount", order: "desc",
+        });
+      } catch (err) {
+        payload = null;
+      }
+      const shown = payload ? renderMiniTable(spec.rootId, payload, spec.keys) : 0;
+      const box = $(spec.rootId);
+      if (box) box.hidden = shown === 0;
+      toggleEmpty(spec.emptyId, shown > 0);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
   // 数据源列表 + 导入向导（数据管理页）
   // ══════════════════════════════════════════════════════════════════════
   async function loadDatasets() {
@@ -2523,6 +2583,7 @@
     await refreshAll();
     if (state.selectedTaskId) await selectTask(state.selectedTaskId);
     renderDatasets();
+    await renderOverviewTops();
     ensureTableLoaded(state.route);
     // 深链提问放在最后：能力清单与页面骨架都已就绪，自动提问走的是**和手动点击
     // 完全同一条**链路（同样的 askQuestion、同样的渲染）。

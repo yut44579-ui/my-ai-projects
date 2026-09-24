@@ -498,3 +498,131 @@ def test_T006_客户与商品页不再写尚未接入() -> None:
     assert "客户聚合与排行尚未接入" not in html
     # 替代文案必须把用户指到真能用的入口
     assert "自然语言问答" in html
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑬ STEP A：真表格 / 顶栏重排 / 前端清理 / 导入导出工作流
+#
+# 这些是**静态**检查（能在没有浏览器时抓住"改回去"）：真实的表格内容、后端排序、
+# 分页数字、导出文件由 scripts/stepa_e2e.py 打真服务 + 真浏览器验（那份是真证据）。
+# ════════════════════════════════════════════════════════════════════════
+STEPA_TABLES = ("customers", "products", "sales", "raw")
+
+
+def test_STEPA_四张业务表都有容器与空状态() -> None:
+    html, js = read("index.html"), read("app.js")
+    for table in STEPA_TABLES:
+        assert f'id="tbl-{table}"' in html, f"少了 {table} 表的容器"
+        assert f'id="tbl-{table}-empty"' in html, f"{table} 表没有空状态"
+    # 四张表的规格由**一处**定义（表名 / 容器 / 空状态 / 搜索列）
+    assert "TABLE_SPECS" in js
+    for table in STEPA_TABLES:
+        assert f'table: "{table}"' in js, f"TABLE_SPECS 里没有 {table}"
+
+
+def test_STEPA_分页排序筛选导出全部走后端() -> None:
+    """前端只做「用户操作 → 请求参数 → 渲染结果」，绝不拿已有数据自己排。
+
+    这条钉的是评审的硬条件：前端排序会形成第二套计算路径（HTTP API = A、页面 = B）。
+    """
+    js = read("app.js")
+    assert "API.readTable(" in js, "业务表没有走 /api/tables/{table}"
+    assert "API.exportTable(" in js, "导出没有走 /api/tables/{table}/export"
+    # 点表头 → 改 sort/order → **重新请求**（不是本地重排）
+    assert "panel.query.sort = column.key" in js
+    assert "panel.query.page = 1" in js and "panel.load()" in js
+    assert "API.readTable(spec.table, params)" in js
+    # 表格行**从不**在前端被排序 / 分页切片
+    for forbidden in ("items.sort(", "items.slice(", ".localeCompare(b.sales_amount"):
+        assert forbidden not in js, f"前端在拿已取回的行自己排：{forbidden}"
+
+
+def test_STEPA_销售表是一张表_维度与指标() -> None:
+    """不许做成 daily/weekly/country 三个重复页面：一张表切维度与指标。"""
+    html, js = read("index.html"), read("app.js")
+    assert 'SALES_DIMENSIONS = [["day", "按日"], ["week", "按周"], ["country", "按国家"]]' in js
+    for metric in ("销售额", "订单数", "客户数", "客单价"):
+        assert f'"{metric}"' in js, f"指标里少了「{metric}」"
+    for dimension in ("day", "week", "country"):
+        assert f'"{dimension}"' in js
+    # 只有一张销售表容器，也没有 daily_sales / weekly_sales / country_sales 这类页面
+    assert html.count('id="tbl-sales"') == 1
+    for stray in ("daily_sales", "weekly_sales", "country_sales"):
+        assert stray not in html and stray not in js, f"出现了重复页面：{stray}"
+    # 换维度 / 指标要重新向后端要数据（不是前端换列名）
+    assert "dimensionSelect.addEventListener" in js and "metricSelect.addEventListener" in js
+
+
+def test_STEPA_原始数据默认只给一页() -> None:
+    """54 万行不许默认全塞：原始数据是第二层的独立入口，默认 50 行。"""
+    html, js = read("index.html"), read("app.js")
+    assert "TABLE_PAGE_SIZES = [20, 50, 100, 200]" in js
+    assert "page_size: 50" in js, "业务表默认不是 50 行一页"
+    assert 'href="#/raw"' in html, "原始数据不是独立入口"
+    assert "原始数据" in html
+
+
+def test_STEPA_顶栏只剩五件套且不切字() -> None:
+    """用户反馈的「UI 排布顺序以及视野方面受到严重遮挡」：8 个元素硬塞 → 按钮被压成单字。"""
+    html, css = read("index.html"), read("style.css")
+    top = re.search(r'<header class="topbar".*?</header>', html, re.S)
+    assert top, "找不到顶栏"
+    top_html = top.group(0)
+    for piece in ('class="brand"', 'id="datasource-chip"', 'id="nl-input"',
+                  'id="nl-ask"', 'id="btn-menu"', 'class="user-area"'):
+        assert piece in top_html, f"顶栏少了 {piece}"
+    # 能力清单那种长文案不在顶栏（它会把「分析」挤成竖排残字）
+    assert 'id="nl-note"' not in top_html
+    assert "hero-nl-note" in html, "顶栏撤掉的说明没有落到首页（能力清单得有地方显示）"
+    # 弹性分工：提问框吃满剩余宽度；按钮一律不压缩、不换行
+    assert ".topbar .nl-entry input { flex: 1 1 auto" in css
+    assert ".topbar .btn, .topbar .icon-btn { flex: 0 0 auto; white-space: nowrap; }" in css
+    # 窄窗口下只收窄（省略号 + hover），不许把提问框整块藏起来
+    assert ".nl-entry { display: none" not in css
+    assert "text-overflow: ellipsis" in css
+
+
+def test_STEPA_页面不出现技术实现信息() -> None:
+    """用户铁律（docs/前端展示规范.md）：技术实现留在代码里，界面上只给业务内容。
+
+    只查"会画到屏幕上的东西"——注释与后端字段名不算（先剥注释）。
+    `openapi` 只作为**比较用的枚举值**出现在 app.js 里（判断清单是否同步），不渲染，故不在名单；
+    `file_id` 是后端字段名（属性访问），也不渲染，所以这里钉的是**渲染出来的标签**。
+    """
+    html, js = strip_comments(read("index.html")), strip_comments(read("app.js"))
+    for text, name in ((html, "index.html"), (js, "app.js")):
+        for banned in ("TASK-", "/api/", "sha256", "哈希", "stored_path",
+                       "数字闸门", "白名单", "Repository", "Executor", "pytest"):
+            assert banned not in text, f"{name} 里还有技术实现信息：{banned}"
+    # 以前挂在页面上的字段标签（哈希 / 文件编号 / 落盘路径）连字符串都不许留
+    for label in ("数据哈希", "文件编号", "落盘路径", "文档编号"):
+        assert label not in html and label not in js, f"页面上还有「{label}」"
+    assert "shortHash" not in js, "短哈希辅助函数没删干净（删了才不会再被拼进页面）"
+    # 首页两张卡改成真表格，不再写"本卡片不单独铺一张表"这种实现说明
+    assert "不单独铺一张" not in html and "本卡片不单独" not in html
+
+
+def test_STEPA_首页客户与产品是真数据() -> None:
+    """用户原话：需要像 Excel 表格那样有实际数据来反映客户真实情况。"""
+    html, js = read("index.html"), read("app.js")
+    for root in ("ov-customers", "ov-products"):
+        assert f'id="{root}"' in html and f'id="{root}-empty"' in html
+    # 取数与业务表同一个后端查询（page_size=5 + 后端排序），前端只渲染
+    assert "API.readTable(spec.table" in js
+    assert 'page_size: 5' in js and 'sort: "sales_amount"' in js
+    assert "renderOverviewTops" in js
+
+
+def test_STEPA_导入向导工作流与诚实边界() -> None:
+    """上传 → 检查（工作表/前 N 行/字段映射）→ 登记；后端没实现的能力必须如实说。"""
+    html, js = read("index.html"), read("app.js")
+    for control in ("ds-file-input", "ds-inspect", "ds-sheet", "ds-name",
+                    "ds-preview-table", "ds-preview-count", "ds-mapping",
+                    "btn-ds-inspect", "btn-ds-import", "ds-import-result"):
+        assert f'id="{control}"' in html, f"导入向导少了 {control}"
+    assert "API.inspectDataset(" in js and "API.importDataset(" in js
+    # 登记结果照抄后端的话（"分析未开通"），不美化成"导入成功即可分析"
+    assert "analysis_note" in js
+    # 数据集输入 vs 文档输入：两个入口、两类后缀，没有把上传升级成万能入口
+    assert 'accept=".xlsx,.xlsm,.csv"' in html
+    assert 'accept=".docx,.pdf"' in html
