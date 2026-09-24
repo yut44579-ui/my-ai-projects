@@ -245,9 +245,12 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
     # ── 第 6 步：状态判定 + 落盘 ───────────────────────────────────────
     if not llm_used:
         status = STATUS_DEGRADED
+        # 括号里只写**给用户看的一句话**（llm.user_facing_error）：原因原样留在
+        # record["llm"]["error"] 里，后台可查；界面上不出现异常类名/服务商名/参数名。
         notice = (
-            f"结果由确定性计算得出；**未接 LLM**，【为什么】/【建议行动】由代码降级生成，未做推断。"
-            f"（{llm_error.get('message') if llm_error else 'LLM 不可用'}）" + _boundary_note(profile)
+            f"结果由程序确定性计算得出；**本次没有可用的模型**"
+            f"（{llm.user_facing_error(llm_error)}），【为什么】/【建议行动】由程序生成，不做推断。"
+            + _boundary_note(profile)
         )
     elif not payload["guard"]["passed"]:
         status = STATUS_DEGRADED

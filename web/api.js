@@ -28,7 +28,7 @@ const API = (() => {
       response = await fetch(path, options);
     } catch (err) {
       // 网络层就失败了（服务没起 / 被防火墙拦）—— 明确说清楚，别让上层猜
-      throw new ApiError(0, "network_error", `连不上后端（${path}）：${err.message}`);
+      throw new ApiError(0, "network_error", `连不上服务（网络不通或服务未启动），请稍后重试。`);
     }
 
     const text = await response.text();
@@ -51,7 +51,7 @@ const API = (() => {
       );
     }
     if (payload === null) {
-      throw new ApiError(response.status, "bad_json", `响应不是 JSON：${text.slice(0, 200)}`);
+      throw new ApiError(response.status, "bad_json", `服务返回的内容无法识别，请稍后重试。`);
     }
     return payload;
   }
@@ -63,7 +63,7 @@ const API = (() => {
     try {
       response = await fetch(path);
     } catch (err) {
-      throw new ApiError(0, "network_error", `连不上后端（${path}）：${err.message}`);
+      throw new ApiError(0, "network_error", `连不上服务（网络不通或服务未启动），请稍后重试。`);
     }
     const body = await response.text();
     if (!response.ok) {

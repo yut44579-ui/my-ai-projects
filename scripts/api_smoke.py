@@ -82,7 +82,7 @@ try:
     r = httpx.post(f"{BASE}/api/execute", json={"file_id": "不存在", "start": "2011-11-21", "end": "2011-11-27"}, timeout=60)
     print(f"   不存在的 file_id → HTTP {r.status_code}（应 4xx）")
 
-    print("\n🎉 独立冒烟全部通过：上传 541909 行 / 8 字段 · 执行 £316,412.16 · 下载文件可读回 · 记录可查")
+    print("\n🎉 独立冒烟全部通过：上传 541909 行 / 8 字段 · 执行 316,412.16（元）· 下载文件可读回 · 记录可查")
 finally:
     proc.terminate()
     try:

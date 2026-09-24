@@ -292,6 +292,17 @@ def system_prompt() -> str:
    params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","top_n":整数(1-20)}}
 6. unsupported   —— 问题涉及数据里不存在的维度/指标时用它。params: {{}}，并在 reason 里说明缺什么。
 
+**最容易犯的错，先看这一条（比下面的规则都重要）**：
+- 「比较一下2011年11月和2011年10月的销售额」「2011年11月比2011年10月销售额增长了多少」
+  「2011年11月和2011年10月的销售额哪个高」「11月对比10月的销售额」
+  「2011年11月和10月销售额对比」—— **这些全部是 sales_compare**。
+- **绝对不许**把两个时间段合并成一个区间交给 sales_summary。
+  `sales_summary(start=2011-10-01, end=2011-11-30)` 会算成两个月**之和**，
+  那是答非所问的数字，比拒绝回答糟糕得多。
+- 判断口径：句子里出现「和 / 与 / 比 / 对比 / 相比 / 哪个高 / 增长了多少 / 差多少 / 去年同期」
+  并且指向**两个不同时间段** → 一律 sales_compare。
+- 只有**一个**时间段、且没有比较语义（"11 月一共卖了多少"）才用 sales_summary。
+
 sales_compare 的 comparison_type 怎么选（**这一条最容易错，请严格照做**）：
 - 用户明确给了两个区间（"比较 2011-11-01 到 11-15 与 2011-10-01 到 10-15"）→ "custom"，并把两个区间都填进 params。
 - 说"本周/这周 vs 上周"或只给了一个区间但要跟上一周比 → "wow"。
@@ -349,12 +360,16 @@ def parse(question: str, *, allow_llm: bool = True) -> tuple[ParsedIntent, dict[
         try:
             raw = llm.chat(system_prompt(), question)
             parsed = _intent_from_json(raw)
-            return parsed, {
+            # **收口闸门**：LLM 把"两个区间比大小"答成单区间（合并求和）时，
+            # 在这里被代码拉回来 —— 真实事故见 enforce_comparison_semantics 的注释。
+            enforced = enforce_comparison_semantics(parsed, question)
+            return enforced, {
                 "source": "llm",
                 "model": llm.model_name(),
                 "raw": raw[:4000],
                 "fallback": None,
                 "llm_error": None,
+                "comparison_override": enforced is not parsed,
             }
         except (llm.LLMError, IntentError) as exc:
             # 不在这里静默吞掉：先记下来，再尝试关键词降级，并把失败原因一路带给前端
@@ -364,12 +379,16 @@ def parse(question: str, *, allow_llm: bool = True) -> tuple[ParsedIntent, dict[
     else:
         llm_error = {
             "code": "llm_not_configured" if not llm.api_key() else "llm_sdk_missing",
-            "message": "未接 LLM（没有可用的 DEEPSEEK_API_KEY 或 SDK）",
+            "message": "本次没有可用的模型服务（未配置）—— 只做确定性计算，不编造推断",
         }
 
     # ③ 降级：关键词匹配（能力弱，但绝不编）
     parsed = parse_by_keywords(question)
     if parsed is None:
+        # 比较类问题（比如"比较 9 月、10 月、11 月"，本版只做两区间）走专门的话术：
+        # 明确告诉用户"不合并"，而不是笼统的"没听懂"。
+        if looks_like_comparison(question):
+            raise _comparison_unparseable()
         raise IntentError(
             "intent_unparseable",
             f"没听懂这个问题，也不知道该调哪个工具。当前支持："
@@ -377,6 +396,7 @@ def parse(question: str, *, allow_llm: bool = True) -> tuple[ParsedIntent, dict[
             f"④两个时间段比大小（含按国家/商品归因） ⑤某时间段各国销售额分布。"
             f"（LLM 未能参与解析：{llm_error['message']}）",
         )
+    parsed = enforce_comparison_semantics(parsed, question)      # 同一道收口闸门（降级路径也要过）
     parsed = parsed.model_copy(update={"assumptions": tuple(parsed.assumptions) + ("由关键词匹配降级解析（LLM 未参与）",)})
     return parsed, {"source": "keyword", "model": None, "raw": None, "fallback": True, "llm_error": llm_error}
 
@@ -510,8 +530,78 @@ def _is_comparison(text: str) -> bool:
     return "比" in text and "占比" not in text
 
 
+# 「两个时间段放在一起说」的信号词 —— 比 _COMPARE_WORDS 更宽。
+# 只用于**闸门**（判断"解析成单区间是不是搞错了"），不用来决定走哪个工具
+# —— 走哪个工具仍是 _compare_by_keywords 的事。
+_COMPARISON_HINTS = (
+    *_COMPARE_WORDS,
+    "哪个高", "哪个多", "哪个大", "哪个低", "哪个好", "谁高", "谁多", "谁卖得多",
+    "高多少", "多多少", "少多少", "差多少", "相差", "多卖", "少卖",
+    "涨了", "跌了", "更高", "更低", "更多", "更少",
+)
+# 只吃**一个**时间窗口的 Intent —— 天生不该接"两个区间比大小"的问题
+_SINGLE_WINDOW_INTENTS = (
+    INTENT_SALES_SUMMARY, INTENT_SALES_TREND, INTENT_TOP_PRODUCTS, INTENT_SALES_BREAKDOWN_BY_COUNTRY,
+)
+
+
+def looks_like_comparison(question: str) -> bool:
+    """问题是不是"把两个时间段放在一起比"？—— **代码判**，不看 LLM 的脸色。"""
+    text = question or ""
+    if any(word in text for word in _COMPARISON_HINTS):
+        return True
+    return "比" in text and "占比" not in text and "比如" not in text
+
+
+def enforce_comparison_semantics(parsed: ParsedIntent, question: str) -> ParsedIntent:
+    """**收口闸门**：问题里有比较语义，解析结果却是"单区间"的 Intent → 一律纠正。
+
+    为什么必须有这道闸门（真实事故）：真 DeepSeek 面对
+    「比较一下2011年11月和2011年10月的销售额」时，会给出
+    `sales_summary(start=2011-10-01, end=2011-11-30)` —— 把两个区间**合并求和**，
+    于是答案变成 2,664,475.63（两个月之和）。这比"拒绝回答"危险得多：
+    用户拿到一个看着像答案、其实答非所问的数字，且没有任何提示。
+
+    纠正策略（不猜）：
+      ① 能用关键词规则拆成两个区间 → 改走 sales_compare（并在 assumptions 里写明改过）
+      ② 拆不出来（比如"比较 9 月、10 月、11 月"三个区间）→ **报错**，告诉用户该怎么问
+    两条路都不会把两个区间悄悄加起来。
+
+    第三道（同一个洞的另一半）：问句里**明摆着三个及以上**区间时，即使 LLM 给了
+    `sales_compare` 也不算数 —— 实测它会默默只挑最近的两个月，把第三个月无声吃掉
+    （问"比较 9 月、10 月、11 月"→ 只比 11 月 vs 10 月）。本版只做两区间，那就明说。
+    """
+    if not looks_like_comparison(question):
+        return parsed
+    first, last = dataset_bounds()
+
+    # ③ 三个及以上区间：本版只做两区间 → 明说，别让"只比最近两个月"混过去
+    if parsed.intent == INTENT_SALES_COMPARE and len(_date_ranges_from_text(question, first, last)) > 2:
+        raise _comparison_unparseable()
+
+    if parsed.intent not in _SINGLE_WINDOW_INTENTS:
+        return parsed
+    rescued = _compare_by_keywords(question, first, last)
+    if rescued is not None:
+        return rescued.model_copy(update={"assumptions": tuple(rescued.assumptions) + (
+            f"（解析器原本给的是 {parsed.intent}，但问题里有「两个时间段比大小」的语义，"
+            f"代码已改走 sales_compare —— 把两个区间合并成一个区间求和会给出答非所问的数字）",
+        )})
+    raise _comparison_unparseable()
+
+
+def _comparison_unparseable() -> IntentError:
+    """比较类问题没能确定两个区间时的**统一话术**（不猜、不合并）。"""
+    return IntentError(
+        "intent_unparseable",
+        "这看起来是「两个时间段比大小」的问题，但没能确定到底比哪两个区间 —— "
+        "不猜、也不把两个区间合并求和。请写成「比较 2011-11 和 2011-10 的销售额」"
+        "或「2011-11-01 到 11-15 与 2011-10-01 到 10-15 的销售额对比」。",
+    )
+
+
 def _comparison_type_from_text(text: str) -> str:
-    if "同比" in text or "同期" in text:
+    if "同比" in text or "同期" in text or "去年" in text:
         return "yoy"
     if "周环比" in text or "本周" in text or "这周" in text or "上周" in text or "每周" in text:
         return "wow"
@@ -551,7 +641,7 @@ def parse_by_keywords(question: str) -> ParsedIntent | None:
     first, last = dataset_bounds()
 
     # ── ① 比较类问题优先判（"比较 11 月和 10 月"里也有"销售额"这种 summary 词）──
-    if _is_comparison(text):
+    if looks_like_comparison(text):
         return _compare_by_keywords(text, first, last)
 
     start, end, notes = _dates_from_text(text, first, last)

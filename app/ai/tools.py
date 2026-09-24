@@ -88,25 +88,24 @@ def _empty_window_note(rows_in_range: int, start: _dt.date, end: _dt.date) -> li
 # ════════════════════════════════════════════════════════════════════════
 # 货币单位：**显式声明**，不是从数据里推出来的（全项目唯一出处）
 # ════════════════════════════════════════════════════════════════════════
-# 数据集是 UCI Online Retail（英国零售商的交易流水），8 列里**没有货币字段** ——
-# "金额是什么币种"这件事数据自己没说，只能由我们声明，所以这里把**出处**（source）
-# 一起写出来：它不是"从数据读到的"，是"数据集自带的默认口径"。
+# 数据集 8 列里**没有货币字段** —— "金额是什么币种"数据自己没说，只能由我们声明，
+# 所以这里把**出处**（source）一起写出来：它不是"从数据读到的"，是我们声明的口径。
 #
-# 之前事实段把它写成「元」是**错的**（把英镑当人民币）——数值没错，单位错了。
-# 现在事实段（answer.py）、display 表、能力端点、前端**都只从这一处取值**，
-# 别处不许再出现「元」/「£」的硬编码。
+# 口径由用户定（2026-09-24）：**按人民币「元」显示**，数值**不做任何换算**（就用数据里的数）。
+# 事实段（answer.py）、display 表、能力端点、前端**都只从这一处取值**，
+# 别处不许再出现「元」/「¥」/「英镑」/「£」的硬编码 —— 将来换数据集只改这一个常量。
 DATASET_CURRENCY: dict[str, str] = {
-    "code": "GBP",
-    "symbol": "£",
-    "name": "英镑",
-    "source": "dataset_default",
-    "note": "数据集为英国零售商流水（UCI Online Retail），金额以英镑计价；"
-            "文件里没有货币列，币种是**数据集口径声明**，不是从数据里读出来的。",
+    "code": "CNY",
+    "symbol": "¥",
+    "name": "元",
+    "source": "declared",
+    "note": "金额按人民币「元」显示（口径声明）；文件里没有货币列，"
+            "币种不是从数据里读出来的，数值不做任何换算。",
 }
 
 
 def currency_unit() -> str:
-    """金额在文字/表格里跟的单位（`1,509,496.33英镑` 的那个「英镑」）。
+    """金额在文字/表格里跟的单位（`1,509,496.33元` 的那个「元」）。
 
     与其它单位（`行`/`件`/`个`/`%`）一样紧贴数字不加空格 —— 保持全表同一种排版。
     """
@@ -268,9 +267,9 @@ def sales_summary(start: _dt.date, end: _dt.date) -> dict[str, Any]:
     }
 
     notes = [
-        "口径 D16：含首尾全天；排除取消单（InvoiceNo 以 C 开头）、数量≤0、单价≤0 的行。",
+        "口径：含首尾全天；排除取消单（单号以 C 开头）、数量≤0、单价≤0 的行。",
         f"客户数只统计 CustomerID 非空的有效行；有效行里有 {customers_null_rows} 行没有客户号，"
-        f"它们计入销售额但计不进客户数（D16-6：CustomerID 为空不排除）。",
+        f"它们计入销售额但计不进客户数（客户号为空的行不排除）。",
     ] + _empty_window_note(int(base["rows_in_range"]), start, end)
 
     return {
@@ -370,7 +369,7 @@ def sales_trend(start: _dt.date, end: _dt.date, granularity: str = "day") -> dic
     notes = [
         f"按{bucket_label}聚合，共 {len(points)} 个{bucket_label}；空档（没有销售的日子/周）**不补零**，"
         "所以点数可能少于自然天数/周数。",
-        "口径 D16：含首尾全天；排除取消单、数量≤0、单价≤0 的行。",
+        "口径：含首尾全天；排除取消单、数量≤0、单价≤0 的行。",
     ]
     if partial_points:
         notes.append(
@@ -483,7 +482,7 @@ def top_products(start: _dt.date, end: _dt.date, top_n: int = 5) -> dict[str, An
     }
 
     notes = [
-        "口径 D16：含首尾全天；排除取消单、数量≤0、单价≤0 的行。",
+        "口径：含首尾全天；排除取消单、数量≤0、单价≤0 的行。",
         "按 StockCode 分组（Description 只作展示名，取该编码下出现次数最多者）。",
         _NONPRODUCT_NOTE,
     ] + _empty_window_note(len(rows), start, end)
@@ -997,7 +996,7 @@ def sales_compare(
     }
 
     notes = list(resolution["notes"]) + [
-        "口径 D16：含首尾全天；排除取消单（InvoiceNo 以 C 开头）、数量≤0、单价≤0 的行。",
+        "口径：含首尾全天；排除取消单（单号以 C 开头）、数量≤0、单价≤0 的行。",
         "变化率 = 变化额 ÷ 上一期销售额；上一期为 0 时输出 `not_available`（不做除零）。",
     ]
     if attribution:
@@ -1126,7 +1125,7 @@ def sales_breakdown_by_country(start: _dt.date, end: _dt.date, top_n: int = 5) -
     }
 
     notes = [
-        "口径 D16：含首尾全天；排除取消单、数量≤0、单价≤0 的行。",
+        "口径：含首尾全天；排除取消单、数量≤0、单价≤0 的行。",
         "按 Country 分组（数据集里真实存在的国家字段）。**只描述这个时间段内的分布**，"
         "不承担「两个时间段之间谁造成变化」的归因（那个问题归两区间比较的归因能力）。",
         "**国家不是区域**：数据集没有区域/省份/城市/门店/渠道字段，本工具也不会拿国家顶着用。",
@@ -1174,7 +1173,7 @@ TOOLS: dict[str, ToolSpec] = {
     "sales_summary": ToolSpec(
         name="sales_summary",
         title="销售汇总",
-        description="某时间段的销售额 / 订单数 / 客户数（销售额调既有 executor，口径 D16）",
+        description="某时间段的销售额 / 订单数 / 客户数（销售额由既有计算引擎算出，口径见 metrics）",
         run=sales_summary,
     ),
     "sales_trend": ToolSpec(

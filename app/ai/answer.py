@@ -34,6 +34,7 @@ from typing import Any
 
 # 货币单位**只从 tools 取**（`DATASET_CURRENCY` 是全项目唯一出处）。
 # 不反向依赖：tools 不 import answer，所以这里 import 它没有环。
+from app.ai import llm
 from app.ai import tools as ai_tools
 
 # 回答分区的小标题（前端按 key 分区渲染，不靠解析中文标题）
@@ -56,15 +57,11 @@ SECTION_TITLES = {
 # 否则闸门会白白放行 "16" 这个 token，模型写"16 元"就溜过去了。
 _NUMBER_RE = re.compile(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?")
 
-# 币种词：数据集声明的是**英镑**（见 `tools.DATASET_CURRENCY`）。
-# 模型要是写出「元/人民币/RMB/¥」，那是**事实错误** —— 和假数字一样处理：整段作废。
-# 「元」单独扫会误伤「单元/元素/多元」，所以只盯它作为**金额单位**出现的写法
-# （前面跟着数字或中文数词、后面跟着括号/顿号/句读、或者直接写「（元）」）。
-_FOREIGN_CURRENCY_RE = re.compile(
-    r"人民币|RMB|[¥￥]"
-    r"|(?:[\d０-９]|[一二三四五六七八九十百千万亿几])\s*元"
-    r"|元[/）)】」、，。;；:：]|（元）|\(元\)|以元为单位"
-)
+# 币种词：口径声明的是**人民币「元」**（见 `tools.DATASET_CURRENCY`）。
+# 模型要是写出「英镑/GBP/£」这类**别的币种**，那是**事实错误** —— 和假数字一样处理：整段作废。
+# （TASK-004 时方向是反的：那时声明 GBP，拦的是「元」。声明改成 CNY 后闸门跟着对称反转，
+#  机制一个字没改，只是"什么算写错"跟着那唯一一处声明走。）
+_FOREIGN_CURRENCY_RE = re.compile(r"英镑|英磅|GBP|GBp|[£￡]")
 
 GUARD_POLICY = "LLM 段落里出现的每一个数字，都必须能在确定性计算结果里找到出处"
 
@@ -142,23 +139,23 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
     lines: list[str] = []
 
     if tool == "sales_summary":
-        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天，口径 D16）")
+        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天）")
     elif tool == "sales_trend":
         label = "按日" if params.get("granularity") == "day" else "按周（周一为起点）"
-        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天，口径 D16）")
+        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天）")
         lines.append(f"聚合方式：{label}")
     elif tool == "top_products":
-        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天，口径 D16）")
-        lines.append(f"排行口径：销售额降序取前 {params.get('top_n')} 名（按 StockCode 分组）")
+        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天）")
+        lines.append(f"排行口径：销售额降序取前 {params.get('top_n')} 名（按商品编号分组）")
     elif tool == "sales_compare":
         facts = result.get("facts") or {}
         lines.append(f"比较类型：{comparison_label(facts.get('comparison_type'))}"
-                     f"（两个区间的日期由程序解析，**不由 LLM 解释**）")
+                     f"（两个区间的日期由程序解析，**不由模型解释**）")
         if facts.get("comparison_status") != "ok":
             lines.append("**数据不足，本次不给变化额与变化率**（不猜、不补、不偷偷截断）。")
     elif tool == "sales_breakdown_by_country":
-        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天，口径 D16）")
-        lines.append(f"分布口径：按 Country（国家）分组，销售额降序取前 {params.get('top_n')} 名")
+        lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天）")
+        lines.append(f"分布口径：按国家分组，销售额降序取前 {params.get('top_n')} 名")
 
     lines.append("")
     lines.extend(_display_lines(result))
@@ -322,7 +319,7 @@ def number_guard(text: str, allowed: set[str]) -> dict[str, Any]:
 
     两类越界：
         violations      编造的数字（不在确定性结果里的 token）
-        currency_words  把币种写错（写成「元/人民币」之类；数据集声明的币种见 tools）
+        currency_words  把币种写错（写成「英镑/GBP/£」之类；口径声明的币种见 tools）
     """
     if not text:
         return {"checked": True, "passed": True, "violations": [],
@@ -347,11 +344,10 @@ LLM_SYSTEM_PROMPT = """你是销售数据分析师。下面会给你一份**已�
 你要写两段中文分析，除此之外什么都不要写。
 
 **最重要的规矩：绝对不要在回答里写任何阿拉伯数字（0-9）。一个都不许出现。**
-- 不要写"12,345.67 英镑"，要写"销售额"；不要写"3 个"，要写"三个"（中文数字可以）。
+- 不要写"12,345.67 元"，要写"销售额"；不要写"3 个"，要写"三个"（中文数字可以）。
 - 不要自己算任何比例、差额、平均值 —— 你没看到原始数据，算了就是编。
 - 需要引用数字时，用它的名称（如"销售额""订单数""最高的一天"）。
-- 金额的币种是**英镑（GBP）**：提到金额单位只能写"英镑"，**不许写"元""人民币"**
-  （数据来自英国零售商，写成人民币就是错的）。
+- 金额的币种是**人民币「元」（CNY）**：提到金额单位只能写"元"，**不许写"英镑""GBP""£"**。
 
 **第二重要的规矩：你已经看到的那份事实里，如果有【主要贡献】名单，那份名单不是你写的。**
 - 名单、排序、金额、贡献率都由程序算好了。你**不许**改名单、不许重排、不许补人、
@@ -417,14 +413,18 @@ def _fallback_why(reason: str, result: dict[str, Any] | None) -> str:
     if result:
         check = result.get("selfcheck") or {}
         if "executor_checks_all_passed" in check:
+            # ⚠️ 这里**故意不写"（6 项口径核对）"**：那个数字是 selfcheck 字典的键数，
+            #    既不是 executor 真正跑了几项（那在 validations.checks 里），也不在
+            #    数字闸门可追溯的范围内（闸门只认 facts/selfcheck 里的**值**，
+            #    键名里凑出来的数字不算）——写上去就会被 AC-04 判成"越界数字"。
             lines.append(
-                "· 本次销售额由既有 executor 计算，其内置自检"
-                f"（{len(check)} 项口径核对）{'全部通过' if check['executor_checks_all_passed'] else '**有未通过项**'}。"
+                "· 本次销售额由既有计算引擎算出，其内置的口径自检"
+                f"{'全部通过' if check['executor_checks_all_passed'] else '**有未通过项**'}。"
             )
         if "bit_identical" in check:
             lines.append(
-                "· 用同一套 D16 掩码独立复算了一遍金额，"
-                f"与 executor 的输出{'逐位一致' if check['bit_identical'] else '**不一致（需排查）**'}。"
+                "· 用同一套口径规则独立复算了一遍金额，"
+                f"与计算引擎的输出{'逐位一致' if check['bit_identical'] else '**不一致（需排查）**'}。"
             )
         notes = result.get("notes") or []
         if notes:
@@ -529,9 +529,11 @@ def compose(
         elif fallback_reason:
             reason = fallback_reason
         elif llm_error:
-            reason = f"（未接 LLM：{llm_error.get('message', '')}）—— 本段不生成，以免编造。"
+            # 同 service.py：只上人话（原因原文留在记录的 llm.error 里），
+            # 并且**不再重复**notice 里已经说过的「本次没有可用的模型」。
+            reason = f"（{llm.user_facing_error(llm_error)} —— 本段不生成，以免编造。）"
         else:
-            reason = "（未接 LLM —— 本段本应由模型基于上面的事实做推断，这里不生成，以免编造。）"
+            reason = "（本次没有可用的模型 —— 本段本应由模型基于上面的事实做推断，这里不生成，以免编造。）"
         why_text = _fallback_why(reason, result)
         actions_text = _fallback_actions(reason)
         why_source = actions_source = "code"

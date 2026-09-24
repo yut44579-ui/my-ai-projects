@@ -63,7 +63,7 @@ DEFAULT_CELL_MAP: dict[str, str] = {
 
 # 模板里的固定文案
 _TITLE_TEXT = "周销售报表"
-_SUBTITLE_TEXT = "口径：D16（含首尾全天；排除取消单 / 退货负数量 / 负零单价）｜数字一律由代码计算（D4）"
+_SUBTITLE_TEXT = "口径：含首尾全天；排除取消单 / 退货负数量 / 负零单价｜数字由程序计算"
 _HEADERS = ("指标", "数值", "口径说明")
 _NOTE_TEXT = "本表由 sales-report-agent 自动生成：在模板上原地写入数据格，样式保持不变（D5）。"
 

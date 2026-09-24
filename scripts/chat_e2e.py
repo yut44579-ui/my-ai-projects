@@ -26,7 +26,8 @@
     所以它不再是"用户提问时干等"的那 100 秒）。本机实测整条约 4 分钟，绝大部分是读表。
 
 本脚本额外验两件事（不在 TASK-004 原始范围里，是后续两个小修）：
-    · 币种：事实段/display/能力端点说的是**英镑**（数据集是 UCI Online Retail，GBP），不是「元」；
+    · 币种：事实段/display/能力端点说的是**人民币「元」**（用户 2026-09-24 定的口径，数值不换算），
+      不是「英镑」——声明在 tools.DATASET_CURRENCY 一处，闸门方向随之反转；
     · 冷启动：服务**启动就预热**（日志里有那一行）、预热期间 /api/health 一直 200、
       预热之后首次碰数据只要几秒（修复前这一刻要现读 Excel ≈ 100 秒）。
 """
@@ -144,14 +145,17 @@ def main() -> int:
             ("hero-nl-input", "首屏自然语言输入框"),
             ("chat-panel", "链路面板"),
             ("chat-step-question", "① 用户问题"),
-            ("chat-step-intent", "② Intent JSON"),
-            ("chat-step-tool", "③ 实际调用的工具"),
-            ("chat-step-facts", "④ 事实结果"),
-            ("chat-step-answer", "⑤ 分区回答"),
+            ("chat-step-facts", "② 算出来的事实"),
+            ("chat-step-answer", "③ 分区回答"),
             ("chat-history", "历史提问列表"),
             ("ai-conclusion-body", "右面板 AI 结论"),
         ]:
             check(f'id="{control}"' in html, f"页面含 {label}（id={control}）")
+        # 用户 2026-09-24：技术实现细节不许上界面（后端字段照旧，只是前端不画）。
+        # 这里只看**壳还在不在**；"文字真的没画出来"由 Edge 渲染后的 DOM 检查兜
+        # （见 outputs/_t005_e2e.py 【7】：注释里的开发说明用户看不见，不算数）。
+        for gone in ("chat-step-intent", "chat-step-tool", "chat-intent", "chat-tool", "chat-source"):
+            check(f'id="{gone}"' not in html, f"**技术细节区块 {gone} 已从页面撤掉（连壳一起撤）**")
         # TASK-004 的交付物之一就是**把这个入口启用**（原来带 disabled）
         nl_tag = re.search(r'<[^>]*id="nl-input"[^>]*>', html)
         check(nl_tag is not None and "disabled" not in nl_tag.group(0),
@@ -197,12 +201,16 @@ def main() -> int:
         check(profile["rows"] == ref_rows, "画像行数与直接读表一致", f"{profile['rows']} == {ref_rows}")
         check(profile["columns"] == ref_columns, "画像列名与真实数据一致")
         check(profile.get("has_region_field") is False, "**画像如实标注：没有区域字段**")
-        # 币种**显式声明**：数据集 8 列里没有货币字段，单位只能声明不能猜（曾经错写成「元」）
+        # 币种**显式声明**：数据集 8 列里没有货币字段，单位只能声明不能猜
+        # （用户 2026-09-24 把口径定成人民币「元」，数值照旧不换算）
         currency = caps.get("currency") or {}
-        check(currency.get("code") == "GBP" and currency.get("symbol") == "£",
-              "**能力端点显式声明币种 GBP / £（不是人民币）**", str(currency.get("code")))
-        check(currency.get("source") == "dataset_default",
-              "声明里写明出处：这是数据集默认口径，不是从数据里读出来的")
+        check(currency.get("code") == "CNY" and currency.get("symbol") == "¥",
+              "**能力端点显式声明币种 CNY / ¥（人民币元）**", str(currency.get("code")))
+        check(currency.get("source") == "declared",
+              "声明里写明出处：这是声明的口径，不是从数据里读出来的")
+        check("英国" not in json.dumps(currency, ensure_ascii=False) and
+              "英镑" not in json.dumps(currency, ensure_ascii=False),
+              "**旧口径话术（英国零售商/英镑）已经撤掉**")
         check(profile.get("currency") == currency, "画像与顶层声明**同源**（一处定义，两处引用）")
         check("不会用 Country 代替" in caps["unsupported"]["reason"] or
               "Country" in caps["unsupported"]["reason"],
@@ -254,11 +262,11 @@ def main() -> int:
         check(f"{ref_month:,.2f}" in by_key.get("what", {}).get("text", ""),
               "代码段里写着那个金额（人能看到出处）", f"{ref_month:,.2f}")
         what_text = by_key.get("what", {}).get("text", "")
-        check("英镑" in what_text and "元" not in what_text,
-              "**事实段用的是英镑，全段没有「元」（这个数据集是 GBP，不是人民币）**")
+        check("元" in what_text and "英镑" not in what_text,
+              "**事实段用的是人民币「元」，全段没有「英镑」**")
         display_units = {item.get("unit") for item in (tool.get("display") or [])
                          if item.get("format") == "money"}
-        check(display_units == {"英镑"},
+        check(display_units == {"元"},
               "事实表（前端直接渲染的那份 display）金额单位也是声明的那一个", str(display_units))
 
         guard = (record.get("answer") or {}).get("guard") or {}

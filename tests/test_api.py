@@ -51,7 +51,7 @@ DATA_PATH = PROJECT_ROOT / "data" / "Online Retail.xlsx"
 START = "2011-11-21"
 END = "2011-11-27"
 
-# 期望值来自 002A（独立 Oracle 验过）：区间原始行数 19,950；销售额 £316,412.16
+# 期望值来自 002A（独立 Oracle 验过）：区间原始行数 19,950；销售额 316,412.16（单位见工具的口径声明）
 EXPECTED_ROWS_IN_RANGE = 19950
 EXPECTED_AMOUNT = 316412.16
 

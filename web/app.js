@@ -119,10 +119,11 @@
     el.hidden = false;
   }
 
+  // 错误文案：只说"请求失败 + 一句人话"。err.code / err.name / 接口路径都不上页面
+  // （后台的记录里都有；界面上出现 undefined、TypeError、/api/xxx 都算事故）。
   const errorBanner = (err) => banner(
     "error",
-    `请求后端失败：${escapeHtml(err && err.message ? err.message : String(err))}` +
-    `（错误码 ${escapeHtml(err && err.code ? err.code : "unknown")}）`,
+    `请求失败：${escapeHtml(err && err.message ? err.message : String(err))}`,
   );
 
   function escapeHtml(value) {
@@ -228,13 +229,13 @@
   }
 
   function renderCurrency() {
-    // KPI 卡片上的币种图标也跟着后端的声明走（原本那个写死的符号是错的：这是英镑数据集）
+    // KPI 卡片上的币种图标也跟着后端的声明走（前端不写死任何币种：口径只有 tools.DATASET_CURRENCY 一处）
     const icon = $("kpi-currency");
     if (icon) icon.textContent = currencySymbol() || "¤";
   }
 
   async function refreshAll() {
-    banner("loading", "正在读取后端状态（health / tasks / executions / documents / conversations）…");
+    banner("loading", "正在读取系统状态…");
     const results = await Promise.allSettled([
       loadHealth(), loadTasks(), loadExecutions(), loadDocuments(),
       loadConversations(), loadCapabilities(),
@@ -279,26 +280,24 @@
     const factState = $("fact-state");
     if (factState) {
       factState.innerHTML = `状态文件：<b>${stateInfo.readable ? "可读" : "不可读"}</b>` +
-        ` · 上传 ${fmtInt(stateInfo.uploads)} / 执行 ${fmtInt(stateInfo.executions)} / 任务 ${fmtInt(stateInfo.tasks)}` +
-        ` · schema v${text(stateInfo.schema_version)}`;
+        ` · 上传 ${fmtInt(stateInfo.uploads)} / 执行 ${fmtInt(stateInfo.executions)} / 任务 ${fmtInt(stateInfo.tasks)}`;
     }
     const factCode = $("fact-code");
-    if (factCode) factCode.innerHTML = `代码版本：<b>${escapeHtml(text(health.code_version))}</b>`;
+    if (factCode) factCode.innerHTML = `数据校验：<b>${snapshot.match ? "快照哈希一致" : "快照哈希不一致"}</b>`;
 
-    setText("side-version", `版本：${text(health.api_version)} · ${text(health.code_version)}`);
-    setText("side-perm", `权限与安全：未启用（TASK-011）`);
+    setText("side-version", `版本：${text(health.api_version)}`);
+    setText("side-perm", `权限与安全：未启用`);
     // 单用户部署，未做鉴权 —— 这两行如实写"当前就是这样"，不暗示已有权限体系
     setText("side-user", "当前用户：本地（单用户模式）");
     setText("side-role", "角色：owner（尚未做鉴权）");
 
     setText("rp-service", `${text(health.service)} · ${text(health.status)}`);
     setText("rp-api-version", text(health.api_version));
-    setText("rp-code-version", text(health.code_version));
     setText("rp-state-readable", stateInfo.readable ? "可读" : "不可读");
     setText("rp-counts", `${fmtInt(stateInfo.uploads)} / ${fmtInt(stateInfo.executions)} / ${fmtInt(stateInfo.tasks)}`);
     const rpSnapshot = $("rp-snapshot");
     if (rpSnapshot) {
-      rpSnapshot.textContent = snapshot.match ? "通过（SHA256 一致）" : "未通过 / 缺失";
+      rpSnapshot.textContent = snapshot.match ? "通过（哈希一致）" : "未通过 / 缺失";
       rpSnapshot.className = snapshot.match ? "ok" : "bad";
     }
 
@@ -314,9 +313,7 @@
       ["服务", text(health.service)],
       ["状态", text(health.status)],
       ["API 版本", text(health.api_version)],
-      ["代码版本", text(health.code_version)],
-      ["后端自报 task", text(health.task)],
-      ["后端当前时间", fmtTime(health.time)],
+      ["服务时间", fmtTime(health.time)],
       ["数据源哈希一致", (health.data_snapshot || {}).match ? "是" : "否"],
       ["模板存在", (health.template || {}).exists ? "是" : "否"],
     ];
@@ -334,7 +331,7 @@
       const info = health.state || {};
       [
         ["状态目录", text(info.state_dir)],
-        ["schema_version", text(info.schema_version)],
+        ["状态格式版本", text(info.schema_version)],
         ["上传记录数", fmtInt(info.uploads)],
         ["执行记录数", fmtInt(info.executions)],
         ["任务数", fmtInt(info.tasks)],
@@ -395,7 +392,7 @@
     setText("kpi-tasks", state.health ? fmtInt(info.tasks) : EMPTY_TEXT);
     setText("kpi-tasks-sub", state.health
       ? `上传 ${fmtInt(info.uploads)} · 执行 ${fmtInt(info.executions)}`
-      : "来自后端状态统计");
+      : "来自系统状态统计");
   }
 
   function renderTrend() {
@@ -411,7 +408,7 @@
       hide(svg);
       show(empty);
       if (rows.length === 1) {
-        setText("trend-caption", "只有 1 次成功执行，画不出走势；数据来源：GET /api/executions");
+        setText("trend-caption", "只有 1 次成功执行，画不出走势；数据来源：历史执行记录");
       }
       return;
     }
@@ -457,7 +454,7 @@
         dots.appendChild(circle);
       });
     }
-    setText("trend-caption", `最近 ${rows.length} 次成功执行 · 数据来源：GET /api/executions`);
+    setText("trend-caption", `最近 ${rows.length} 次成功执行 · 数据来源：历史执行记录`);
   }
 
   function renderConclusions() {
@@ -479,10 +476,10 @@
         ` · 销售额 <b>${currencySymbol()}${fmtMoney(latest.amount_display)}</b>`,
       `覆盖 ${fmtInt(latest.rows_in_range)} 行：有效 ${fmtInt(latest.rows_valid)} 行，排除 ${fmtInt(latest.rows_excluded)} 行` +
         `（排除金额 ${fmtMoney(latest.excluded_amount)}）`,
-      `数据快照：${latest.data_snapshot_match ? "SHA256 一致" : "SHA256 不一致"}（${escapeHtml(shortHash(latest.data_sha256))}）`,
+      `数据快照：${latest.data_snapshot_match ? "哈希一致" : "哈希不一致"}（${escapeHtml(shortHash(latest.data_sha256))}）`,
       `产出：${escapeHtml(text(latest.excel_rel_path))} · ${fmtBytes(latest.excel_size_bytes)}` +
         ` · 单元格回读校验 ${verification.passed ? "通过" : "未通过"}`,
-      `执行耗时 ${text(latest.seconds)} 秒 · 代码版本 ${escapeHtml(text(latest.code_version))}`,
+      `执行耗时 ${text(latest.seconds)} 秒`,
     ];
     items.forEach((html) => {
       const li = document.createElement("li");
@@ -500,7 +497,7 @@
     const names = Object.keys(metrics);
     if (!latest || !names.length) {
       toggleEmpty("sales-empty", false);
-      setText("sales-caption", "数据来源：GET /api/executions");
+      setText("sales-caption", "数据来源：历史执行记录");
       return;
     }
     toggleEmpty("sales-empty", true);
@@ -513,7 +510,7 @@
       body.appendChild(row);
     });
     setText("sales-caption",
-      `最近一次成功执行 ${latest.execution_id} · ${fmtTime(latest.created_at)} · 数据来源：GET /api/executions`);
+      `最近一次成功执行 ${latest.execution_id} · ${fmtTime(latest.created_at)} · 数据来源：历史执行记录`);
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -626,12 +623,12 @@
     if (!body) return;
     clear(body);
     [
-      ["doc_id", payload.doc_id],
+      ["文档编号", payload.doc_id],
       ["文件名", payload.filename],
       ["字符数", fmtInt(payload.chars)],
       ["块数", `${fmtInt(payload.blocks)} ${payload.block_unit || ""}`.trim()],
       ["标题", payload.title || "（未识别到标题）"],
-      ["SHA256", payload.sha256],
+      ["数据哈希", payload.sha256],
       ["落盘大小", fmtBytes(payload.size_bytes)],
       ["落盘路径", payload.stored_path],
     ].forEach(([key, value]) => {
@@ -647,7 +644,7 @@
   async function openDocument(docId) {
     const record = state.documents.find((doc) => doc.doc_id === docId) || null;
     setText("doc-viewer-title", record ? `正文 · ${record.filename}` : `正文 · ${docId}`);
-    status("doc-viewer-state", "正在读取全文（GET /api/documents/{doc_id}/text）…", "loading");
+    status("doc-viewer-state", "正在读取全文…", "loading");
     hide($("doc-summary"));
     clear($("doc-summary"));
     try {
@@ -659,11 +656,11 @@
       $("doc-viewer-text").textContent = text;
       $("doc-viewer-link").href = API.documentTextUrl(docId);
       show($("doc-viewer"));
-      status("doc-viewer-state", `已取回 ${text.length} 个字符（后端重新从原文提取，不是前端缓存的副本）。`, "success");
+      status("doc-viewer-state", `已取回 ${text.length} 个字符（每次都从原文件重新读取）。`, "success");
     } catch (err) {
       state.docViewer = null;
       hide($("doc-viewer"));
-      status("doc-upload-state", `读取全文失败：${err.message}（${err.code}）`, "error");
+      status("doc-upload-state", `读取全文失败：${err.message}`, "error");
     }
   }
 
@@ -730,13 +727,13 @@
   }
 
   async function loadDocSummary(docId) {
-    status("doc-viewer-state", "正在生成摘要（POST /api/documents/{doc_id}/summary）…", "loading");
+    status("doc-viewer-state", "正在生成摘要…", "loading");
     try {
       const summary = await API.documentSummary(docId);
       renderDocSummary(summary);
       status("doc-viewer-state", `摘要已生成（本次${summary.cached ? "取回已缓存的那份" : "重新抽取"}）。`, "success");
     } catch (err) {
-      status("doc-viewer-state", `生成摘要失败：${err.message}（${err.code}）`, "error");
+      status("doc-viewer-state", `生成摘要失败：${err.message}`, "error");
     }
   }
 
@@ -748,7 +745,7 @@
     input.addEventListener("change", () => {
       const file = input.files[0];
       status("doc-upload-state", file
-        ? `已选择：${file.name}（${fmtBytes(file.size)}）· 点「上传并提取」提交到 POST /api/documents`
+        ? `已选择：${file.name}（${fmtBytes(file.size)}）· 点「上传并提取」提交`
         : "选择 .docx / .pdf 后点「上传并提取」。", "");
     });
 
@@ -770,7 +767,7 @@
         await loadDocuments();               // 列表以后端为准，不往本地数组里塞
       } catch (err) {
         hide($("doc-result-wrap"));
-        status("doc-upload-state", `提取失败：${err.message}（${err.code}）`, "error");
+        status("doc-upload-state", `提取失败：${err.message}`, "error");
       } finally {
         button.disabled = false;
       }
@@ -837,7 +834,6 @@
       badge(tr, statusKind, text(row.status));
       cell(tr, typeof row.amount_display === "number" ? fmtMoney(row.amount_display) : "—").className = "num";
       cell(tr, typeof row.rows_in_range === "number" ? fmtInt(row.rows_in_range) : "—").className = "num";
-      cell(tr, text(row.code_version));
       cell(tr, fmtTime(row.created_at)).className = "num";
       body.appendChild(tr);
     });
@@ -867,7 +863,7 @@
         ["状态", task.status],
         ["Spec 版本", `${text(task.spec_id)} v${text(task.spec_version)}`],
         ["数据文件", task.source_filename],
-        ["file_id", task.file_id],
+        ["文件编号", task.file_id],
         ["数据哈希", shortHash(task.data_sha256)],
         ["快照一致", task.data_snapshot_match ? "是" : "否"],
         ["区间", `${text(summary.start)} ~ ${text(summary.end)}`],
@@ -907,12 +903,12 @@
     try {
       state.selectedTask = await API.getTask(taskId);
       renderSpec();
-      status("run-state", `已读取任务 ${taskId} 的 Spec（GET /api/tasks/{task_id}）。`, "success");
+      status("run-state", `已读取任务 ${taskId} 的报表配置。`, "success");
       await loadRuns(taskId);
     } catch (err) {
       state.selectedTask = null;
       renderSpec();
-      status("run-state", `读取任务失败：${err.message}（${err.code}）`, "error");
+      status("run-state", `读取任务失败：${err.message}`, "error");
       errorBanner(err);
     }
   }
@@ -938,12 +934,11 @@
         rows_excluded: latest.rows_excluded,
         download_url: latest.download_url || "",
         created_at: latest.created_at,
-        source: "GET /api/tasks/{task_id}/runs",
       };
       renderRunResult();
-      status("run-state", `已从后端恢复最近一次执行（${fmtTime(latest.created_at)}）。`, "success");
+      status("run-state", `已恢复最近一次执行（${fmtTime(latest.created_at)}）。`, "success");
     } catch (err) {
-      status("run-state", `读取执行记录失败：${err.message}（${err.code}）`, "error");
+      status("run-state", `读取执行记录失败：${err.message}`, "error");
     }
   }
 
@@ -966,7 +961,6 @@
       ["有效行数", typeof run.rows_valid === "number" ? fmtInt(run.rows_valid) : "—"],
       ["排除行数", typeof run.rows_excluded === "number" ? fmtInt(run.rows_excluded) : "—"],
       ["执行时间", fmtTime(run.created_at)],
-      ["数据来源", run.source],
     ];
     rows.forEach(([key, value]) => {
       const row = document.createElement("tr");
@@ -1022,7 +1016,7 @@
   // ══════════════════════════════════════════════════════════════════════
   const CHAT_STATUS_TEXT = {
     ok: "执行成功",
-    degraded: "执行成功（LLM 未参与推断）",
+    degraded: "执行成功（本次未生成推断，只给计算事实）",
     unsupported: "数据不支持这个问题",
     error: "未能回答",
   };
@@ -1053,10 +1047,16 @@
     return Number.isInteger(value) ? fmtInt(value) : String(value);
   }
 
+  // 界面上只说"这次问的是哪类问题"（人话标题），不暴露内部工具名 ——
+  // 列表摘要里只有名字，就用后端能力清单把它翻成人话标题。
   function toolLabel(tool) {
-    if (!tool) return "未调用工具";
-    if (typeof tool === "string") return `工具 ${tool}`;
-    return tool.title || tool.name || "未调用工具";
+    if (!tool) return "未记录问题类型";
+    if (typeof tool === "string") {
+      const intents = (state.capabilities || {}).intents || [];
+      const hit = intents.find((item) => item.name === tool);
+      return (hit && hit.title) || "问题类型未记录";
+    }
+    return tool.title || "问题类型未记录";
   }
 
   function setChatState(kind, message) {
@@ -1086,7 +1086,7 @@
     renderChat();
     setChatState(
       "loading",
-      `正在提问：「${asked}」—— 解析意图 → 确定性计算 → 组织回答（推理模型可能要十几秒）…`,
+      `正在提问：「${asked}」—— 正在计算并组织回答，可能要十几秒…`,
     );
 
     try {
@@ -1115,7 +1115,7 @@
       hide(body);
       hide(empty);
       const err = state.chatError;
-      setChatState("error", `提交失败（${err.code || err.name}）：${err.message}`);
+      setChatState("error", `提交失败：${err.message}`);
       return;
     }
     if (!state.chat) {
@@ -1144,23 +1144,14 @@
     setText("chat-created", fmtTime(record.created_at));
 
     const llm = record.llm || {};
+    // 业务用户只关心"数字可不可信"，不关心模型名与错误码（那些照旧落盘，后台可查）
     setText(
       "chat-llm",
-      llm.used
-        ? `LLM：${llm.provider || ""} ${llm.model || ""}（负责解析意图与组织语言）`
-        : `LLM 未参与（${(llm.error && llm.error.code) || "未配置"}）—— 数字仍由程序算`,
+      llm.used ? "数字由程序计算 · 文字由模型整理" : "全部由程序生成（本次未用模型）",
     );
 
     setText("chat-question", record.question || "—");
 
-    const intentPre = $("chat-intent");
-    if (intentPre) {
-      intentPre.textContent = record.intent
-        ? JSON.stringify(record.intent, null, 2)
-        : `（没有解析出 Intent）\n${(record.error && record.error.message) || ""}`;
-    }
-
-    renderChatTool(record.tool);
     renderChatFacts(record);
     renderChatAnswer(record.answer);
     setText("chat-notice", record.notice || "");
@@ -1169,8 +1160,6 @@
     // 答不了的问题（数据不支持）不该一进来就摊开四个空块，那看着像有东西其实没有。
     const stepOpen = {
       "chat-step-question": true,
-      "chat-step-intent": !!record.intent,
-      "chat-step-tool": !!(record.tool && record.tool.name),
       "chat-step-facts": !!record.facts,
       "chat-step-answer": !!(record.answer && record.answer.text),
     };
@@ -1178,25 +1167,6 @@
       const el = $(id);
       if (el) el.open = open;
     });
-  }
-
-  function renderChatTool(tool) {
-    const box = $("chat-tool");
-    if (!box) return;
-    clear(box);
-    if (!tool || !tool.name) {
-      box.appendChild(line("本次没有调用任何工具（没解析出意图，或问题涉及数据里没有的维度）。"));
-      return;
-    }
-    // 白名单工具个数**从后端能力清单取**（不在前端写死"三个"—— 加了能力就会对不上）
-    const intents = (state.capabilities || {}).intents || [];
-    const scope = intents.length ? `白名单 ${intents.length} 个工具之一` : "白名单工具之一";
-    box.appendChild(line(`${tool.title || ""} · 工具名 ${tool.name}（${scope}）`));
-    const params = document.createElement("pre");
-    params.className = "code";
-    params.textContent = JSON.stringify(tool.params || {}, null, 2);
-    box.appendChild(params);
-    (tool.notes || []).forEach((note) => box.appendChild(line(note, "note-line")));
   }
 
   function renderChatFacts(record) {
@@ -1229,11 +1199,6 @@
     wrap.className = "table-wrap";
     wrap.appendChild(table);
     box.appendChild(wrap);
-
-    const raw = document.createElement("pre");
-    raw.className = "code";
-    raw.textContent = JSON.stringify({ facts: record.facts, selfcheck: tool.selfcheck }, null, 2);
-    box.appendChild(raw);
   }
 
   function renderChatAnswer(payload) {
@@ -1269,25 +1234,6 @@
       wrap.appendChild(body);
       box.appendChild(wrap);
     });
-
-    // 数字闸门的报告也显示出来：这是"LLM 没自己造数"的直接证据
-    const guard = payload.guard;
-    if (guard) {
-      // 越界有两类：编造的数字、写错的币种（后端声明的是英镑）。两类都要如实说。
-      const caught = [];
-      if (guard.violations && guard.violations.length) caught.push(`越界数字 ${guard.violations.join("、")}`);
-      if (guard.currency_words && guard.currency_words.length) caught.push(`写错的币种 ${guard.currency_words.join("、")}`);
-      box.appendChild(
-        line(
-          guard.checked
-            ? `数字闸门：已核对（合法数字 ${guard.allowed_count} 个）—— ${
-              guard.passed ? "模型写的内容全部可追溯" : `拦下${caught.join("；")}，相关段落已作废`
-            }`
-            : "数字闸门：本次 LLM 未参与，未启用核对",
-          "note-line",
-        ),
-      );
-    }
   }
 
   function line(content, className) {
@@ -1327,7 +1273,6 @@
       sub.textContent = [
         fmtTime(item.created_at),
         CHAT_STATUS_TEXT[item.status] || item.status,
-        item.tool ? `工具 ${item.tool}` : "未调用工具",
         typeof item.sales_amount === "number" ? `销售额 ${fmtMoney(item.sales_amount)}` : "",
       ].filter(Boolean).join(" · ");
       main.appendChild(sub);
@@ -1335,7 +1280,7 @@
 
       const button = document.createElement("button");
       button.className = "btn btn-sm";
-      button.textContent = "看链路";
+      button.textContent = "查看";
       button.dataset.conversationId = item.conversation_id;
       row.appendChild(button);
       box.appendChild(row);
@@ -1344,7 +1289,7 @@
 
   async function openConversation(conversationId) {
     if (!conversationId) return;
-    setChatState("loading", "正在从后端读取这次问答的完整记录…");
+    setChatState("loading", "正在读取这次问答的完整记录…");
     try {
       state.chatError = null;
       state.chat = await API.getConversation(conversationId);
@@ -1457,7 +1402,7 @@
     $("file-input").addEventListener("change", () => {
       const file = $("file-input").files[0];
       status("upload-state", file
-        ? `已选择：${file.name}（${fmtBytes(file.size)}）· 点「上传」提交到 POST /api/upload`
+        ? `已选择：${file.name}（${fmtBytes(file.size)}）· 点「上传」提交`
         : "选择真实 Excel 文件（.xlsx / .xls）后点上传。", "");
     });
 
@@ -1481,7 +1426,7 @@
       } catch (err) {
         state.upload = null;
         hide($("upload-result-wrap"));
-        status("upload-state", `上传失败：${err.message}（${err.code}）`, "error");
+        status("upload-state", `上传失败：${err.message}`, "error");
       } finally {
         button.disabled = false;
       }
@@ -1503,14 +1448,14 @@
       };
       const button = $("btn-create-task");
       button.disabled = true;
-      status("create-task-state", "正在建任务（POST /api/tasks）…", "loading");
+      status("create-task-state", "正在建任务…", "loading");
       try {
         const created = await API.createTask(payload);
         status("create-task-state", `任务已创建：${created.task_id}`, "success");
         await loadTasks();
         await selectTask(created.task_id);
       } catch (err) {
-        status("create-task-state", `建任务失败：${err.message}（${err.code}）`, "error");
+        status("create-task-state", `建任务失败：${err.message}`, "error");
       } finally {
         updateCreatePrecondition();
       }
@@ -1528,7 +1473,7 @@
         await loadTasks();
         await selectTask(state.selectedTaskId);
       } catch (err) {
-        status("run-state", `刷新任务失败：${err.message}（${err.code}）`, "error");
+        status("run-state", `刷新任务失败：${err.message}`, "error");
       }
     });
 
@@ -1539,7 +1484,7 @@
       status("run-state", "正在执行（真实计算 + 渲染 xlsx，可能要几分钟）…", "loading");
       try {
         const result = await API.runTask(state.selectedTask.task_id);
-        state.lastRun = Object.assign({ source: "POST /api/tasks/{task_id}/run" }, result);
+        state.lastRun = result;
         renderRunResult();
         status("run-state", `执行成功：${result.execution_id} · 耗时 ${result.seconds} 秒`, "success");
         await loadExecutions();
@@ -1548,7 +1493,7 @@
       } catch (err) {
         state.lastRun = null;
         renderRunResult();
-        status("run-state", `执行失败：${err.message}（${err.code}）`, "error");
+        status("run-state", `执行失败：${err.message}`, "error");
       } finally {
         updateRunButtons();
       }
@@ -1564,9 +1509,9 @@
       status("run-state", "正在刷新执行记录…", "loading");
       try {
         await loadExecutions();
-        status("run-state", "执行记录已刷新（GET /api/executions）。", "success");
+        status("run-state", "执行记录已刷新。", "success");
       } catch (err) {
-        status("run-state", `刷新失败：${err.message}（${err.code}）`, "error");
+        status("run-state", `刷新失败：${err.message}`, "error");
       }
     });
   }
@@ -1576,11 +1521,11 @@
     if (!body) return;
     clear(body);
     [
-      ["file_id", payload.file_id],
+      ["文件编号", payload.file_id],
       ["文件名", payload.filename],
       ["行数", fmtInt(payload.rows)],
       ["列数", fmtInt(payload.columns)],
-      ["SHA256", payload.sha256],
+      ["数据哈希", payload.sha256],
       ["落盘大小", fmtBytes(payload.size_bytes)],
     ].forEach(([key, value]) => {
       const row = document.createElement("tr");
@@ -1599,7 +1544,7 @@
     const metrics = [...document.querySelectorAll("#task-metrics input:checked")];
     const reasons = [];
     if (!name) reasons.push("填任务名称");
-    if (!fileId) reasons.push("先上传数据（或填 file_id）");
+    if (!fileId) reasons.push("先上传数据（或填文件编号）");
     if (!start || !end) reasons.push("选开始与结束日期");
     if (start && end && start > end) reasons.push("结束日期不能早于开始日期");
     if (!metrics.length) reasons.push("至少选一个指标");
@@ -1608,7 +1553,7 @@
     button.disabled = reasons.length > 0;
     setText("create-precondition", reasons.length
       ? `建任务按钮当前禁用，还缺：${reasons.join(" / ")}。`
-      : "前置条件已满足，可以建任务（POST /api/tasks，Spec 会冻结在任务里）。");
+      : "前置条件已满足，可以建任务（报表配置会冻结在任务里）。");
   }
 
   async function renderMetricOptions() {
@@ -1634,8 +1579,8 @@
       box.appendChild(label);
     });
     setText("metrics-source", catalog.source === "openapi"
-      ? "（来源：后端 /openapi.json）"
-      : `（后端目录读取失败，用兜底清单：${catalog.source}）`);
+      ? "（清单已同步）"
+      : "（本次未同步到清单，显示的是内置清单）");
     updateCreatePrecondition();
   }
 
@@ -1643,7 +1588,7 @@
   // 尚未实现的能力：把"为什么不可用、归哪个 TASK"写进 title，
   // 让禁用状态是**可解释的**，而不是一个不响应的死按钮。
   // ══════════════════════════════════════════════════════════════════════
-  const INERT_HINT = "尚未实现：自然语言分析由 TASK-004 接入（NL → Intent → 白名单 Tool → 确定性计算）";
+  const INERT_HINT = "自然语言入口暂不可用";
 
   function renderInertControls() {
     // 自然语言入口在 TASK-004 已经**真的接通**了，不再进"未实现"名单 ——
@@ -1656,18 +1601,18 @@
     renderNlNote();
     // 三个企业化开关：禁用的原因是"能力还没做"，把归口 TASK 写在 title 上（不摆假的状态标签）
     const switches = [
-      ["sec-rbac", "用户与权限（RBAC）尚未实现：TASK-011 接入"],
-      ["sec-acl", "访问控制白 / 黑名单尚未实现：TASK-012 接入"],
-      ["sec-circuit", "熔断机制尚未实现：TASK-013 接入"],
+      ["sec-rbac", "用户与权限（RBAC）尚未实现"],
+      ["sec-acl", "访问控制白 / 黑名单尚未实现"],
+      ["sec-circuit", "熔断机制尚未实现"],
     ];
     switches.forEach(([id, hint]) => {
       const el = $(id);
       if (el) el.title = hint;
     });
     const notify = $("btn-notify");
-    if (notify) notify.title = "通知：后端暂无通知能力（企业化能力在 TASK-014，未启用）";
+    if (notify) notify.title = "通知：暂未提供";
     const facts = $("hero-facts");
-    if (facts) facts.title = "以上四项全部来自 GET /api/health 的真实字段";
+    if (facts) facts.title = "以上四项为最近一次读取到的真实状态";
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1677,8 +1622,6 @@
     const caps = state.capabilities;
     if (!caps || !caps.intents) return;   // 拿不到能力清单就不改文案（不编一句"支持三类问题"糊上去）
 
-    const llm = caps.llm || {};
-    const llmText = llm.configured ? `${llm.model || "LLM"} 已就绪` : "LLM 未配置（只能走关键词降级）";
     const names = caps.intents.map((item) => item.title).join(" / ");
     const profile = caps.data_profile || {};
     // 币种**取自后端声明**（数据里没有货币字段，单位不能在前端猜、也不在前端写死）：
@@ -1688,8 +1631,7 @@
       ? `金额单位：${currency.name}${currency.symbol ? `（${currency.symbol}，${currency.code || ""}）` : ""}`
       : "";
 
-    setText("nl-note", `自然语言入口：可问 ${names}（数字全部由程序算，LLM 只负责听懂问题与组织语言）· ${llmText}`);
-    setText("chat-source", `POST /api/chat · 白名单工具 ${caps.intents.length} 个${currencyText ? ` · ${currencyText}` : ""}`);
+    setText("nl-note", `自然语言入口：可问 ${names}（数字全部由程序算，文字由模型整理）`);
     setText(
       "hero-nl-note",
       `本版支持 ${names}；数据范围 ${text(profile.first_day)} ~ ${text(profile.last_day)}，`

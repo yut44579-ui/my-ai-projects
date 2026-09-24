@@ -132,7 +132,7 @@ def client() -> Any:
     """
     key = api_key()
     if key is None:
-        raise LLMError("llm_no_key", f"环境变量 {API_KEY_ENV} 没配 —— 未接 LLM，只能走关键词匹配降级")
+        raise LLMError("llm_no_key", "没有配置模型服务 —— 本次只做确定性计算")
     global _client, _client_key
     if _client is None or _client_key != key:
         try:
@@ -194,6 +194,32 @@ def chat(
         f"DeepSeek 返回空内容（finish_reason={choice.finish_reason}，"
         f"max_tokens={payload_tokens}）—— 未编造答案，请重试或调大 max_tokens",
     )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 给用户看的一句话（用户 2026-09-24：「技术细节不要出现在业务界面上」）
+# ════════════════════════════════════════════════════════════════════════
+# 为什么需要这张表：LLMError 的 message 是给开发者看的（异常类名、finish_reason、
+# max_tokens、服务商名），它会被 service.py 拼进 notice、被 answer.py 拼进【为什么】——
+# 两处都是**用户要读的文字**。所以：**原始 message 一个字不动地留在记录里**
+# （record["llm"]["error"] / record["parse"]["llm_error"]，后台照样能查），
+# 上界面的那一份走这张表，换成人话。
+USER_FACING_ERRORS = {
+    "llm_not_configured": "没有配置可用的模型服务",
+    "llm_no_key": "没有配置可用的模型服务",
+    "llm_sdk_missing": "模型服务组件未就绪",
+    "llm_auth_failed": "模型服务鉴权没通过",
+    "llm_call_failed": "这次没连上模型服务",
+    "llm_empty_response": "模型这次没有返回内容",
+}
+_ERROR_FALLBACK = "模型服务暂时不可用"
+
+
+def user_facing_error(llm_error: dict[str, Any] | None) -> str:
+    """把 LLMError 的 code 翻成一句给用户看的话（认不出的码一律用兜底句，不回声原文）。"""
+    if not llm_error:
+        return _ERROR_FALLBACK
+    return USER_FACING_ERRORS.get(str(llm_error.get("code") or ""), _ERROR_FALLBACK)
 
 
 def last_call_info() -> dict[str, Any]:

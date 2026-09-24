@@ -31,7 +31,14 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.ai.answer import currency_guard  # noqa: E402
+from app.ai.answer import (  # noqa: E402
+    SECTION_ACTIONS,
+    SECTION_CONTRIBUTION,
+    SECTION_TITLES,
+    SECTION_WHAT,
+    SECTION_WHY,
+    currency_guard,
+)
 from app.api import app  # noqa: E402
 
 WEB_DIR = PROJECT_ROOT / "web"
@@ -51,12 +58,88 @@ FORBIDDEN_IN_FRONTEND = ["setTimeout", "mock", "Mock", "TODO", "FIXME", "占位"
 # 禁止硬编码的业务结果（这些数字只能来自后端响应）
 FORBIDDEN_NUMBERS = ["316412.16", "316,412.16", "19950", "19,950"]
 
-# 深色设计规格（docs/设计规格-深色企业级.md）里必须落地的 token
-REQUIRED_TOKENS = ["#080B12", "#0F1622", "#0A111C", "#1E293B", "#2563EB"]
+# 深色设计规格（docs/设计规格-深色企业级.md）里必须落地的 token。
+# 2026-09-24 用户要求「UI 参照腾讯 TDesign 官方 Design Token」，
+# 于是自造的深蓝黑（#080B12/#0A111C/#0F1622/#1E293B）换成 TDesign 灰度阶，
+# 主色 #2563EB 换成 TDesign 深色品牌色（brand-8）。这里钉的是**换血后的真实值**：
+#   三层明度阶梯 = gray-14 页面 / gray-13 区块 / gray-12 卡片；描边 = gray-11；主色 = brand-8。
+REQUIRED_TOKENS = ["#181818", "#242424", "#2c2c2c", "#393939", "#4582e6"]
 
 
 def read(name: str) -> str:
     return (WEB_DIR / name).read_text(encoding="utf-8")
+
+
+def strip_comments(source: str) -> str:
+    """把**注释**剥掉，只留"会画到屏幕上的东西"。
+
+    「界面不许出现技术细节」这条针对的是用户看得见的文字；注释是留给开发者的，
+    用户看不见（`// GET /api/tasks/{id} 的响应` 这种说明留着反而有用）。
+    所以检查前先剥注释：HTML 的 `<!-- -->` + JS/CSS 的 `/* */` 与行尾 `//`。
+
+    为什么不是简单的按行切：`//` 可能出现在字符串里（`"https://…"`）或正则里
+    （`replace(/[&<>"']/g, …)`），按行切会误伤或漏切 —— 这里用一个最小状态机，
+    只在**引号/正则之外**才算注释。它不追求完整 JS 语法，够本项目用即可。
+    """
+    out: list[str] = []
+    i, n = 0, len(source)
+    quote = ""            # 当前是否在字符串里（" / ' / `）
+    previous = ""         # 上一个非空白字符，用来判断 `/` 是除号还是正则开头
+    while i < n:
+        char = source[i]
+        pair = source[i:i + 2]
+        if quote:
+            if char == "\\":            # 转义，连吃两个字符
+                out.append(source[i:i + 2])
+                i += 2
+                continue
+            if char == quote:
+                quote = ""
+            out.append(char)
+            i += 1
+            continue
+        if source[i:i + 4] == "<!--":   # HTML 注释
+            end = source.find("-->", i + 4)
+            i = n if end < 0 else end + 3
+            continue
+        if pair == "/*":                # 块注释（CSS/JS 通用）
+            end = source.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+            continue
+        if pair == "//":                # 行注释
+            end = source.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        # 正则字面量：`/` 出现在"表达式位置"（前面是 ( , = : [ ! & | ? { } ; 或行首）时
+        # 才是正则，否则是除号。正则内部可能有引号和 `/`（字符类里），必须整段吃掉，
+        # 否则 `/[&<>"']/g` 里的 `'` 会被当成字符串开头，把后面整段代码都算进字符串。
+        if char == "/" and previous in ("", "(", ",", "=", ":", "[", "!", "&", "|", "?", "{", "}", ";"):
+            j = i + 1
+            in_class = False
+            while j < n:
+                if source[j] == "\\":
+                    j += 2
+                    continue
+                if source[j] == "[":
+                    in_class = True
+                elif source[j] == "]":
+                    in_class = False
+                elif source[j] == "/" and not in_class:
+                    break
+                elif source[j] == "\n":
+                    break
+                j += 1
+            out.append(source[i:j + 1])
+            i = j + 1
+            previous = "/"
+            continue
+        if char in "\"'`":
+            quote = char
+        if not char.isspace():
+            previous = char
+        out.append(char)
+        i += 1
+    return "".join(out)
 
 
 def test_frontend_dir_exists() -> None:
@@ -154,6 +237,41 @@ def test_dark_enterprise_tokens_are_present() -> None:
     assert "font-size: 30px" in css, "KPI 数值不是设计规格里的 28~32px 大字号"
 
 
+def test_ui_tokens_are_declared_once_and_used() -> None:
+    """TDesign token 化：**一处声明、全局引用**，别处不许再硬编码色值/圆角。
+
+    用户 2026-09-24：「在 web/style.css 顶部用 :root 声明上表所有变量（一处声明），
+    其余地方不许再出现硬编码色值/圆角」。这条把它变成可执行的检查：
+      ① 每个 var() 引用的变量都真的有声明（避免拼错变量名 → 悄悄用了继承值/初始值）；
+      ② :root 之外没有 #rrggbb / rgba() 字面量（语义色底纹那几处也在 :root 里声明）。
+    """
+    css = read("style.css")
+    declared = set(re.findall(r"^\s*(--[A-Za-z0-9-]+)\s*:", css, re.M))
+    used = set(re.findall(r"var\((--[A-Za-z0-9-]+)\)", css))   # 要求右括号：注释里的 var(--td-*) 不算
+    assert not used - declared, f"引用了没声明的变量（拼错会静默失效）：{sorted(used - declared)}"
+    # :root 块之外的硬编码色值
+    root_match = re.search(r":root\s*\{(.*?)\n\}", css, re.S)
+    assert root_match, "style.css 顶部没有 :root 声明块"
+    # 注释里写"gray-14 就是 #181818"是给人看的说明，不算硬编码 → 先剥注释
+    outside = strip_comments(css.replace(root_match.group(0), ""))
+    for pattern, what in ((r"#[0-9a-fA-F]{6}\b", "十六进制色值"), (r"rgba?\(", "rgba 色值")):
+        hits = sorted(set(re.findall(pattern, outside)))
+        assert not hits, f":root 之外还有硬编码{what}：{hits}"
+    for radius in re.findall(r"border-radius:\s*([^;]+);", outside):
+        assert "var(" in radius or radius.strip() in ("0", "0px", "inherit"), \
+            f":root 之外还有硬编码圆角：{radius.strip()}"
+    # TDesign 的档位 token 必须在（表格行高/按钮高度/间距不许到处手写 padding）
+    for tier in ("--td-compact-height", "--td-medium-height", "--td-loose-height"):
+        assert tier in declared, f"缺少 TDesign 尺寸档位 {tier}"
+    # 圆角默认收紧到 3px（大圆角只留给头像/胶囊）
+    assert "--td-radius-default: 3px" in css, "控件圆角没有收到 TDesign 的 3px"
+    for radius_token in ("--td-radius-round: 999px", "--td-radius-circle: 50%"):
+        assert radius_token in css, f"缺少 {radius_token}（头像/胶囊要用）"
+    # 交互元素必须补齐 hover / active / disabled / focus
+    for state in (":hover", ":active", ":disabled", ":focus-visible"):
+        assert state in css, f"交互元素缺少 {state} 状态"
+
+
 def test_five_ui_states_have_real_anchors() -> None:
     """五种状态都要有实际落点（不是写在文档里的口号）。"""
     html, css, js = read("index.html"), read("style.css"), read("app.js")
@@ -183,8 +301,40 @@ def test_disabled_controls_explain_themselves() -> None:
         match = re.search(rf'<[^>]*id="{control}"[^>]*>', html)
         assert match, f"找不到控件 {control}"
         assert "disabled" not in match.group(0), f"{control} 还是禁用的（TASK-004 已交付，应可用）"
-    assert "INERT_HINT" in js and "TASK-011" in js and "TASK-012" in js and "TASK-013" in js
+    # 禁用理由要写清楚（业务话术），但**不许**再写"归哪个开发阶段"——
+    # 用户 2026-09-24 明确要求界面不出现 TASK-xxx 这类开发进度标注。
+    assert "INERT_HINT" in js and "尚未实现" in js
+    assert "TASK-0" not in strip_comments(js) and "TASK-0" not in strip_comments(html)
     assert "已开启" not in html and "已开启" not in js
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑦-b 界面只给业务语言：技术实现细节一律不渲染（后端字段照旧、只是前端不画）
+# ════════════════════════════════════════════════════════════════════════
+def test_界面不渲染技术细节_后端字段照旧() -> None:
+    """用户 2026-09-24：Intent JSON / 调用的工具 / 数字闸门说明 / POST 路径 / TASK 标注都不许上界面。
+
+    这条只查"画出来的东西"：注释里留开发说明是可以的（用户看不见），
+    所以先把注释剥掉再查 —— 后端字段一个都没删（那些由 tests/test_chat.py 钉着）。
+    """
+    html, js = strip_comments(read("index.html")), strip_comments(read("app.js"))
+    for text, name in ((html, "index.html"), (js, "app.js")):
+        # 「白名单」是**企业安全术语**（访问控制白/黑名单，一条尚未启用的能力说明），
+        # 不是实现细节，界面上保留；「JSON」同理（Spec 查看器的数据格式不是给用户看的机制说明，
+        # 但它在 数据管理 页是产品自己的产物）。这里只钉真正刺眼的三类。
+        for banned in ("TASK-0", "/api/", "数字闸门", "Intent"):
+            assert banned not in text, f"{name} 里还有技术细节：{banned}"
+    # 链路面板只剩「问题 / 事实 / 回答」三块，Intent 与工具那两块连壳都不留
+    for gone in ('id="chat-intent"', 'id="chat-tool"', 'id="chat-step-intent"', 'id="chat-step-tool"'):
+        assert gone not in html, f"{gone} 还挂在页面上（撤掉就要连壳一起撤）"
+    for gone in ("chat-intent", "chat-tool", "renderChatTool", "allowed_count"):
+        assert gone not in js, f"app.js 还在渲染 {gone}"
+    # 用户该看到的四段仍然在：标题由**后端**给（前端只画 section.title，不自己攒文案），
+    # 所以这半钉在 answer.py 的常量上；前端"确实渲染了后端标题"钉在下一行。
+    assert "title.textContent = section.title" in js, "前端没有用后端给的分段标题"
+    for key in (SECTION_WHAT, SECTION_CONTRIBUTION, SECTION_WHY, SECTION_ACTIONS):
+        title = SECTION_TITLES[key]
+        assert title.startswith("【") and title.endswith("】"), f"分段标题格式变了：{title}"
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -214,10 +364,10 @@ def test_frontend_has_no_hardcoded_business_numbers() -> None:
 
 
 def test_frontend_currency_comes_from_backend() -> None:
-    """金额单位（英镑）**只能**从 capabilities 的 currency 声明取，前端不许自己写死单位。
+    """金额单位（人民币「元」）**只能**从 capabilities 的 currency 声明取，前端不许写死单位。
 
     数据里没有货币字段 —— 前端硬编码一个「元/¥」就是"猜一个单位"，
-    不但会跟后端事实段对不上，还会把英镑的数字说成人民币。
+    换了数据集（或改了声明）两边立刻对不上。
     """
     js = read("app.js")
     assert "caps.currency" in js, "前端没有读后端声明的 currency（单位从哪来？）"
@@ -229,7 +379,7 @@ def test_frontend_has_no_wrong_currency_marks() -> None:
     """四份前端源码里**不许出现任何写死的错误币种字样**（沿用后端那把尺子：answer.currency_guard）。
 
     为什么复用后端函数而不是在前端测试里另写一条正则：币种错误只在**一处**定义
-    （`tools.DATASET_CURRENCY` 声明的是英镑），"什么算写错单位"也该只有一处定义 ——
+    （`tools.DATASET_CURRENCY` 声明的是人民币「元」），"什么算写错单位"也该只有一处定义 ——
     否则两边尺子不一致，闸门挡得住模型、挡不住前端。
     """
     for name in ("app.js", "api.js", "index.html", "style.css"):

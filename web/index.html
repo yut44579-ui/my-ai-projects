@@ -31,7 +31,7 @@
         <input id="global-search" type="search" placeholder="搜索任务 / 执行记录 / 数据文件" autocomplete="off">
       </label>
 
-      <div class="chip" title="数据源快照来自后端 /api/health 的 data_snapshot">
+      <div class="chip" title="数据源快照：最近一次读取到的数据概况">
         <span class="dot" id="datasource-dot"></span>
         <span id="datasource-label">数据源：读取中…</span>
       </div>
@@ -39,15 +39,17 @@
       <div class="nl-entry">
         <input id="nl-input" type="text" placeholder="用自然语言提问，例如「2011年11月卖了多少」" autocomplete="off">
         <button id="nl-ask" class="btn btn-primary btn-sm">分析</button>
-        <span class="nl-note" id="nl-note">自然语言入口：数字全部由程序算，LLM 只负责听懂问题与组织语言</span>
+        <!-- 这句是 JS 还没跑起来时的兜底文案；renderNlNote() 会用后端能力清单覆盖它。
+             两处都不写「LLM」——业务界面上只说「模型」，不说内部组件名。 -->
+        <span class="nl-note" id="nl-note">自然语言入口：可问销售汇总 / 趋势 / 产品排行 / 区间比较 / 国家分布（数字全部由程序算，文字由模型整理）</span>
       </div>
     </div>
 
     <div class="topbar-right">
-      <button class="icon-btn" id="btn-notify" title="通知：后端暂无通知能力（企业化能力在 TASK-014）">通知</button>
+      <button class="icon-btn" id="btn-notify" title="通知：暂未提供">通知</button>
       <button class="icon-btn" id="btn-history" title="跳到数据管理 · 执行记录">历史</button>
       <button class="icon-btn" id="btn-settings" title="跳到系统设置">设置</button>
-      <div class="avatar" id="avatar" title="当前用户（未做鉴权，TASK-011 接入）">本</div>
+      <div class="avatar" id="avatar" title="当前用户">本</div>
     </div>
   </header>
 
@@ -101,7 +103,7 @@
           <div class="fact-row" id="fact-data">数据源：读取中…</div>
           <div class="fact-row" id="fact-template">模板：读取中…</div>
           <div class="fact-row" id="fact-state">状态文件：读取中…</div>
-          <div class="fact-row" id="fact-code">代码版本：读取中…</div>
+          <div class="fact-row" id="fact-code">数据校验：读取中…</div>
         </div>
       </div>
 
@@ -109,13 +111,12 @@
       <div class="card" id="chat-panel">
         <div class="card-head">
           <h2>自然语言问答</h2>
-          <span class="muted-sm" id="chat-source">POST /api/chat</span>
         </div>
 
         <div class="empty" id="chat-empty">
           <div class="empty-ico">✦</div>
           <div class="empty-title">还没有提问</div>
-          <div class="empty-hint">在上面任意一个输入框里用大白话提问。回答分三段：【发生了什么】是程序算出来的事实，【为什么】是推断（会标注），【建议行动】是模型生成。</div>
+          <div class="empty-hint">在上面任意一个输入框里用大白话提问。回答会分【发生了什么】【主要贡献】【为什么】【建议行动】几段：事实由程序算出来，推断会标注，建议由模型给出。</div>
         </div>
 
         <div class="chat-state" id="chat-state" hidden></div>
@@ -128,27 +129,17 @@
           </div>
 
           <details class="chain" id="chat-step-question" open>
-            <summary>① 用户问题</summary>
+            <summary>① 你问的问题</summary>
             <div class="chain-body" id="chat-question"></div>
           </details>
 
-          <details class="chain" id="chat-step-intent">
-            <summary>② 解析出的 Intent JSON</summary>
-            <div class="chain-body"><pre class="code" id="chat-intent"></pre></div>
-          </details>
-
-          <details class="chain" id="chat-step-tool">
-            <summary>③ 实际调用的工具</summary>
-            <div class="chain-body" id="chat-tool"></div>
-          </details>
-
           <details class="chain" id="chat-step-facts">
-            <summary>④ 事实结果（数字的出处）</summary>
+            <summary>② 算出来的事实（数字的出处）</summary>
             <div class="chain-body" id="chat-facts"></div>
           </details>
 
           <details class="chain" id="chat-step-answer" open>
-            <summary>⑤ 回答（分区）</summary>
+            <summary>③ 回答</summary>
             <div class="chain-body" id="chat-answer"></div>
           </details>
 
@@ -160,11 +151,10 @@
       <div class="card" id="chat-history-wrap">
         <div class="card-head">
           <h2>历史提问</h2>
-          <span class="muted-sm">GET /api/conversations（落盘 state/conversations.json）</span>
         </div>
         <div class="empty" id="chat-history-empty">
           <div class="empty-title">还没有历史提问</div>
-          <div class="empty-hint">提过的问题会落盘，刷新页面后仍能在这里查到（含当时的 Intent 与算出来的数字）。</div>
+          <div class="empty-hint">提过的问题都会保留，刷新页面后仍能在这里查到。</div>
         </div>
         <div class="rows" id="chat-history"></div>
       </div>
@@ -190,12 +180,12 @@
         <div class="card kpi">
           <div class="kpi-head"><span class="kpi-ico ico-green">◈</span><span class="kpi-label">任务总数</span></div>
           <div class="kpi-value" id="kpi-tasks">—</div>
-          <div class="kpi-sub" id="kpi-tasks-sub">来自后端状态统计</div>
+          <div class="kpi-sub" id="kpi-tasks-sub">来自系统状态统计</div>
         </div>
         <div class="card chart-card">
           <div class="card-head">
             <h2>销售额走势（真实执行记录）</h2>
-            <span class="muted-sm" id="trend-caption">数据来源：GET /api/executions</span>
+            <span class="muted-sm" id="trend-caption">数据来源：历史执行记录</span>
           </div>
           <div class="chart-wrap">
             <svg id="trend-chart" viewBox="0 0 560 150" preserveAspectRatio="none" hidden>
@@ -230,19 +220,19 @@
           </div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>客户 TOP5</h2><span class="muted-sm">TASK-006</span></div>
+          <div class="card-head"><h2>客户 TOP5</h2></div>
           <div class="empty">
             <div class="empty-ico">◍</div>
             <div class="empty-title">客户维度分析尚未接入</div>
-            <div class="empty-hint">本 TASK 只做骨架；客户聚合与排行由 TASK-006 接真实数据。当前不放任何示例数据。</div>
+            <div class="empty-hint">客户聚合与排行尚未接入数据，当前不放任何示例数据。</div>
           </div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>产品排行</h2><span class="muted-sm">TASK-006</span></div>
+          <div class="card-head"><h2>产品排行</h2></div>
           <div class="empty">
             <div class="empty-ico">◈</div>
             <div class="empty-title">产品维度分析尚未接入</div>
-            <div class="empty-hint">产品聚合与排行由 TASK-006 接真实数据。当前不放任何示例数据。</div>
+            <div class="empty-hint">产品聚合与排行尚未接入数据，当前不放任何示例数据。</div>
           </div>
         </div>
       </div>
@@ -250,19 +240,19 @@
       <!-- 区块D · 两栏 -->
       <div class="duo-row">
         <div class="card">
-          <div class="card-head"><h2>行动计划</h2><span class="muted-sm">TASK-007</span></div>
+          <div class="card-head"><h2>行动计划</h2></div>
           <div class="empty">
             <div class="empty-ico">✦</div>
             <div class="empty-title">行动计划尚未接入</div>
-            <div class="empty-hint">行动计划需要先有异常发现（TASK-008），再由 TASK-007 生成。当前没有任何条目。</div>
+            <div class="empty-hint">行动计划需要先有异常发现，当前没有任何条目。</div>
           </div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>生成周报</h2><span class="muted-sm">TASK-010</span></div>
+          <div class="card-head"><h2>生成周报</h2></div>
           <div class="empty">
             <div class="empty-ico">▤</div>
             <div class="empty-title">周报生成尚未接入</div>
-            <div class="empty-hint">周报由 TASK-010 接入；当前可先在「数据管理」跑出周销售报表 xlsx。</div>
+            <div class="empty-hint">周报生成尚未接入；当前可先在「数据管理」跑出周销售报表 xlsx。</div>
           </div>
         </div>
       </div>
@@ -273,7 +263,7 @@
       <div class="card">
         <div class="card-head">
           <h2>销售分析 · 最近一次成功执行的指标明细</h2>
-          <span class="muted-sm" id="sales-caption">数据来源：GET /api/executions</span>
+          <span class="muted-sm" id="sales-caption">数据来源：历史执行记录</span>
         </div>
         <div class="table-wrap">
           <table class="table">
@@ -284,27 +274,27 @@
         <div class="empty" id="sales-empty">
           <div class="empty-ico">◔</div>
           <div class="empty-title">还没有成功执行记录</div>
-          <div class="empty-hint">本页只展示后端真实返回的指标；没有执行记录时不放示例数字。</div>
+          <div class="empty-hint">本页只展示系统真实返回的指标；没有执行记录时不放示例数字。</div>
         </div>
-        <p class="note">多周期对比、环比/同比、趋势归因由 TASK-005 接入（NL → Intent → 白名单 Tool → 确定性计算）。</p>
+        <p class="note">多周期对比、环比/同比、按国家归因，直接在「自然语言问答」里提问即可。</p>
       </div>
     </section>
 
     <!-- ── 页面：客户分析 ─────────────────────────────────────────── -->
     <section class="page" id="page-customers" hidden>
       <div class="card">
-        <div class="card-head"><h2>客户分析</h2><span class="muted-sm">TASK-006</span></div>
+        <div class="card-head"><h2>客户分析</h2></div>
         <div class="empty">
           <div class="empty-ico">◍</div>
           <div class="empty-title">客户维度分析尚未接入</div>
-          <div class="empty-hint">客户聚合、复购、流失判定由 TASK-006 实现。本页当前不放任何客户数据。</div>
+          <div class="empty-hint">客户聚合、复购、流失判定尚未接入，本页当前不放任何客户数据。</div>
         </div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>当前可用的数据文件</h2><span class="muted-sm">来自任务绑定（GET /api/tasks）</span></div>
+        <div class="card-head"><h2>当前可用的数据文件</h2><span class="muted-sm">来自任务绑定</span></div>
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>文件</th><th>file_id</th><th>数据哈希</th></tr></thead>
+            <thead><tr><th>文件</th><th>文件编号</th><th>数据哈希</th></tr></thead>
             <tbody id="cust-files-body"></tbody>
           </table>
         </div>
@@ -319,11 +309,11 @@
     <!-- ── 页面：产品分析 ─────────────────────────────────────────── -->
     <section class="page" id="page-products" hidden>
       <div class="card">
-        <div class="card-head"><h2>产品分析</h2><span class="muted-sm">TASK-006</span></div>
+        <div class="card-head"><h2>产品分析</h2></div>
         <div class="empty">
           <div class="empty-ico">◈</div>
           <div class="empty-title">产品维度分析尚未接入</div>
-          <div class="empty-hint">产品排行、贡献度、退货率由 TASK-006 实现。本页当前不放任何产品数据。</div>
+          <div class="empty-hint">产品排行、贡献度、退货率尚未接入，本页当前不放任何产品数据。</div>
         </div>
       </div>
     </section>
@@ -331,19 +321,19 @@
     <!-- ── 页面：异常发现 ─────────────────────────────────────────── -->
     <section class="page" id="page-anomaly" hidden>
       <div class="card">
-        <div class="card-head"><h2>异常发现</h2><span class="muted-sm">TASK-008</span></div>
+        <div class="card-head"><h2>异常发现</h2></div>
         <div class="empty">
           <div class="empty-ico">⚠</div>
           <div class="empty-title">异常发现尚未接入</div>
-          <div class="empty-hint">销售额/销量的周环比异常、突增突降与离群点由 TASK-008 在同一份冻结数据上算出；本页当前不放任何异常结论。</div>
+          <div class="empty-hint">销售额/销量的周环比异常、突增突降与离群点尚未接入；本页当前不放任何异常结论。</div>
         </div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>行动计划（依赖异常结论）</h2><span class="muted-sm">TASK-007 / TASK-008</span></div>
+        <div class="card-head"><h2>行动计划（依赖异常结论）</h2></div>
         <div class="empty">
           <div class="empty-ico">▶</div>
           <div class="empty-title">还没有行动计划</div>
-          <div class="empty-hint">先有异常发现（TASK-008）才谈得上行动计划（TASK-007）；右栏的「行动计划」面板读的是同一份结论。</div>
+          <div class="empty-hint">先有异常发现，才谈得上行动计划；右栏的「行动计划」面板读的是同一份结论。</div>
         </div>
       </div>
     </section>
@@ -351,15 +341,15 @@
     <!-- ── 页面：周报中心 ─────────────────────────────────────────── -->
     <section class="page" id="page-weekly" hidden>
       <div class="card">
-        <div class="card-head"><h2>周报中心</h2><span class="muted-sm">TASK-010</span></div>
+        <div class="card-head"><h2>周报中心</h2></div>
         <div class="empty">
           <div class="empty-ico">▤</div>
           <div class="empty-title">周报生成尚未接入</div>
-          <div class="empty-hint">周报汇总由 TASK-010 实现；当前可用的是「数据管理」里的周销售报表执行链路。</div>
+          <div class="empty-hint">周报汇总尚未接入；当前可用的是「数据管理」里的周销售报表执行记录。</div>
         </div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>已有任务（可作为周报的数据来源）</h2><span class="muted-sm">GET /api/tasks</span></div>
+        <div class="card-head"><h2>已有任务（可作为周报的数据来源）</h2></div>
         <div class="table-wrap">
           <table class="table">
             <thead><tr><th>任务</th><th>时间范围</th><th>状态</th><th>执行次数</th></tr></thead>
@@ -377,7 +367,7 @@
     <!-- ── 页面：数据管理（旧链路全保留）────────────────────────────── -->
     <section class="page" id="page-data" hidden>
       <div class="card">
-        <div class="card-head"><h2>① 上传数据</h2><span class="muted-sm">POST /api/upload</span></div>
+        <div class="card-head"><h2>① 上传数据</h2></div>
         <div class="row">
           <input id="file-input" type="file" accept=".xlsx,.xls">
           <button id="btn-upload" class="btn btn-primary">上传</button>
@@ -391,10 +381,10 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>数据文件</h2><span class="muted-sm">来自任务绑定（上传记录本身无列表端点）</span></div>
+        <div class="card-head"><h2>数据文件</h2><span class="muted-sm">来自任务绑定</span></div>
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>文件</th><th>file_id</th><th>数据哈希</th><th>用于任务</th></tr></thead>
+            <thead><tr><th>文件</th><th>文件编号</th><th>数据哈希</th><th>用于任务</th></tr></thead>
             <tbody id="files-table-body"></tbody>
           </table>
         </div>
@@ -406,15 +396,15 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>② 建任务（固化 Report Spec）</h2><span class="muted-sm">POST /api/tasks</span></div>
+        <div class="card-head"><h2>② 建任务（固化 Report Spec）</h2></div>
         <div class="grid2">
           <label class="field">任务名称<input id="task-name" type="text" placeholder="例如：上周销售汇总"></label>
-          <label class="field">file_id（来自上传结果）<input id="task-file-id" type="text" placeholder="上传后自动填入"></label>
+          <label class="field">文件编号（来自上传结果）<input id="task-file-id" type="text" placeholder="上传后自动填入"></label>
           <label class="field">开始日期<input id="task-start" type="date"></label>
           <label class="field">结束日期<input id="task-end" type="date"></label>
         </div>
         <div class="field">
-          <span class="field-label">指标（白名单来自后端 /openapi.json）<span class="muted-sm" id="metrics-source"></span></span>
+          <span class="field-label">指标（可选范围由系统给出）<span class="muted-sm" id="metrics-source"></span></span>
           <div class="metrics" id="task-metrics"></div>
         </div>
         <div class="row">
@@ -425,7 +415,7 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>③ Report Spec（冻结在任务里）</h2><span class="muted-sm">GET /api/tasks/{task_id}</span></div>
+        <div class="card-head"><h2>③ Report Spec（冻结在任务里）</h2></div>
         <div class="row">
           <label class="field">选择任务
             <select id="task-select"><option value="">（还没有任务）</option></select>
@@ -439,12 +429,12 @@
         <div class="empty" id="spec-empty">
           <div class="empty-ico">▤</div>
           <div class="empty-title">还没有选中任何任务</div>
-          <div class="empty-hint">先上传数据并建一个任务；选中后这里显示的就是任务里冻结的 Spec 原文（刷新后重新从后端读）。</div>
+          <div class="empty-hint">先上传数据并建一个任务；选中后这里显示的就是任务里冻结的 Spec 原文（刷新后重新读取）。</div>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>④ 执行结果</h2><span class="muted-sm">POST /api/tasks/{task_id}/run</span></div>
+        <div class="card-head"><h2>④ 执行结果</h2></div>
         <div class="row">
           <button id="btn-run-task" class="btn btn-primary" disabled>执行这个任务</button>
           <button id="btn-download" class="btn" disabled>下载产出 xlsx</button>
@@ -459,23 +449,23 @@
         <div class="empty" id="run-empty">
           <div class="empty-ico">▶</div>
           <div class="empty-title">还没有执行过任务</div>
-          <div class="empty-hint">选中任务后点「执行这个任务」，这里显示后端真实算出的指标与下载按钮。</div>
+          <div class="empty-hint">选中任务后点「执行这个任务」，这里显示真实算出的指标与下载按钮。</div>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>⑤ 执行记录（审计凭据）</h2><span class="muted-sm">GET /api/executions</span></div>
+        <div class="card-head"><h2>⑤ 执行记录（审计凭据）</h2></div>
         <div class="row"><button id="btn-refresh-exec" class="btn">刷新</button></div>
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>execution_id</th><th>任务</th><th>状态</th><th class="num">销售额</th><th class="num">行数</th><th>代码版本</th><th>时间</th></tr></thead>
+            <thead><tr><th>执行编号</th><th>任务</th><th>状态</th><th class="num">销售额</th><th class="num">行数</th><th>时间</th></tr></thead>
             <tbody id="exec-table-body"></tbody>
           </table>
         </div>
         <div class="empty" id="exec-empty">
           <div class="empty-ico">▤</div>
           <div class="empty-title">还没有执行记录</div>
-          <div class="empty-hint">执行记录是后端落盘的审计凭据；成功与失败都会记，刷新页面也不会丢。</div>
+          <div class="empty-hint">执行记录是系统落盘的审计凭据；成功与失败都会记，刷新页面也不会丢。</div>
         </div>
       </div>
 
@@ -487,7 +477,7 @@
         上面那条冻结的报表链路一个字段都没动。
       -->
       <div class="card">
-        <div class="card-head"><h2>文档资料（Word / PDF）</h2><span class="muted-sm">POST /api/documents · 真实文本提取</span></div>
+        <div class="card-head"><h2>文档资料（Word / PDF）</h2><span class="muted-sm">真实文本提取</span></div>
         <div class="row">
           <input id="doc-input" type="file" accept=".docx,.pdf">
           <button id="btn-doc-upload" class="btn btn-primary">上传并提取</button>
@@ -499,7 +489,7 @@
 
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>文档</th><th>doc_id</th><th class="num">字符数</th><th class="num">块</th><th>SHA256</th><th>上传时间</th><th>操作</th></tr></thead>
+            <thead><tr><th>文档</th><th>文档编号</th><th class="num">字符数</th><th class="num">块</th><th>数据哈希</th><th>上传时间</th><th>操作</th></tr></thead>
             <tbody id="docs-table-body"></tbody>
           </table>
         </div>
@@ -527,28 +517,28 @@
     <!-- ── 页面：系统设置 ─────────────────────────────────────────── -->
     <section class="page" id="page-settings" hidden>
       <div class="card">
-        <div class="card-head"><h2>运行状态</h2><span class="muted-sm">GET /api/health</span></div>
+        <div class="card-head"><h2>运行状态</h2></div>
         <div class="table-wrap">
           <table class="table"><tbody id="set-health-body"></tbody></table>
         </div>
         <div class="empty" id="set-health-empty">
           <div class="empty-ico">⚙</div>
-          <div class="empty-title">还没读到后端状态</div>
-          <div class="empty-hint">点顶部「设置」或刷新页面重新请求 /api/health。</div>
+          <div class="empty-title">还没读到系统状态</div>
+          <div class="empty-hint">点顶部「设置」或刷新页面重新读取运行状态。</div>
         </div>
         <div class="table-wrap" id="set-problems-wrap" hidden>
-          <div class="field-label">后端自报的问题</div>
+          <div class="field-label">系统上报的问题</div>
           <ul class="conclusion-list" id="set-problems"></ul>
         </div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>存储</h2><span class="muted-sm">TASK-002 只做 Repository 抽象，未迁数据库</span></div>
+        <div class="card-head"><h2>存储</h2></div>
         <div class="table-wrap">
           <table class="table"><tbody id="set-storage-body"></tbody></table>
         </div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>企业化能力（尚未启用）</h2><span class="muted-sm">TASK-011 / 012 / 013</span></div>
+        <div class="card-head"><h2>企业化能力（尚未启用）</h2></div>
         <div class="switch-row"><span>用户与权限（RBAC）</span><button class="switch" id="sec-rbac" disabled>未启用</button></div>
         <div class="switch-row"><span>访问控制白名单 / 黑名单</span><button class="switch" id="sec-acl" disabled>未启用</button></div>
         <div class="switch-row"><span>熔断机制</span><button class="switch" id="sec-circuit" disabled>未启用</button></div>
@@ -586,30 +576,27 @@
       <div class="pane" id="rp-pane-perm">
         <div class="kv"><span>当前用户</span><b>本地（单用户模式）</b></div>
         <div class="kv"><span>角色</span><b>owner</b></div>
-        <div class="kv"><span>鉴权</span><b class="warn">未启用（TASK-011）</b></div>
-        <p class="note">单用户单进程部署，全部接口当前不做鉴权；鉴权落地前，这里不摆任何"已授权"状态标签。</p>
+        <div class="kv"><span>鉴权</span><b class="warn">未启用</b></div>
+        <p class="note">单用户单进程部署，全部功能当前不做鉴权；鉴权落地前，这里不摆任何"已授权"状态标签。</p>
       </div>
 
       <div class="pane" id="rp-pane-security" hidden>
-        <div class="kv"><span>白名单</span><b class="warn">未启用（TASK-012）</b></div>
-        <div class="kv"><span>黑名单</span><b class="warn">未启用（TASK-012）</b></div>
+        <div class="kv"><span>白名单</span><b class="warn">未启用</b></div>
+        <div class="kv"><span>黑名单</span><b class="warn">未启用</b></div>
         <div class="kv"><span>数据快照校验</span><b class="ok" id="rp-snapshot">读取中…</b></div>
-        <p class="note">数据快照校验是已实现的闸门（执行前核对 SHA256）；白 / 黑名单尚未实现。</p>
+        <p class="note">数据快照校验已实现：执行前会核对数据文件的哈希，确认没被改过。白 / 黑名单尚未实现。</p>
       </div>
 
       <div class="pane" id="rp-pane-circuit" hidden>
-        <div class="kv"><span>熔断机制</span><b class="warn">未启用（TASK-013）</b></div>
-        <div class="kv"><span>单进程约束</span><b class="ok">--workers 1</b></div>
-        <p class="note">状态为 JSON 文件 + 进程内锁，必须单进程运行；多进程安全等 TASK-009 迁 SQLite 后解决。</p>
+        <div class="kv"><span>熔断机制</span><b class="warn">未启用</b></div>
+        <p class="note">状态以文件形式保存，当前需单进程运行。</p>
       </div>
 
       <div class="pane" id="rp-pane-status" hidden>
         <div class="kv"><span>服务</span><b id="rp-service">读取中…</b></div>
         <div class="kv"><span>API 版本</span><b id="rp-api-version">读取中…</b></div>
-        <div class="kv"><span>代码版本</span><b id="rp-code-version">读取中…</b></div>
         <div class="kv"><span>状态文件</span><b id="rp-state-readable">读取中…</b></div>
         <div class="kv"><span>上传 / 执行 / 任务</span><b id="rp-counts">读取中…</b></div>
-        <div class="kv"><span>前端模式</span><b class="ok">原生 HTML/CSS/JS</b></div>
       </div>
     </div>
   </aside>

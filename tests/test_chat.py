@@ -416,7 +416,7 @@ def test_AC04_LLM写的数字必须能在事实里找到出处_合规时放行(m
     # 引用一个**事实里确实有**的数字（销售额，写成中文数字更保险，但这里故意写成一个存在的数）
     facts_amount = executor.compute_sales_amount(*D16_WEEK_RANGE)["amount"]
     _llm_returns(
-        f"【为什么】\n这一周有效行占比较高，需求集中在少数几个单品上（区间金额 {facts_amount:,.2f} 英镑）。\n"
+        f"【为什么】\n这一周有效行占比较高，需求集中在少数几个单品上（区间金额 {facts_amount:,.2f} 元）。\n"
         f"【建议行动】\n- 关注头部单品\n- 复核取消单",
         monkeypatch,
     )
@@ -431,7 +431,7 @@ def test_AC04_LLM写的数字必须能在事实里找到出处_合规时放行(m
 
 def test_AC04_LLM自己编数字整段作废(monkeypatch):
     _llm_returns(
-        "【为什么】\n因为华南区贡献了 999999.99 英镑的销售额。\n"
+        "【为什么】\n因为华南区贡献了 999999.99 元的销售额。\n"
         "【建议行动】\n- 加大投放 999999.99",
         monkeypatch,
     )
@@ -473,35 +473,34 @@ def test_数字闸门单元行为(monkeypatch):
     allowed = answer.collect_allowed_numbers({"amount": 1234.56}, "区间 2011-11-21 ~ 2011-11-27")
     assert "1234.56" in allowed and "1234.5" not in allowed
     assert answer.number_guard("没有任何数字", allowed)["passed"] is True
-    assert answer.number_guard("金额 1,234.56 英镑", allowed)["passed"] is True   # 千分位归一
-    bad = answer.number_guard("金额 1,234.57 英镑", allowed)
+    assert answer.number_guard("金额 1,234.56 元", allowed)["passed"] is True   # 千分位归一
+    bad = answer.number_guard("金额 1,234.57 元", allowed)
     assert bad["passed"] is False and bad["violations"] == ["1234.57"]
 
 
 def test_币种闸门单元行为():
-    """「元/人民币」是**事实错误**（数据集是英镑）→ 与编造数字同样处理：整段作废。"""
-    # 该拦的：人民币 / RMB / ¥ / 数字或中文数词 + 元 / （元） / 以元为单位
-    for bad in ("销售额是人民币", "按 RMB 计价", "合计 ¥123", "一百万元", "销售额（元）",
-                "以元为单位统计", "12 元"):
+    """「英镑/GBP/£」是**事实错误**（口径是人民币元）→ 与编造数字同样处理：整段作废。"""
+    # 该拦的：英镑 / GBP / £（含「英磅」这种错别字、全角 ￡）
+    for bad in ("销售额是英镑", "按 GBP 计价", "合计 £123", "以英镑为单位统计", "12 英镑", "英磅"):
         assert answer.currency_guard(bad), f"这段写错了币种却没被拦下：{bad}"
-    # 不该误伤的：这几个词里都有「元」，但都不是币种
+    # 不该误伤的：「元」现在是**正确**单位，各种含「元」的词都不许拦
     for ok in ("这是基本的单元测试", "多种元素的组合", "一次性买齐", "销售额集中在一百多个单品上",
-               "元旦前后是旺季", "金额以英镑计价"):
+               "元旦前后是旺季", "金额以元计价", "销售额（元）", "12 元"):
         assert answer.currency_guard(ok) == [], f"这段没写错币种却被拦下了：{ok}"
 
     # 干净的段落整体放行；写错币种的段落整段作废（且 violations 不含数字）
     allowed = answer.collect_allowed_numbers({"amount": 1234.56})
     clean = answer.number_guard("销售额集中在若干单品上", allowed)
     assert clean["passed"] is True and clean["currency_words"] == []
-    dirty = answer.number_guard("这一周的销售额以人民币结算", allowed)
+    dirty = answer.number_guard("这一周的销售额以英镑结算", allowed)
     assert dirty["passed"] is False and dirty["violations"] == []
-    assert dirty["currency_words"] == ["人民币"]
+    assert dirty["currency_words"] == ["英镑"]
 
 
 def test_AC04_LLM写错币种整段作废(monkeypatch):
-    """真模型完全可能把单位写成「元」—— 事实段与闸门两道防线都必须挡住它。"""
+    """真模型完全可能把单位写成「英镑」—— 事实段与闸门两道防线都必须挡住它。"""
     _llm_returns(
-        "【为什么】\n这批货集中在少数几个单品上，贡献了大部分人民币销售额。\n"
+        "【为什么】\n这批货集中在少数几个单品上，贡献了大部分英镑销售额。\n"
         "【建议行动】\n- 关注头部单品\n- 复核取消单",
         monkeypatch,
     )
@@ -511,10 +510,10 @@ def test_AC04_LLM写错币种整段作废(monkeypatch):
     assert record["status"] == "degraded"
     guard = record["answer"]["guard"]
     assert guard["passed"] is False
-    assert guard["currency_words"] == ["人民币"]
+    assert guard["currency_words"] == ["英镑"]
     assert guard["violations"] == []                    # 币种错、数字没错 —— 两类留痕能分清
     why = record["answer"]["sections"][1]
-    assert why["source"] == "code" and "人民币" not in why["text"]
+    assert why["source"] == "code" and "英镑" not in why["text"]
     assert "币种" in why["text"] and "作废" in why["text"]   # 作废原因说清是哪一类越界
     assert "币种" in record["notice"]
 
@@ -541,11 +540,21 @@ def test_AC05_没有key时降级且明确标注未接LLM(monkeypatch):
     assert record["status"] == "degraded"
     assert record["llm"]["used"] is False
     assert record["llm"]["answer_source"] == "code"
-    assert "未接 LLM" in record["notice"]
+    # ⚠️ 用户 2026-09-24「技术细节不上界面」：对外文案里不许再出现「未接 LLM」这种内部说法，
+    #    改成业务语言「本次没有可用的模型」——断言也跟着改（改的是措辞，不是行为）。
+    assert "本次没有可用的模型" in record["notice"]
+    assert "未接 LLM" not in record["notice"]
+    assert "DEEPSEEK_API_KEY" not in record["notice"]
     # 事实仍然是真的（降级 ≠ 乱算）
     assert record["facts"]["sales_amount"] == _executor_amount(*D16_WEEK_RANGE)
     why = record["answer"]["sections"][1]
-    assert why["source"] == "code" and "未接 LLM" in why["text"]
+    # 段落里给的是**人话的原因**（llm.user_facing_error），不是异常原文；
+    # 而且不再重复 notice 里那句「本次没有可用的模型」（同一句话说两遍很蠢）。
+    assert why["source"] == "code" and "没有配置可用的模型服务" in why["text"]
+    assert "未接 LLM" not in why["text"] and "llm_no_key" not in why["text"]
+    # 原始 message 依然**原样留在记录里**（后台可查）——前端不渲染 ≠ 后端删掉
+    assert record["llm"]["error"]["code"] == "llm_not_configured"
+    assert record["llm"]["error"]["message"] == "本次没有可用的模型服务（未配置）—— 只做确定性计算，不编造推断"
 
 
 def test_AC05_LLM调用失败也不编答案(monkeypatch):
@@ -562,6 +571,12 @@ def test_AC05_LLM调用失败也不编答案(monkeypatch):
     assert record["llm"]["error"]["code"] == "llm_call_failed"
     assert record["facts"]["sales_amount"] == _executor_amount(*D16_WEEK_RANGE)
     assert record["answer"]["sections"][1]["source"] == "code"
+    # 异常原文（类名 / 服务商名 / 连接细节）**只在后台记录里**，不上界面
+    assert record["llm"]["error"]["message"] == "DeepSeek 调用失败（TimeoutError）：连接超时"
+    assert "TimeoutError" not in record["notice"] and "DeepSeek" not in record["notice"]
+    why_text = record["answer"]["sections"][1]["text"]
+    assert "这次没连上模型服务" in why_text
+    assert "TimeoutError" not in why_text and "llm_call_failed" not in why_text
 
 
 def test_AC05_推理模型content为空时回退读reasoning_content(monkeypatch):
@@ -809,21 +824,22 @@ def test_AC09_新端点与既有端点并存():
 
 
 # ════════════════════════════════════════════════════════════════════════
-# 11. 货币单位：**显式声明的英镑**（曾经错写成「元」的回归测试）
+# 11. 货币单位：**显式声明的人民币「元」**（用户 2026-09-24 定的口径）
 # ════════════════════════════════════════════════════════════════════════
-# 数据集是英国零售商流水，8 列里**没有货币字段** —— 单位是"声明的口径"，不是算出来的。
-# 这一节的测试钉两件事：① 声明本身对不对（GBP/£/source=dataset_default）；
+# 数据集 8 列里**没有货币字段** —— 单位是"声明的口径"，不是算出来的；数值也不换算。
+# 这一节的测试钉两件事：① 声明本身对不对（CNY/¥/元/source=declared）；
 # ② 全链路（事实段 / display 表 / 能力端点 / 前端取值点）**只认这一处**，任何地方
-# 再冒出「元」都要被抓住（前端那一半由 tests/test_web.py 的静态检查兜）。
-def test_货币单位是显式声明的英镑():
+# 再冒出「英镑/£」都要被抓住（前端那一半由 tests/test_web.py 的静态检查兜）。
+def test_货币单位是显式声明的人民币元():
     currency = tools.DATASET_CURRENCY
-    assert currency["code"] == "GBP"
-    assert currency["symbol"] == "£"
-    assert currency["name"] == "英镑"
+    assert currency["code"] == "CNY"
+    assert currency["symbol"] == "¥"
+    assert currency["name"] == "元"
     # 关键：标明它不是"从数据里读到的"，否则下一个人会以为数据里有货币列
-    assert currency["source"] == "dataset_default"
+    assert currency["source"] == "declared"
     assert currency["note"]
-    assert tools.currency_unit() == currency["name"] == "英镑"
+    assert "英国" not in currency["note"] and "英镑" not in currency["note"]   # 旧口径话术已撤
+    assert tools.currency_unit() == currency["name"] == "元"
     # 画像与能力端点都从这一个常量出去（同源，不是各写一份）
     assert tools.dataset_profile()["currency"] == currency
 
@@ -840,37 +856,37 @@ def test_所有金额事实的单位都来自这一处声明():
         for item in result["display"]:
             if item.get("format") == "money":
                 money_units.append(item["unit"])
-        # 事实段（代码生成的那一段）里出现的每个金额都得带「英镑」
+        # 事实段（代码生成的那一段）里出现的每个金额都得带「元」
         text = answer.render_facts_text(result, question="")
-        assert "英镑" in text
-        assert "元" not in text, (result["tool"], text)
+        assert "元" in text
+        assert "英镑" not in text, (result["tool"], text)
     assert money_units and set(money_units) == {tools.currency_unit()}
 
 
 def test_能力端点带出币种声明_前后端同一个出处():
     caps = client.get("/api/chat/capabilities").json()
-    assert caps["currency"]["code"] == "GBP" and caps["currency"]["symbol"] == "£"
+    assert caps["currency"]["code"] == "CNY" and caps["currency"]["symbol"] == "¥"
     assert caps["data_profile"]["currency"] == caps["currency"]       # 两处同源
-    # 币种块里不许出现人民币口径的字样（「元」作为**金额单位**出现就算错）
+    # 币种块里不许出现别的币种字样
     assert answer.currency_guard(json.dumps(caps["currency"], ensure_ascii=False)) == []
+    assert "英国" not in json.dumps(caps["currency"], ensure_ascii=False)   # 旧口径话术已撤
 
 
-def test_提问链路里的金额单位是英镑不是元():
+def test_提问链路里的金额单位是元不是英镑():
     record = _ask("2011年11月21日到11月27日一共卖了多少？")
     assert record["facts"]["sales_amount"] == _executor_amount(*D16_WEEK_RANGE)   # 数字照旧逐位相等
     what = record["answer"]["sections"][0]["text"]
-    assert "英镑" in what and "元" not in what
-    # 工具返回的 display 表（前端事实表直接渲染它）也必须是英镑
-    assert {"英镑"} == {item["unit"] for item in record["tool"]["display"]
-                        if item.get("format") == "money"}
+    assert "元" in what and "英镑" not in what
+    # 工具返回的 display 表（前端事实表直接渲染它）也必须是「元」
+    assert {"元"} == {item["unit"] for item in record["tool"]["display"]
+                      if item.get("format") == "money"}
 
 
-def test_提示词告诉模型币种是英镑():
-    """写对单位不只是闸门的事：提示词也得说清楚，否则模型只能瞎猜一个「元」。"""
-    assert "英镑" in answer.LLM_SYSTEM_PROMPT
-    assert "人民币" in answer.LLM_SYSTEM_PROMPT        # 明确禁止写人民币
-    assert "元" not in answer.LLM_SYSTEM_PROMPT.replace("英镑", "").replace("人民币", "") \
-        or "不许写" in answer.LLM_SYSTEM_PROMPT          # 「元」只许出现在禁令里
+def test_提示词告诉模型币种是人民币元():
+    """写对单位不只是闸门的事：提示词也得说清楚，否则模型只能瞎猜一个「英镑」。"""
+    assert "元" in answer.LLM_SYSTEM_PROMPT
+    assert "英镑" in answer.LLM_SYSTEM_PROMPT           # 明确禁止写英镑
+    assert "GBP" in answer.LLM_SYSTEM_PROMPT            # 也点名禁止这个代码
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -882,7 +898,7 @@ def test_预热把数据读进缓存且不改确定性():
     report = tools.warm_up()
     assert report["rows"] == DATASET_ROWS
     assert report["column_count"] == 8
-    assert report["currency"] == "GBP"
+    assert report["currency"] == "CNY"
     assert report["seconds"] >= 0
     assert _executor_amount(*D16_WEEK_RANGE) == before
     # 再预热一次（缓存已热）结果一致：幂等，不会算出第二份数据
@@ -908,7 +924,7 @@ def test_预热在后台线程里跑_健康检查不用等它(monkeypatch):
         started.set()
         released.wait(5)                      # 卡住预热，模拟"还在读 22MB"
         return {"rows": 0, "column_count": 0, "first_day": "-", "last_day": "-",
-                "currency": "GBP", "seconds": 0.0}
+                "currency": "CNY", "seconds": 0.0}
 
     monkeypatch.setattr(tools, "warm_up", slow_warm_up)
     monkeypatch.setattr(prewarm, "STATE", {"started": False, "done": False, "report": None, "error": None})
@@ -1396,3 +1412,155 @@ def test_T005_能力端点如实列出五个意图(no_llm):
     titles = {item["name"]: item["title"] for item in body["intents"]}
     assert titles["sales_compare"] and titles["sales_breakdown_by_country"]
     assert any("区域" in word for word in body["unsupported"]["dimensions"])
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 13. 收口闸门：真 LLM 把「A 和 B 比销售额」答成单区间合并求和 —— 代码拉回来
+#
+#     Hermes 2026-09-23 实测事故：真 DeepSeek 面对下面这 6 种常见问法，
+#     全部返回 sales_summary(start=2011-10-01, end=2011-11-30) —— 把两个区间
+#     **合并求和**，答案变成 2,664,475.63（11 月 + 10 月），看着像答案、实则答非所问。
+#     这里用「假 LLM 故意回那条错结果」把事故**钉进回归测试**：修好后它必须被拉回 sales_compare。
+# ════════════════════════════════════════════════════════════════════════
+MERGED_SUMMARY_JSON = (
+    '{"intent":"sales_summary","params":{"start":"2011-10-01","end":"2011-11-30"},'
+    '"assumptions":[],"confidence":0.9}'
+)
+COMPARE_PHRASINGS = [
+    "比较一下2011年11月和2011年10月的销售额",
+    "比较2011年11月和2011年10月的销售额",
+    "2011年11月和2011年10月的销售额哪个高",
+    "2011年11月比2011年10月销售额增长了多少",
+    "11月对比10月的销售额",
+    "2011年11月和10月销售额对比",
+]
+MERGED_WINDOW_AMOUNT = _executor_amount("2011-10-01", "2011-11-30")   # 2,664,475.63（错答案）
+
+
+def _assert_not_merged(record: dict) -> None:
+    """错答案（两个月合并求和）= 2,664,475.63 —— 整个回答里不许出现它。"""
+    blob = json.dumps(record, ensure_ascii=False, default=str)
+    assert str(MERGED_WINDOW_AMOUNT) not in blob, f"回答里出现了合并区间的和：{MERGED_WINDOW_AMOUNT!r}"
+    assert f"{MERGED_WINDOW_AMOUNT:,.2f}" not in blob
+
+
+@pytest.mark.parametrize("question", COMPARE_PHRASINGS)
+def test_T005B_LLM把比较答成合并区间时代码必须拉回sales_compare(question, monkeypatch):
+    """6 种措辞逐个测（Hermes 点名：不要只测一种）。"""
+    _llm_returns("【为什么】\n本期高于上期。\n【建议行动】\n- 关注英国。", monkeypatch,
+                 intent_json=MERGED_SUMMARY_JSON)          # ← 故意喂 Hermes 实测到的那条错结果
+
+    parsed, info = intent_module.parse(question, allow_llm=True)
+    assert parsed.intent == "sales_compare", (question, parsed.intent)
+    assert info["comparison_override"] is True, question
+    assert parsed.params["current_start"] == "2011-11-01" and parsed.params["current_end"] == "2011-11-30"
+    assert parsed.params["previous_start"] == "2011-10-01" and parsed.params["previous_end"] == "2011-10-31"
+    assert any("合并成一个区间" in note for note in parsed.assumptions), question   # 改过就留痕
+
+    record = _ask(question, use_llm=True)
+    facts = record["facts"]
+    assert record["intent"]["intent"] == "sales_compare" and record["tool"]["name"] == "sales_compare"
+    assert facts["current"]["sales_amount"] == _executor_amount(*NOV)      # 位级相等
+    assert facts["previous"]["sales_amount"] == _executor_amount(*OCT)
+    assert facts["change_amount"] == _executor_amount(*NOV) - _executor_amount(*OCT)
+    _assert_not_merged(record)
+
+
+def test_T005B_Hermes给的参考值位级相等(no_llm):
+    """Hermes 自算的 11月 / 10月 / Δ 三个数：接口必须逐位对上。"""
+    facts = _ask("比较一下2011年11月和2011年10月的销售额")["facts"]
+    assert facts["current"]["sales_amount"] == 1509496.33
+    assert facts["previous"]["sales_amount"] == 1154979.2999999998
+    assert facts["change_amount"] == 354517.03000000026
+    assert _executor_amount(*NOV) == 1509496.33 and _executor_amount(*OCT) == 1154979.2999999998
+
+
+@pytest.mark.parametrize("question", COMPARE_PHRASINGS)
+def test_T005B_没有LLM时六种措辞也走sales_compare(question, no_llm):
+    parsed, _info = intent_module.parse(question, allow_llm=False)
+    assert parsed.intent == "sales_compare", question
+    assert (parsed.params["current_start"], parsed.params["previous_start"]) == ("2011-11-01", "2011-10-01")
+    record = _ask(question)
+    assert record["facts"]["change_amount"] == _executor_amount(*NOV) - _executor_amount(*OCT)
+    _assert_not_merged(record)
+
+
+def test_T005B_三个区间既不合并也不硬凑两区间_明确报错(monkeypatch):
+    """「比较 9月、10月、11月」—— 本版只做两区间。**不许**悄悄挑两个、更不许合并求和。"""
+    _llm_returns("【为什么】\n略。\n【建议行动】\n- 略。", monkeypatch, intent_json=MERGED_SUMMARY_JSON)
+
+    for allow_llm in (True, False):
+        with pytest.raises(intent_module.IntentError) as caught:
+            intent_module.parse("比较 9月、10月、11月的销售额", allow_llm=allow_llm)
+        assert caught.value.code == "intent_unparseable", allow_llm
+        assert "合并" in caught.value.message, allow_llm          # 话说清楚了：不合并
+        assert "比较 2011-11 和 2011-10" in caught.value.message   # 并给了正确写法
+
+    record = _ask("比较 9月、10月、11月的销售额", use_llm=True)
+    assert record["status"] == "error" and record["facts"] is None
+    assert "不把两个区间合并求和" in record["notice"]
+    _assert_not_merged(record)
+
+
+def test_T005B_单区间问题不被闸门劫持(monkeypatch):
+    """闸门只拦「有比较语义却解析成单区间」，正常单区间问题一个字都不许改。"""
+    for question, payload, expect in (
+        ("2011年11月一共卖了多少",
+         '{"intent":"sales_summary","params":{"start":"2011-11-01","end":"2011-11-30"},'
+         '"assumptions":[],"confidence":0.9}', "sales_summary"),
+        ("2011年10月到11月的销售额",
+         '{"intent":"sales_summary","params":{"start":"2011-10-01","end":"2011-11-30"},'
+         '"assumptions":[],"confidence":0.9}', "sales_summary"),
+        ("2011年11月各国家销售额占比",
+         '{"intent":"sales_breakdown_by_country","params":{"start":"2011-11-01","end":"2011-11-30",'
+         '"top_n":5},"assumptions":[],"confidence":0.9}', "sales_breakdown_by_country"),
+    ):
+        _llm_returns("【为什么】\n略。\n【建议行动】\n- 略。", monkeypatch, intent_json=payload)
+        parsed, info = intent_module.parse(question, allow_llm=True)
+        assert parsed.intent == expect, question
+        assert info["comparison_override"] is False, question
+
+    # 「占比」不是比较、「比如」不是比较 —— 别把闸门做成误伤
+    assert intent_module.looks_like_comparison("2011年11月各国家销售额占比") is False
+    assert intent_module.looks_like_comparison("比如2011年11月的销售额") is False
+    assert intent_module.looks_like_comparison("2011年11月和10月的销售额对比") is True
+
+    # 降级路径同样：单区间问题照旧解析，不因为闸门变成"没听懂"
+    for question, expect in (("2011年11月一共卖了多少", "sales_summary"),
+                             ("2011年10月到11月的销售额", "sales_summary"),
+                             ("2011年11月各国家销售额占比", "sales_breakdown_by_country"),
+                             ("2011年11月的销售趋势", "sales_trend")):
+        assert intent_module.parse(question, allow_llm=False)[0].intent == expect, question
+
+
+def test_T005B_同比问法仍然认得出yoy(no_llm):
+    """闸门别把「去年同期」误当成 custom 两区间。"""
+    parsed, _info = intent_module.parse("2011年11月和去年同期的销售额对比", allow_llm=False)
+    assert parsed.intent == "sales_compare" and parsed.params["comparison_type"] == "yoy"
+
+
+def test_T005B_三个区间时LLM给的两区间也不作数_别无声吃掉一个月(monkeypatch):
+    """同一个洞的另一半：问句里明摆着三个月，LLM 会默默只比最近两个月，把第三个月吃掉。
+
+    （实测：真 DeepSeek 对「比较 9月、10月、11月的销售额」给出 11月 vs 10月 的 sales_compare，
+      既没合并、也没说 9 月去哪了 —— 仍然是"看起来对、其实答非所问"。）
+    """
+    _llm_returns("【为什么】\n略。\n【建议行动】\n- 略。", monkeypatch,
+                 intent_json='{"intent":"sales_compare","params":{"comparison_type":"custom",'
+                             '"current_start":"2011-11-01","current_end":"2011-11-30",'
+                             '"previous_start":"2011-10-01","previous_end":"2011-10-31",'
+                             '"attribution_dimension":null},"assumptions":[],"confidence":0.9}')
+    for question in ("比较 9月、10月、11月的销售额", "2011年9月、10月、11月的销售额对比"):
+        for allow_llm in (True, False):
+            with pytest.raises(intent_module.IntentError) as caught:
+                intent_module.parse(question, allow_llm=allow_llm)
+            assert caught.value.code == "intent_unparseable", (question, allow_llm)
+            assert "没能确定到底比哪两个区间" in caught.value.message
+
+    record = _ask("比较 9月、10月、11月的销售额", use_llm=True)
+    assert record["status"] == "error" and record["facts"] is None
+    _assert_not_merged(record)
+
+    # 别误伤：正好两个区间的 6 种措辞照旧放行
+    for question in COMPARE_PHRASINGS:
+        assert intent_module.parse(question, allow_llm=False)[0].intent == "sales_compare", question
