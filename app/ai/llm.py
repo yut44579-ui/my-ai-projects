@@ -211,6 +211,7 @@ USER_FACING_ERRORS = {
     "llm_auth_failed": "模型服务鉴权没通过",
     "llm_call_failed": "这次没连上模型服务",
     "llm_empty_response": "模型这次没有返回内容",
+    "llm_disabled": "本次没有让模型参与（只做确定性计算）",
 }
 _ERROR_FALLBACK = "模型服务暂时不可用"
 

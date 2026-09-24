@@ -367,7 +367,8 @@ def sales_trend(start: _dt.date, end: _dt.date, granularity: str = "day") -> dic
 
     partial_points = [point for point in points if point["partial"]]
     notes = [
-        f"按{bucket_label}聚合，共 {len(points)} 个{bucket_label}；空档（没有销售的日子/周）**不补零**，"
+        # 「共 N 个点」而不是「共 N 个天/周」—— 后者读出来是病句（TASK-010 露出）
+        f"按{bucket_label}聚合，共 {len(points)} 个点；空档（没有销售的日子/周）**不补零**，"
         "所以点数可能少于自然天数/周数。",
         "口径：含首尾全天；排除取消单、数量≤0、单价≤0 的行。",
     ]

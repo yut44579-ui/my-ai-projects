@@ -248,11 +248,19 @@
           </div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>生成周报</h2></div>
-          <div class="empty">
-            <div class="empty-ico">▤</div>
-            <div class="empty-title">周报生成尚未接入</div>
-            <div class="empty-hint">周报生成尚未接入；当前可先在「数据管理」跑出周销售报表 xlsx。</div>
+          <div class="card-head">
+            <h2>生成周报</h2>
+            <span class="muted-sm">在下面的自然语言入口说一句即可生成</span>
+          </div>
+          <div class="row">
+            <button class="btn btn-primary btn-sm" id="btn-ov-report">去生成周报</button>
+            <a class="btn btn-sm" href="#/weekly">查看已生成的报告</a>
+          </div>
+          <!-- 这段是纯说明文字，没有任何 JS 去填它 —— 所以不给 id（`test_no_static_ornament_ids_in_html`
+               钉的就是「别留只有装饰作用的 id」）。 -->
+          <div class="muted-sm">
+            例如「帮我根据本星期的销售数据做一份销售周报」或「出一份 2011 年 11 月的月报」；
+            报告里的数字与上面的问答是同一套计算，生成后可预览、可下载 Markdown。
           </div>
         </div>
       </div>
@@ -341,11 +349,15 @@
     <!-- ── 页面：周报中心 ─────────────────────────────────────────── -->
     <section class="page" id="page-weekly" hidden>
       <div class="card">
-        <div class="card-head"><h2>周报中心</h2></div>
-        <div class="empty">
+        <div class="card-head">
+          <h2>销售报告</h2>
+          <span class="muted-sm" id="wk-reports-hint">在问答里说「做一份销售周报」即可生成；下面的列表是已生成过的报告，可查看、可下载 Markdown。</span>
+        </div>
+        <div class="rows" id="wk-reports-body"></div>
+        <div class="empty" id="wk-reports-empty">
           <div class="empty-ico">▤</div>
-          <div class="empty-title">周报生成尚未接入</div>
-          <div class="empty-hint">周报汇总尚未接入；当前可用的是「数据管理」里的周销售报表执行记录。</div>
+          <div class="empty-title">还没有生成过报告</div>
+          <div class="empty-hint">到「销售总览」的自然语言入口说一句「帮我根据本星期的销售数据做一份销售周报」，或「出一份 2011 年 11 月的月报」——报告里的数字与那五类问答是同一套计算。</div>
         </div>
       </div>
       <div class="card">

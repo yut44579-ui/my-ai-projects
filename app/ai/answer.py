@@ -138,6 +138,13 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
     tool = result.get("tool", "")
     lines: list[str] = []
 
+    # ── 报告形态（TASK-010）：正文就是那份报告文档本身 ────────────────────
+    # 报告不是"几张指标卡"，所以这里直接渲染整份文档（摘要/指标表/趋势/结构/口径）。
+    # 同一个函数产出的 Markdown 也用于导出（见 build_report_export）——**一份内容，两种用途**，
+    # 不会出现"页面上看到的"和"下载到的"对不上。
+    if result.get("report"):
+        return render_report_document(result["report"])
+
     if tool == "sales_summary":
         lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天）")
     elif tool == "sales_trend":
@@ -263,6 +270,112 @@ def render_llm_facts(result: dict[str, Any] | None) -> str:
     if contribution:
         parts.append(contribution)
     return "\n\n".join(part for part in parts if part)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 报告文档（TASK-010）：结构化内容（report.py 给的）→ Markdown
+#
+# 为什么用 Markdown 当"正文"：报告是要被**导出**的东西（用户要的是"一份周报"，
+# 能存下来、能发出去）。Markdown 一份内容同时满足两件事 ——
+# 页面上预览的就是它，下载下来的也是它（不会"看到的"和"下载到的"两个版本）。
+# 这里只做**排版**：一个数字都不产生，全部照抄 report.py 从既有工具搬来的值。
+# ════════════════════════════════════════════════════════════════════════
+def _md_cell(value: Any) -> str:
+    """表格单元格：转义 `|`（否则一行会被拆成两列），换行压成空格。"""
+    return str(value).replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _md_table(table: dict[str, Any]) -> list[str]:
+    headers = [_md_cell(item) for item in table.get("headers") or []]
+    rows = table.get("rows") or []
+    if not headers:
+        return []
+    lines = ["| " + " | ".join(headers) + " |",
+             "| " + " | ".join("---" for _ in headers) + " |"]
+    for row in rows:
+        lines.append("| " + " | ".join(_md_cell(cell) for cell in row) + " |")
+    return lines
+
+
+def render_report_document(report: dict[str, Any]) -> str:
+    """报告文档 → Markdown。**纯排版**（内容全部来自 report.py 的确定性结果）。"""
+    lines = [f"# {report.get('title', '销售报告')} · {report.get('period_label', '')}", ""]
+    lines.append(
+        f"> 比较口径：{report.get('comparison_label', '—')}；"
+        f"报告里的数字全部由程序确定性计算得出（两区间比较 / 汇总 / 趋势 / 国家分布 / 商品排行 "
+        # ⚠️ 这句里**不写内部机制的名字**（原来写的是"经过数字闸门核对"）：报告是要发出去的
+        #    业务文档，读者不需要知道我们内部管那套校验叫什么 —— 说"数字全部核对过"就够了。
+        f"五个既有计算能力），数字逐项核对过，文字部分不含无法追溯到计算结果的内容。"
+    )
+    lines.append("")
+
+    for section in report.get("sections") or []:
+        lines.append(f"## {section.get('title') or ''}")
+        lines.append("")
+        for block in section.get("blocks") or []:
+            lines.append(f"### {block.get('title') or ''}")
+            lines.append("")
+            lines.extend(_md_table(block.get("table") or {}))
+            lines.append("")
+        if section.get("table"):
+            lines.extend(_md_table(section["table"]))
+            lines.append("")
+        body = [str(item) for item in section.get("lines") or [] if str(item).strip()]
+        if body:
+            if section.get("style") == "paragraph":
+                # 摘要：一段连着读的话（不是一串要点）
+                lines.append("".join(body))
+            else:
+                lines.extend(f"- {item}" for item in body)
+            lines.append("")
+
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
+
+
+def build_report_export(
+    report: dict[str, Any],
+    *,
+    why_text: str,
+    actions_text: str,
+    why_source: str,
+    actions_source: str,
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    """把报告文档 + 【为什么】/【建议行动】拼成**可下载的那份文件**（Markdown）。
+
+    前端只负责"把这段文本存成文件"（Blob 下载），不拼内容、不算数字 ——
+    导出物与页面上预览的是同一段文本。
+    """
+    currency = ai_tools.DATASET_CURRENCY
+    parts = [
+        render_report_document(report),
+        "",
+        "## 结论与建议",
+        "",
+        SECTION_TITLES[SECTION_WHY],
+        "",
+        (why_text or "").strip(),
+        "",
+        SECTION_TITLES[SECTION_ACTIONS],
+        "",
+        (actions_text or "").strip(),
+        "",
+        f"> 数据范围：{profile.get('first_day')} ~ {profile.get('last_day')}；"
+        f"金额单位：{currency['name']}（{currency['code']}，由项目唯一声明的币种配置给出，数值未做换算）。",
+    ]
+    return {
+        "title": report.get("title", "销售报告"),
+        "period": report.get("period"),
+        "period_label": report.get("period_label"),
+        "filename": report.get("filename") or "销售报告.md",
+        "mime": "text/markdown;charset=utf-8",
+        "markdown": "\n".join(parts).strip() + "\n",
+        # 哪几段是模型写的、哪几段是代码写的 —— 导出的文件自己说清楚（不假装）
+        "why_source": why_source,
+        "actions_source": actions_source,
+    }
 
 
 def render_unsupported_text(reason: str, *, profile: dict[str, Any]) -> str:
@@ -407,7 +520,7 @@ def _section(key: str, text: str, source: str, **extra: Any) -> dict[str, Any]:
     return body
 
 
-def _fallback_why(reason: str, result: dict[str, Any] | None) -> str:
+def _fallback_why(reason: str, result: dict[str, Any] | None, *, is_report: bool = False) -> str:
     """LLM 缺席或越界时的降级文案 —— **只陈述程序能确定的事实**，不假装分析过。"""
     lines = [reason]
     if result:
@@ -427,12 +540,21 @@ def _fallback_why(reason: str, result: dict[str, Any] | None) -> str:
                 f"与计算引擎的输出{'逐位一致' if check['bit_identical'] else '**不一致（需排查）**'}。"
             )
         notes = result.get("notes") or []
-        if notes:
+        if notes and not is_report:
+            # 报告形态**不抄**这一条：报告自己的「口径与异常说明」已经逐条写全了
+            # （数据范围、无客户号行、没有区域字段…），再在【为什么】底下挂一条只是重复。
             lines.append("· 口径提示：" + notes[0])
     return "\n".join(lines)
 
 
-def _fallback_actions(reason: str) -> str:
+def _fallback_actions(reason: str, *, is_report: bool = False) -> str:
+    if is_report:
+        # 报告里**没有**【发生了什么】那一段（那是单点问答的分段标题）——
+        # 降级文案不能把人指到一个报告里不存在的段落去。指报告自己的三段事实。
+        return (
+            f"{reason}\n为避免编造，本段不生成建议 —— "
+            "请直接看上面「核心指标」「趋势」「结构」几段里的事实。"
+        )
     return f"{reason}\n为避免编造，本段不生成建议 —— 请直接看【发生了什么】里的事实。"
 
 
@@ -510,6 +632,11 @@ def compose(
     # 合法数字集合：只从**代码产生的东西**里收集
     allowed = collect_allowed_numbers(what_text, contribution_text, result)
 
+    # 报告形态（TASK-010）的判定只认一件事：结果里有没有 report 文档块。
+    # 降级文案要据此换措辞 —— 报告里没有【发生了什么】这一段，
+    # 也不能再挂一条与「口径与异常说明」重复的口径提示。
+    is_report = bool((result or {}).get("report"))
+
     # ── 第二、三段：LLM 写的（过闸），或代码降级 ────────────────────────
     guard_report: dict[str, Any] = {
         "policy": GUARD_POLICY,
@@ -534,8 +661,8 @@ def compose(
             reason = f"（{llm.user_facing_error(llm_error)} —— 本段不生成，以免编造。）"
         else:
             reason = "（本次没有可用的模型 —— 本段本应由模型基于上面的事实做推断，这里不生成，以免编造。）"
-        why_text = _fallback_why(reason, result)
-        actions_text = _fallback_actions(reason)
+        why_text = _fallback_why(reason, result, is_report=is_report)
+        actions_text = _fallback_actions(reason, is_report=is_report)
         why_source = actions_source = "code"
     else:
         why_raw, actions_raw = parse_llm_sections(llm_raw or "")
@@ -558,9 +685,12 @@ def compose(
                 why_text = _fallback_why(
                     _dropped_section_reason(guard_report["by_section"].get(SECTION_WHY, {})),
                     result,
+                    is_report=is_report,
                 )
             else:
-                why_text = _fallback_why("（模型这一段没能给出可用内容。）", result)
+                why_text = _fallback_why(
+                    "（模型这一段没能给出可用内容。）", result, is_report=is_report
+                )
 
         if guard_report["by_section"].get(SECTION_ACTIONS, {}).get("passed") and actions_raw.strip():
             actions_text, actions_source = actions_raw.strip(), "llm"
@@ -568,16 +698,37 @@ def compose(
             actions_source = "code"
             if actions_raw.strip():
                 actions_text = _fallback_actions(
-                    _dropped_section_reason(guard_report["by_section"].get(SECTION_ACTIONS, {}))
+                    _dropped_section_reason(guard_report["by_section"].get(SECTION_ACTIONS, {})),
+                    is_report=is_report,
                 )
             else:
-                actions_text = _fallback_actions("（模型这一段没能给出可用内容。）")
+                actions_text = _fallback_actions(
+                    "（模型这一段没能给出可用内容。）", is_report=is_report
+                )
 
     sections.append(_section(SECTION_WHY, why_text, why_source, inferred=why_source == "llm"))
     sections.append(_section(SECTION_ACTIONS, actions_text, actions_source))
 
     text = "\n\n".join(f"{item['title']}\n{item['text']}" for item in sections)
-    return {"sections": sections, "text": text, "guard": guard_report}
+
+    # ── 报告形态（TASK-010）：给前端的**导出物** ───────────────────────
+    # 只在"这次真的出了报告"时才有（数据不足时没有 report 块，也就没有可导出的东西）。
+    # 报告文档 + 【为什么】/【建议行动】拼在一起 —— 两段 LLM 文字已经被上面的闸门核过，
+    # 越界的那段早已换成代码降级文案，所以导出的文件里不存在"没核过的数字"。
+    # 非报告的回答 `export` 恒为 None：前端只需要判空，不用去猜"这条能不能导出"。
+    export = None
+    report_block = (result or {}).get("report")
+    if report_block:
+        export = build_report_export(
+            report_block,
+            why_text=why_text,
+            actions_text=actions_text,
+            why_source=why_source,
+            actions_source=actions_source,
+            profile=profile,
+        )
+
+    return {"sections": sections, "text": text, "guard": guard_report, "export": export}
 
 
 __all__ = [
@@ -589,6 +740,7 @@ __all__ = [
     "SECTION_WHAT",
     "SECTION_WHY",
     "build_llm_prompt",
+    "build_report_export",
     "collect_allowed_numbers",
     "comparison_label",
     "compose",
@@ -599,5 +751,6 @@ __all__ = [
     "render_contribution_text",
     "render_facts_text",
     "render_llm_facts",
+    "render_report_document",
     "render_unsupported_text",
 ]

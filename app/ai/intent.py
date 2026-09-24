@@ -45,6 +45,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.ai import llm
+# 报告形态（TASK-010）的常量**只在 report.py 声明一处**，这里只是引用 ——
+# 周期、比较类型、趋势粒度的对应关系不许在解析层再抄一份。
+from app.ai.report import PERIOD_COMPARISON, PERIOD_MONTHLY, PERIOD_WEEKLY, report_period
 from app.ai.tools import dataset_bounds
 
 # ════════════════════════════════════════════════════════════════════════
@@ -219,6 +222,10 @@ class ParsedIntent(BaseModel):
     assumptions: tuple[str, ...] = ()
     confidence: float = 0.0
     reason: str = ""
+    # TASK-010：**输出形态**标记（""=普通问答，weekly/monthly=要一份报告）。
+    # 注意它**不是**第 6 个 intent —— 报告走的仍是 sales_compare 的计算，
+    # 只是把输出从"几张指标卡"变成"一份结构化报告"（见 report.py 开头的理由）。
+    report: Literal["", "weekly", "monthly"] = ""
 
     def validated_params(self) -> BaseModel:
         """按 intent 取出对应 schema 校验参数。**多字段/少字段/类型不对 → 明确报错**。"""
@@ -245,6 +252,8 @@ class ParsedIntent(BaseModel):
             "assumptions": list(self.assumptions),
             "confidence": self.confidence,
             "reason": self.reason,
+            # 留痕：这次问答走的是不是"报告形态"（前端不渲染，但记录里必须有）
+            "report": self.report,
         }
 
 
@@ -314,6 +323,12 @@ sales_compare 的 comparison_type 怎么选（**这一条最容易错，请严�
 - "哪些商品造成了变化" → sales_compare + attribution_dimension="stock_code"。
 - 问"某个时间段内各国卖了多少"（只有一个时间段、没有"变化/对比"）→ sales_breakdown_by_country。
 
+报告类问题（"做一份周报/月报/出一份报告/汇报"）：
+- **不要**返回 unsupported —— "报告"是一种**输出形态**，不是数据里没有的维度。
+- 按上面的规则给一条最接近的解析就行：说"周报"的按每周（wow）、说"月报"的按每月（mom）。
+- **报告区间一律由程序重新解析**（周报取最近一个完整自然周、月报取最近一个完整自然月），
+  你填的日期不会被采用 —— 所以不确定就留空，别硬编一个"半截周"的区间出来。
+
 数据集事实（**必须严格按这个来，不许假装知道更多**）：
 - 只有 8 列：InvoiceNo / StockCode / Description / Quantity / InvoiceDate / UnitPrice / CustomerID / Country
 - 时间范围：{first} ~ {last}（注意：最后一天不是月末，**最后一个月/周是不完整的**）
@@ -360,22 +375,35 @@ def parse(question: str, *, allow_llm: bool = True) -> tuple[ParsedIntent, dict[
         try:
             raw = llm.chat(system_prompt(), question)
             parsed = _intent_from_json(raw)
-            # **收口闸门**：LLM 把"两个区间比大小"答成单区间（合并求和）时，
-            # 在这里被代码拉回来 —— 真实事故见 enforce_comparison_semantics 的注释。
-            enforced = enforce_comparison_semantics(parsed, question)
+            # **收口闸门①（TASK-010）**：问题要的是"一份报告"却被答成零散指标卡
+            # —— 一律改成报告形态（真实事故见 enforce_report_semantics 的注释）。
+            after_report = enforce_report_semantics(parsed, question)
+            # **收口闸门②（TASK-005）**：LLM 把"两个区间比大小"答成单区间（合并求和）时，
+            # 在这里被代码拉回来 —— 见 enforce_comparison_semantics 的注释。
+            # 顺序：报告闸门在前（它不是比较类问题就不受影响；是报告就轮不到比较闸门出手）。
+            enforced = enforce_comparison_semantics(after_report, question)
             return enforced, {
                 "source": "llm",
                 "model": llm.model_name(),
                 "raw": raw[:4000],
                 "fallback": None,
                 "llm_error": None,
-                "comparison_override": enforced is not parsed,
+                "comparison_override": enforced is not after_report,
+                "report_override": after_report is not parsed,
             }
         except (llm.LLMError, IntentError) as exc:
             # 不在这里静默吞掉：先记下来，再尝试关键词降级，并把失败原因一路带给前端
             llm_error = {"code": getattr(exc, "code", "llm_error"), "message": str(exc)}
             if isinstance(exc, IntentError) and exc.code == "intent_unknown":
                 llm_error = {"code": exc.code, "message": exc.message}
+    elif not allow_llm:
+        # 调用方**显式关掉**了模型（use_llm=false：测试 / 强制降级演示），
+        # 这与"环境里没有模型"是两回事：SDK 可能装得好好的、key 也配着，
+        # 只是这次没让它上场。说成"组件未就绪"就是在讲一句关于系统状态的假话。
+        llm_error = {
+            "code": "llm_disabled",
+            "message": "本次调用显式关闭了模型（allow_llm=false）—— 只做确定性计算，不编造推断",
+        }
     else:
         llm_error = {
             "code": "llm_not_configured" if not llm.api_key() else "llm_sdk_missing",
@@ -385,18 +413,25 @@ def parse(question: str, *, allow_llm: bool = True) -> tuple[ParsedIntent, dict[
     # ③ 降级：关键词匹配（能力弱，但绝不编）
     parsed = parse_by_keywords(question)
     if parsed is None:
+        # 报告请求：区间由程序推，不需要关键词认出日期 —— 所以这里能直接给出一条完整的解析
+        if report_period(question):
+            parsed = build_report_intent(question)
         # 比较类问题（比如"比较 9 月、10 月、11 月"，本版只做两区间）走专门的话术：
         # 明确告诉用户"不合并"，而不是笼统的"没听懂"。
-        if looks_like_comparison(question):
+        elif looks_like_comparison(question):
             raise _comparison_unparseable()
-        raise IntentError(
-            "intent_unparseable",
-            f"没听懂这个问题，也不知道该调哪个工具。当前支持："
-            f"①某时间段卖了多少 ②某时间段卖得怎么样（趋势） ③某时间段卖得最好的产品 "
-            f"④两个时间段比大小（含按国家/商品归因） ⑤某时间段各国销售额分布。"
-            f"（LLM 未能参与解析：{llm_error['message']}）",
-        )
-    parsed = enforce_comparison_semantics(parsed, question)      # 同一道收口闸门（降级路径也要过）
+        else:
+            raise IntentError(
+                "intent_unparseable",
+                f"没听懂这个问题，也不知道该调哪个工具。当前支持："
+                f"①某时间段卖了多少 ②某时间段卖得怎么样（趋势） ③某时间段卖得最好的产品 "
+                f"④两个时间段比大小（含按国家/商品归因） ⑤某时间段各国销售额分布 "
+                f"⑥做一份周报/月报。"
+                f"（LLM 未能参与解析：{llm_error['message']}）",
+            )
+    # 同一两道收口闸门（降级路径也要过，顺序与 LLM 路径一致）
+    parsed = enforce_report_semantics(parsed, question)
+    parsed = enforce_comparison_semantics(parsed, question)
     parsed = parsed.model_copy(update={"assumptions": tuple(parsed.assumptions) + ("由关键词匹配降级解析（LLM 未参与）",)})
     return parsed, {"source": "keyword", "model": None, "raw": None, "fallback": True, "llm_error": llm_error}
 
@@ -512,8 +547,11 @@ _JOINER_RE = re.compile(r"[到至~～—－]")
 # 「张三销售」这种"按人"的问法。前后文限定得很严，**不能误伤**「销售额/销售量/销售趋势/
 # 销售占比/销售金额」这些正常指标词 —— 所以要求"销售/业务"前面有 2~3 个汉字（人名），
 # 后面不是 额/量/收/单/趋/占… 这类指标后缀。
+# ⚠️ TASK-010 补课：后面跟「数据 / 周报 / 月报 / 报告 / 汇总」时也**不是**人名 ——
+#    否则「帮我根据本星期的销售数据做一份销售周报」会被判成"按销售员拆分"而被拒答（真实误伤）。
+_SALESPERSON_SUFFIX_BAN = "额量收单增环同趋情部变现占金排人数据周月报汇表总明日年季"
 _SALESPERSON_RE = re.compile(
-    r"[一-龥]{2,3}(?:销售|业务)(?![额量收单增环同趋情部变现占金排人])"
+    rf"[一-龥]{{2,3}}(?:销售|业务)(?![{_SALESPERSON_SUFFIX_BAN}])"
 )
 # 只写了「X月」（没写年份）→ 年份沿用前一个日期（与 `_dates_from_text` 同一套规则）
 _BARE_MONTH_RE = re.compile(r"(?<![\d年\-/])(\d{1,2})\s*月")
@@ -597,6 +635,87 @@ def _comparison_unparseable() -> IntentError:
         "这看起来是「两个时间段比大小」的问题，但没能确定到底比哪两个区间 —— "
         "不猜、也不把两个区间合并求和。请写成「比较 2011-11 和 2011-10 的销售额」"
         "或「2011-11-01 到 11-15 与 2011-10-01 到 10-15 的销售额对比」。",
+    )
+
+
+def _report_unparseable(count: int) -> IntentError:
+    """报告请求里出现了多个时间段时的**统一话术**（不挑一个凑合）。"""
+    return IntentError(
+        "intent_unparseable",
+        f"一份报告只能有**一个**本期区间，但问题里出现了 {count} 个时间段 —— 不猜用哪一个。"
+        "请写明要报告的范围，例如「把 2011-11-01 到 2011-11-30 做成月报」"
+        "或「帮我根据本星期的销售数据做一份销售周报」。",
+    )
+
+
+def build_report_intent(question: str) -> ParsedIntent:
+    """「做一份周报/月报」→ `sales_compare`（周报 wow / 月报 mom）+ `report` 标记。
+
+    区间**由程序解析**（`tools.resolve_compare_windows`），LLM 连日期都不碰：
+      · 问题里写了明确区间 → 用用户的（程序不动它）；
+      · 没写 → 最近一个完整自然周/月（被数据边界切断时退到最近完整周期，由工具写明原因）。
+    「本星期」这种相对说法**不交给 LLM 翻译**：它多半会翻成一个被数据边界切断的半截周
+    （数据集最后一天是周五），拿 5 天去比 7 天的"周环比"是假数字。
+    """
+    period = report_period(question)
+    if not period:
+        raise IntentError("intent_unparseable", "这个问题不是一个报告请求。")
+
+    first, last = dataset_bounds()
+    ranges = _date_ranges_from_text(question, first, last)
+    if len(ranges) > 1:
+        raise _report_unparseable(len(ranges))
+
+    params: dict[str, Any] = {
+        "comparison_type": PERIOD_COMPARISON[period],
+        "attribution_dimension": None,
+    }
+    if ranges:
+        start, end = ranges[0]
+        params["current_start"] = start.isoformat()
+        params["current_end"] = end.isoformat()
+        window_note = f"报告区间取自问题里写明的 `{start} ~ {end}`（程序没有改它）。"
+    else:
+        kind = "周报" if period == PERIOD_WEEKLY else "月报"
+        window_note = (f"问题里没有写明报告区间，按{kind}口径取**最近一个完整周期**"
+                       f"（由程序解析，日期不由模型解释）。")
+
+    return ParsedIntent(
+        intent=INTENT_SALES_COMPARE,
+        params=params,
+        assumptions=(window_note,),
+        confidence=0.9,
+        report=period,
+    )
+
+
+def enforce_report_semantics(parsed: ParsedIntent, question: str) -> ParsedIntent:
+    """**收口闸门**：问题要的是"一份报告"，解析结果却是零散的单点问题 → 一律改成报告形态。
+
+    为什么必须有这道闸门（真实事故）：用户问
+    「帮我根据本星期的销售数据做一份销售周报」，LLM 给的是 `sales_summary` 之类的单点意图，
+    于是页面上只有几张指标卡 —— 用户要的**一份周报**根本没有出现（"我要求的是周报，
+    就该给我一份周报"）。报告请求由代码收口：只要是报告请求，一律走 `sales_compare`
+    （周报 = wow / 月报 = mom）+ `report` 标记，区间由程序推。
+
+    与「报告」无关的问题**原样返回**（这道闸门对既有 5 个 intent 零影响）。
+    """
+    period = report_period(question)
+    if not period:
+        return parsed
+    if parsed.report == period:
+        return parsed          # 已经是报告形态 → 原样返回（这道闸门是幂等的）
+    # 一律按报告口径**重建**（不是"在 LLM 的结果上打补丁"）：
+    # 即使 LLM 恰好也给了 sales_compare，它带的多半是自己翻译的半截区间（如"本星期"→ 5 天），
+    # 报告区间一律重新由程序解析。
+    report_intent = build_report_intent(question)
+    note = (
+        f"（解析器原本给的是 {parsed.intent}；问题要的是**一份报告**，代码已改走报告形态 —— "
+        f"报告 = 按{'周' if period == PERIOD_WEEKLY else '月'}口径的两区间比较 + 多段组合输出，"
+        f"不做第二套计算口径）"
+    )
+    return report_intent.model_copy(
+        update={"assumptions": tuple(report_intent.assumptions) + (note,)}
     )
 
 
@@ -757,6 +876,9 @@ def _date_ranges_from_text(
         if 1 <= month <= 12:
             start = _dt.date(year, month, 1)
             tokens.append((match.start(), match.end(), (start, _next_month_start(year, month) - _dt.timedelta(days=1))))
+            # 记进 taken：否则「2011 年 11 月」（年与月之间有空格）会被下面那条
+            # "光写月份"的规则**再算一遍**，同一个月份变成两个区间
+            taken.append((match.start(), match.end()))
 
     for match in _BARE_MONTH_RE.finditer(text):
         if any(start <= match.start() < end for start, end in taken):
@@ -768,6 +890,7 @@ def _date_ranges_from_text(
         year = earlier[-1][2][0].year if earlier else last.year
         start = _dt.date(year, month, 1)
         tokens.append((match.start(), match.end(), (start, _next_month_start(year, month) - _dt.timedelta(days=1))))
+        taken.append((match.start(), match.end()))
 
     tokens.sort(key=lambda item: item[0])
     ranges: list[tuple[_dt.date, _dt.date]] = []
@@ -887,7 +1010,11 @@ __all__ = [
     "SalesTrendParams",
     "TopProductsParams",
     "WEEK_START_WEEKDAY",
+    "build_report_intent",
+    "enforce_comparison_semantics",
+    "enforce_report_semantics",
     "guard_unsupported",
+    "looks_like_comparison",
     "parse",
     "parse_by_keywords",
     "system_prompt",

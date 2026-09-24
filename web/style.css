@@ -635,6 +635,20 @@ button { font-family: inherit; }
 .answer-head b { font-size: 12px; color: var(--text-1); font-weight: 600; }
 .answer-text { font-size: 12.5px; color: var(--text-1); line-height: 1.8; }
 
+/* 报告面板（周报/月报）：抬头一条 + 原文预览。
+   预览用的是 Markdown 原文（与「下载 Markdown」存下来的是同一段文本），
+   所以这里用等宽字体 + 保留换行，不做 Markdown 渲染 —— 少一层转换就少一处对不上的可能。 */
+.report { border: 1px solid var(--border); border-radius: var(--td-radius-default);
+  background: var(--bg-inset); overflow: hidden; }
+.report-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border-bottom: 1px solid var(--border); background: var(--bg-hover); }
+.report-bar b { font-size: 12.5px; color: var(--text-1); font-weight: 600; }
+.report-bar .muted-sm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.report-bar .btn { flex: none; }
+.report-doc { margin: 0; padding: 12px 14px; max-height: 460px; overflow: auto;
+  font-family: var(--font-mono, ui-monospace, "Cascadia Mono", Consolas, monospace);
+  font-size: 12px; line-height: 1.75; color: var(--text-1); white-space: pre-wrap; word-break: break-word; }
+
 /* 段落来源标签：一眼看出哪段是程序写的、哪段是模型写的（哪段是推断） */
 .src-tag {
   font-size: 10px; padding: 1px 7px; border-radius: var(--radius-pill);

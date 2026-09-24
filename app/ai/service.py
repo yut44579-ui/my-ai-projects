@@ -32,7 +32,7 @@ from __future__ import annotations
 from typing import Any
 
 from app import state
-from app.ai import answer, intent as intent_module, llm, tools
+from app.ai import answer, intent as intent_module, llm, report, tools
 
 STATUS_OK = "ok"
 STATUS_DEGRADED = "degraded"
@@ -86,7 +86,9 @@ def _record(
         "params": params,
         "tool": None if result is None else {
             "name": result.get("tool"),
-            "title": tools.TOOLS[result["tool"]].title if result.get("tool") in tools.TOOLS else "",
+            # 标题优先用结果自带的（报告形态不是计算工具，`tools.TOOLS` 里没有它）
+            "title": result.get("title")
+                     or (tools.TOOLS[result["tool"]].title if result.get("tool") in tools.TOOLS else ""),
             "params": result.get("params", {}),
             "notes": result.get("notes", []),
             "display": result.get("display", []),
@@ -95,6 +97,10 @@ def _record(
         "facts": None if result is None else result.get("facts"),
         "series": None if result is None else result.get("series"),
         "items": None if result is None else result.get("items"),
+        # 报告形态（TASK-010）：文档结构一并落盘 —— 回答里那几段是**照它渲染**的，
+        # 留着才能事后逐段复算（数字仍在 facts 里，这里只多一层"报告长什么样"）。
+        # 非报告回答没有 `report` 键 → None（前端只判空）。
+        "report_document": None if result is None else result.get("report"),
         "answer": answer_payload,
         "error": error,
     }
@@ -175,7 +181,13 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
     params = validated.model_dump()
     # date 对象转成字符串再交给工具（工具签名要 date，pydantic 已保证类型正确）
     try:
-        result = tools.run_tool(parsed.intent, params)
+        # 报告形态（TASK-010）：**不是**第 6 个计算型 intent ——
+        # 它仍然走 sales_compare 的窗口解析与金额口径，只是由 report.py 把四个既有工具的
+        # 确定性结果再编排成一份文档（见 report.py 开头"为什么是输出形态"）。
+        if parsed.report:
+            result = report.build_report(parsed.report, params)
+        else:
+            result = tools.run_tool(parsed.intent, params)
     except Exception as exc:                      # 计算失败 → 明确报错，**不编一个数字**
         return _record(
             question=question,

@@ -219,6 +219,7 @@
     renderChat();
     renderChatHistory();
     renderAiConclusion();
+    renderWeeklyReports();
   }
 
   async function loadCapabilities() {
@@ -819,6 +820,65 @@
     toggleEmpty("wk-tasks-empty", rows.length > 0);
   }
 
+  // ── 周报中心：报告类问答（历史里 tool.name == sales_report 的那些）────────
+  // 页面不重新算一遍报告：列表来自 `state.conversations`（后端摘要），
+  // 点「查看」走既有的 openConversation（读完整记录、按同一套分区渲染），
+  // 点「下载 Markdown」取回那条完整记录的 `answer.export` 再存盘 —— 三处同源。
+  function renderWeeklyReports() {
+    const body = $("wk-reports-body");
+    if (!body) return;
+    clear(body);
+    const rows = state.conversations.filter((item) => item.tool === REPORT_TOOL);
+    rows.forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "row chat-history-row";     // 与「历史提问」列表同一个行样式，不另造一套
+
+      const main = document.createElement("div");
+      main.className = "row-main";
+      main.appendChild(line(item.question || "—", "row-title"));
+      main.appendChild(line([
+        fmtTime(item.created_at),
+        CHAT_STATUS_TEXT[item.status] || item.status,
+        typeof item.sales_amount === "number" ? `销售额 ${fmtMoney(item.sales_amount)}` : "",
+      ].filter(Boolean).join(" · "), "row-sub"));
+      row.appendChild(main);
+
+      const open = document.createElement("button");
+      open.className = "btn btn-sm";
+      open.type = "button";
+      open.textContent = "查看";
+      open.addEventListener("click", () => openConversation(item.conversation_id).then(scrollToChat));
+      row.appendChild(open);
+
+      const save = document.createElement("button");
+      save.className = "btn btn-sm";
+      save.type = "button";
+      save.textContent = "下载 Markdown";
+      save.addEventListener("click", () => downloadConversationReport(item.conversation_id, save));
+      row.appendChild(save);
+
+      body.appendChild(row);
+    });
+    toggleEmpty("wk-reports-empty", rows.length > 0);
+  }
+
+  async function downloadConversationReport(conversationId, button) {
+    const original = button ? button.textContent : "";
+    if (button) { button.disabled = true; button.textContent = "准备中…"; }
+    try {
+      const record = await API.getConversation(conversationId);
+      const doc = ((record || {}).answer || {}).export || null;
+      if (!doc) throw new Error("这次问答没有可下载的报告");
+      downloadText(doc.filename, doc.markdown, doc.mime);
+      setText("wk-reports-hint", `已下载：${doc.filename}`);
+    } catch (err) {
+      // 拿不到就说拿不到 —— 绝不从列表摘要拼一份"看起来像报告"的东西出来
+      setText("wk-reports-hint", `下载失败：${(err && err.message) || err}`);
+    } finally {
+      if (button) { button.disabled = false; button.textContent = original; }
+    }
+  }
+
   function renderExecutions() {
     const body = $("exec-table-body");
     if (!body) return;
@@ -1026,6 +1086,13 @@
     llm: "模型生成",
   };
 
+  // 报告形态在记录里的 `tool.name`（后端 app/ai/report.py 的 REPORT_TOOL）。
+  // 周报中心就是靠它把"报告类问答"从历史里挑出来 —— 不猜、不改写记录。
+  const REPORT_TOOL = "sales_report";
+
+  // 「生成周报」卡片上的示例问法（点一下填进输入框，**不自动提交**：用户多半想改区间）
+  const REPORT_EXAMPLE = "帮我根据本星期的销售数据做一份销售周报";
+
   // 复用既有的四种 badge 变体（success/warn/info/failed），不为聊天另造一套颜色
   const CHAT_BADGE_CLASS = {
     ok: "success",
@@ -1209,7 +1276,14 @@
       box.appendChild(line("本次没有生成回答。"));
       return;
     }
+    // 报告形态（TASK-010）：用户要的是**一份报告**，所以正文只出现一次 ——
+    // 下面是那份文档，页面上预览的与点「下载 Markdown」拿到的**是同一段文本**
+    // （不重新请求、不二次渲染，避免两个版本各说各话）。
+    // 【为什么】/【建议行动】照旧按分区渲染；`what` 段的内容就是这份文档，跳过不重复印。
+    const exportDoc = payload.export || null;
+    if (exportDoc) box.appendChild(reportPanel(exportDoc));
     (payload.sections || []).forEach((section) => {
+      if (exportDoc && section.key === "what") return;
       const wrap = document.createElement("div");
       wrap.className = "answer-section";
       const head = document.createElement("div");
@@ -1234,6 +1308,53 @@
       wrap.appendChild(body);
       box.appendChild(wrap);
     });
+  }
+
+  // 报告面板：标题 + 文件名 + 预览（原文）+ 下载。内容全部来自后端 `answer.export`
+  // （markdown 与 mime 也是后端给的 —— 前端不自己拼报告、不自己拼文件名）。
+  function reportPanel(doc) {
+    const wrap = document.createElement("div");
+    wrap.className = "report";
+
+    const bar = document.createElement("div");
+    bar.className = "report-bar";
+    const title = document.createElement("b");
+    title.textContent = [doc.title || "报告", doc.period_label].filter(Boolean).join(" · ");
+    bar.appendChild(title);
+    const file = document.createElement("span");
+    file.className = "muted-sm";
+    file.textContent = doc.filename || "";
+    bar.appendChild(file);
+    const button = document.createElement("button");
+    button.className = "btn btn-primary btn-sm";
+    button.type = "button";
+    button.textContent = "下载 Markdown";
+    button.addEventListener("click", () => downloadText(doc.filename, doc.markdown, doc.mime));
+    bar.appendChild(button);
+    wrap.appendChild(bar);
+
+    const pre = document.createElement("pre");
+    pre.className = "report-doc";
+    pre.textContent = doc.markdown || "";
+    wrap.appendChild(pre);
+    return wrap;
+  }
+
+  // 下载：Blob + <a download>（零依赖、不引第三方库，也不新增后端端点 ——
+  // 下载的就是上面 <pre> 里那段文本）
+  function downloadText(filename, content, mime) {
+    const blob = new Blob([content || ""], { type: mime || "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename || "report.md";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    // 回收 blob：点完再放，别在 click() 之前就把 URL 撤了。
+    // 用微任务而不是定时器 —— 本次任务一结束就回收，不需要延时；
+    // `test_frontend_has_no_fake_shortcuts` 也禁止前端出现任何定时器字样（防"用延时假装在加载"）。
+    queueMicrotask(() => URL.revokeObjectURL(url));
   }
 
   function line(content, className) {
@@ -1623,6 +1744,10 @@
     if (!caps || !caps.intents) return;   // 拿不到能力清单就不改文案（不编一句"支持三类问题"糊上去）
 
     const names = caps.intents.map((item) => item.title).join(" / ");
+    // 报告是**输出形态**（不是第 6 个 intent），所以它不在 intents 里，得单独提示 ——
+    // 否则用户永远猜不到"可以做一份周报"。
+    const reportNames = ((caps.report || {}).periods || []).map((item) => item.title).join(" / ");
+    const allNames = reportNames ? `${names} / ${reportNames}` : names;
     const profile = caps.data_profile || {};
     // 币种**取自后端声明**（数据里没有货币字段，单位不能在前端猜、也不在前端写死）：
     // 后端没声明就一个币种字都不写 —— 宁可不显示，也不编一个默认单位出来。
@@ -1631,13 +1756,29 @@
       ? `金额单位：${currency.name}${currency.symbol ? `（${currency.symbol}，${currency.code || ""}）` : ""}`
       : "";
 
-    setText("nl-note", `自然语言入口：可问 ${names}（数字全部由程序算，文字由模型整理）`);
+    setText("nl-note", `自然语言入口：可问 ${allNames}（数字全部由程序算，文字由模型整理）`);
     setText(
       "hero-nl-note",
-      `本版支持 ${names}；数据范围 ${text(profile.first_day)} ~ ${text(profile.last_day)}，`
+      `本版支持 ${allNames}；数据范围 ${text(profile.first_day)} ~ ${text(profile.last_day)}，`
       + `问数据里没有的维度（如区域）会被明确拒绝。`
       + (currencyText ? ` ${currencyText}。` : ""),
     );
+  }
+
+  // 「生成周报」卡片：把示例问法填进本页的输入框并聚焦。
+  // 为什么不直接替用户提交：报告区间要用户自己确认（他可能想要别的周），自动提交等于替他拍板。
+  function bindReportShortcut() {
+    const button = $("btn-ov-report");
+    if (!button) return;
+    button.addEventListener("click", () => {
+      const input = $("hero-nl-input") || $("nl-input");
+      if (!input) return;
+      if (!input.value.trim()) {
+        input.value = REPORT_EXAMPLE;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      input.focus();
+    });
   }
 
   function scrollToChat() {
@@ -1702,6 +1843,7 @@
     bindDataPage();
     bindDocuments();
     bindChat();
+    bindReportShortcut();
     renderInertControls();
     await renderMetricOptions();
     hide($("upload-result-wrap"));

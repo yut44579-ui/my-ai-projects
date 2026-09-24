@@ -536,7 +536,10 @@ def test_AC05_没有key时降级且明确标注未接LLM(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "")            # 空串也当没配
     assert llm.available() is False
 
-    record = _ask("2011年11月21日到11月27日一共卖了多少")
+    # ⚠️ 这里必须 use_llm=True：`_ask` 的默认值是 False，而 use_llm=False 会在
+    #    intent.parse 的第一步就短路掉，**根本走不到"没配 key"那条分支** ——
+    #    这个测试的名字说的是"没有 key 时降级"，那就得真让程序去检查 key。
+    record = _ask("2011年11月21日到11月27日一共卖了多少", use_llm=True)
     assert record["status"] == "degraded"
     assert record["llm"]["used"] is False
     assert record["llm"]["answer_source"] == "code"
@@ -555,6 +558,24 @@ def test_AC05_没有key时降级且明确标注未接LLM(monkeypatch):
     # 原始 message 依然**原样留在记录里**（后台可查）——前端不渲染 ≠ 后端删掉
     assert record["llm"]["error"]["code"] == "llm_not_configured"
     assert record["llm"]["error"]["message"] == "本次没有可用的模型服务（未配置）—— 只做确定性计算，不编造推断"
+
+
+def test_关闭模型与没有模型是两回事():
+    """`use_llm=False` 是调用方**显式关掉**了模型，不是"模型组件没装好"。
+
+    这两件事在界面上长得一模一样（都是"降级 + 【为什么】由程序生成"），说出口却是两句
+    不同的话：显式关闭时说成"模型服务组件未就绪"，就是在讲一句关于系统状态的假话 ——
+    SDK 装得好好的、key 也配着，只是这次没让它上场。用户看到那句话会去查环境，
+    而真正的原因是他自己（或测试）把开关关了。
+    """
+    record = _ask("2011年11月21日到11月27日一共卖了多少", use_llm=False)
+    assert record["llm"]["used"] is False
+    assert record["llm"]["error"]["code"] == "llm_disabled"
+    assert "未就绪" not in record["notice"]
+    assert "未就绪" not in record["answer"]["sections"][1]["text"]
+    assert "没有让模型参与" in record["notice"]
+    # 记录里仍然留着原始原因（后台可查），只是界面上那句换成了人话
+    assert "allow_llm=false" in record["llm"]["error"]["message"]
 
 
 def test_AC05_LLM调用失败也不编答案(monkeypatch):
