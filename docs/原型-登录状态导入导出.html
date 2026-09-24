@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>销售报表 Agent · 登录 / 状态 / 导入导出 原型</title>
+<style>
+  :root{
+    --brand:#4582e6; --brand-hover:#2667d4; --brand-active:#699ef5; --brand-light:#1b2f51;
+    --success:#059465; --error:#c64751; --warning:#cf6e2d;
+    --g14:#181818; --g13:#242424; --g12:#2c2c2c; --g11:#393939; --g10:#4b4b4b;
+    --g9:#5e5e5e; --g7:#8b8b8b; --g5:#c6c6c6;
+    --t1:rgba(255,255,255,.9); --t2:rgba(255,255,255,.55); --t3:rgba(255,255,255,.35);
+    --r3:3px; --r6:6px; --r999:999px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--g14);color:var(--t1);font:13px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding:24px}
+  h1{font-size:18px;margin-bottom:6px}
+  .sub{color:var(--t2);font-size:12px;margin-bottom:20px}
+  .panel{background:var(--g13);border:1px solid var(--g11);border-radius:var(--r6);padding:16px;margin-bottom:22px}
+  .panel h2{font-size:14px;margin-bottom:4px}
+  .panel .note{color:var(--t3);font-size:11px;margin-bottom:14px}
+  .tag{display:inline-block;border-radius:var(--r3);padding:1px 7px;font-size:11px;margin-left:6px}
+  .tag.good{background:rgba(5,148,101,.15);color:#5d9;border:1px solid rgba(5,148,101,.4)}
+  .tag.warn{background:rgba(207,110,45,.15);color:#f9a;border:1px solid rgba(207,110,45,.4)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+
+  /* ══ 登录页（参考 QQ 形态：左品牌区 + 右表单区）══ */
+  .login{display:grid;grid-template-columns:300px 1fr;background:var(--g13);border:1px solid var(--g11);
+         border-radius:var(--r6);overflow:hidden;max-width:780px;box-shadow:0 12px 40px rgba(0,0,0,.55)}
+  .login-left{background:linear-gradient(150deg,#173463 0%,#103d88 55%,#054bbe 100%);
+              padding:26px 22px;display:flex;flex-direction:column;justify-content:space-between;position:relative}
+  .login-left .lg{display:flex;align-items:center;gap:9px}
+  .login-left .logo{width:34px;height:34px;border-radius:var(--r3);background:rgba(255,255,255,.16);
+                    border:1px solid rgba(255,255,255,.35);display:flex;align-items:center;justify-content:center;font-weight:700}
+  .login-left .lg b{font-size:15px}
+  .login-left .lg span{display:block;font-size:11px;color:rgba(255,255,255,.6)}
+  .login-left .slogan{font-size:15px;line-height:1.7;color:#fff;margin-top:auto}
+  .login-left .slogan em{color:#96bbf8;font-style:normal}
+  .login-left .feat{font-size:11px;color:rgba(255,255,255,.62);margin-top:14px;line-height:1.9}
+  .login-left .dots{position:absolute;right:-40px;bottom:-40px;width:150px;height:150px;border-radius:50%;
+                    background:rgba(255,255,255,.06)}
+  .login-right{padding:30px 34px}
+  .login-right h3{font-size:16px;margin-bottom:4px}
+  .login-right .tabs{display:flex;gap:20px;font-size:13px;color:var(--t3);margin:14px 0 18px}
+  .login-right .tabs div{cursor:pointer;padding-bottom:6px;border-bottom:2px solid transparent}
+  .login-right .tabs div.on{color:var(--brand-active);border-bottom-color:var(--brand)}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;color:var(--t2);margin-bottom:5px}
+  .field .inp{display:flex;align-items:center;background:var(--g14);border:1px solid var(--g11);
+              border-radius:var(--r3);padding:0 10px;height:40px}
+  .field .inp:focus-within{border-color:var(--brand);box-shadow:0 0 0 2px rgba(69,130,230,.18)}
+  .field .inp span{color:var(--t3);font-size:12px;margin-right:8px}
+  .field .inp input{flex:1;background:transparent;border:0;color:var(--t1);font-size:13px;height:100%;outline:0}
+  .field .inp .eye{color:var(--t3);font-size:11px;cursor:pointer}
+  .row{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--t2);margin:4px 0 18px}
+  .chk{display:flex;align-items:center;gap:6px;cursor:pointer}
+  .box{width:13px;height:13px;border:1px solid var(--g10);border-radius:2px;display:inline-block;position:relative}
+  .box.on{background:var(--brand);border-color:var(--brand)}
+  .box.on::after{content:"✓";position:absolute;left:1px;top:-3px;font-size:10px;color:#fff}
+  .btn-main{width:100%;height:40px;background:var(--brand);border:0;border-radius:var(--r3);color:#fff;
+            font-size:14px;cursor:pointer}
+  .btn-main:hover{background:var(--brand-hover)}
+  .login-foot{text-align:center;font-size:11px;color:var(--t3);margin-top:16px}
+  .login-foot a{color:var(--brand-active);text-decoration:none;margin:0 5px}
+  .qq-ref{font-size:11px;color:var(--t3);border-left:2px solid var(--g10);padding-left:9px;margin-top:16px;line-height:1.8}
+
+  /* ══ 状态系统 ══ */
+  .topbar{background:var(--g12);border:1px solid var(--g11);border-radius:var(--r3);padding:0 12px;
+          display:flex;gap:14px;align-items:center;height:52px}
+  .logo{width:28px;height:28px;border-radius:var(--r3);background:var(--brand);display:flex;align-items:center;
+        justify-content:center;font-weight:700;font-size:12px;flex:0 0 28px}
+  .brandtxt b{display:block;font-size:13px} .brandtxt span{display:block;font-size:11px;color:var(--t3)}
+  .ds{display:flex;align-items:center;gap:5px;color:var(--t2);font-size:12px;border:1px solid var(--g11);
+      border-radius:var(--r999);padding:3px 9px}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--success)}
+  .askwrap{flex:1;display:flex;gap:8px;min-width:200px}
+  .askwrap input{flex:1;background:var(--g14);border:1px solid var(--g11);border-radius:var(--r3);color:var(--t1);
+                 padding:7px 10px;font-size:13px}
+  .btn{background:var(--brand);color:#fff;border:0;border-radius:var(--r3);padding:7px 14px;font-size:13px;cursor:pointer}
+  .ghost{background:transparent;color:var(--t1);border:1px solid var(--g10);border-radius:var(--r3);
+         padding:6px 9px;font-size:12px;cursor:pointer}
+  .userbox{display:flex;align-items:center;gap:8px;border:1px solid var(--g11);border-radius:var(--r999);
+           padding:3px 10px 3px 3px;position:relative}
+  .av{width:26px;height:26px;border-radius:50%;background:var(--brand-light);border:1px solid var(--brand);
+      display:flex;align-items:center;justify-content:center;font-size:11px;position:relative}
+  .av .st{position:absolute;right:-2px;bottom:-2px;width:10px;height:10px;border-radius:50%;
+          border:2px solid var(--g12)}
+  .st-online{background:#22C55E} .st-busy{background:#EF4444} .st-away{background:#F59E0B} .st-offline{background:#777}
+  .userbox .nm{font-size:12px;line-height:1.25}
+  .userbox .nm small{display:block;font-size:10px;color:var(--t3)}
+  .statedrop{position:absolute;right:0;top:40px;background:var(--g12);border:1px solid var(--g11);
+             border-radius:var(--r6);padding:6px;min-width:180px;box-shadow:0 8px 24px rgba(0,0,0,.55);z-index:9}
+  .statedrop div{padding:6px 9px;border-radius:var(--r3);font-size:12px;display:flex;align-items:center;gap:8px}
+  .statedrop div:hover{background:var(--brand-light)}
+  .statedrop .cur{color:var(--brand-active)}
+  .sd{width:9px;height:9px;border-radius:50%}
+
+  /* ══ 导入向导 ══ */
+  .steps{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+  .step{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--t3)}
+  .step .n{width:20px;height:20px;border-radius:50%;border:1px solid var(--g10);display:flex;align-items:center;
+           justify-content:center;font-size:11px}
+  .step.on{color:var(--t1)} .step.on .n{background:var(--brand);border-color:var(--brand);color:#fff}
+  .step.done .n{background:var(--success);border-color:var(--success);color:#fff}
+  .step .bar{width:36px;height:1px;background:var(--g10)}
+  .drop{border:1px dashed var(--g10);border-radius:var(--r6);padding:26px;text-align:center;color:var(--t2);
+        background:rgba(255,255,255,.015)}
+  .drop b{color:var(--t1)} .drop .fmt{font-size:11px;color:var(--t3);margin-top:6px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{padding:6px 9px;text-align:left;border-bottom:1px solid var(--g11);white-space:nowrap}
+  th{color:var(--t2);font-weight:500;background:var(--g12)}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .tblwrap{border:1px solid var(--g11);border-radius:var(--r3);overflow:auto;max-height:230px;margin-top:12px}
+  .map{display:grid;grid-template-columns:1fr 34px 1fr;gap:8px;align-items:center;font-size:12px;margin-top:10px}
+  .map .sel{background:var(--g14);border:1px solid var(--g11);border-radius:var(--r3);padding:6px 9px;color:var(--t1)}
+  .map .ok{color:var(--success);text-align:center;font-size:11px}
+  .tagpill{display:inline-block;background:var(--brand-light);color:var(--brand-active);border-radius:var(--r999);
+           padding:1px 8px;font-size:11px;margin-right:5px}
+  .kvrow{display:flex;gap:22px;font-size:12px;color:var(--t2);flex-wrap:wrap}
+  .kvrow b{color:var(--t1);font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+
+<h1>销售报表 Agent · 新增能力原型</h1>
+<div class="sub">登录页（参考 QQ 形态，非照搬）· 在线状态系统 · 表格导入/导出 · 全部用 TDesign 官方 token 渲染</div>
+
+<!-- ══════════ ① 登录页 ══════════ -->
+<div class="panel">
+  <h2>① 登录页 <span class="tag good">参考 QQ 的形态</span><span class="tag warn">真鉴权属 TASK-011，本轮做登录体验 + 本地会话</span></h2>
+  <div class="note">
+    参考的是 QQ 的<b>结构</b>：左品牌区（渐变底 + 标语 + 功能点）+ 右表单区（多标签 + 账号 + 密码 + 记住/找回 + 主按钮 + 底部链接）。
+    配色用我们自己的品牌蓝，不照搬 QQ 的蓝紫。
+  </div>
+  <div class="login">
+    <div class="login-left">
+      <div class="lg">
+        <div class="logo">SR</div>
+        <div><b>销售报表 Agent</b><span>企业销售分析平台</span></div>
+      </div>
+      <div>
+        <div class="slogan">用大白话问，<br>拿确定性数字答。<br><em>每个数字都可核对。</em></div>
+        <div class="feat">
+          · 自然语言问答（数字全部程序计算）<br>
+          · 销售 / 客户 / 产品 三维分析<br>
+          · 一键生成周报并导出<br>
+          · Excel · CSV · Word · PDF · PPT 数据接入
+        </div>
+      </div>
+      <div class="dots"></div>
+    </div>
+    <div class="login-right">
+      <h3>欢迎回来</h3>
+      <div style="font-size:12px;color:var(--t3)">登录后即可开始分析</div>
+      <div class="tabs">
+        <div class="on">账号登录</div>
+        <div>扫码登录</div>
+      </div>
+      <div class="field">
+        <label>账号</label>
+        <div class="inp"><span>👤</span><input value="tangyu" autocomplete="off"></div>
+      </div>
+      <div class="field">
+        <label>密码</label>
+        <div class="inp"><span>🔒</span><input type="password" value="············"><span class="eye">显示</span></div>
+      </div>
+      <div class="row">
+        <div class="chk"><span class="box on"></span>记住我</div>
+        <div style="color:var(--brand-active);cursor:pointer">忘记密码？</div>
+      </div>
+      <button class="btn-main">登 录</button>
+      <div class="login-foot">还没有账号？<a href="#">立即注册</a> · <a href="#">使用游客模式</a></div>
+      <div class="qq-ref">
+        和 QQ 的区别：QQ 是社交账号体系（多端在线、好友状态）；这里是<b>单人分析工作台</b>，
+        所以账号区更轻，重点是登录后的<b>在线状态</b>与分析上下文。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ ② 状态系统 ══════════ -->
+<div class="panel">
+  <h2>② 在线状态系统 <span class="tag good">你要的在线 / 忙碌 / 离开 / 离线</span></h2>
+  <div class="note">头像右下角一个状态点 + 文字；点开可手动切换。状态会<b>自动流转</b>，也能手动覆盖。</div>
+
+  <div class="topbar" style="margin-bottom:16px">
+    <div class="logo">SR</div>
+    <div class="brandtxt"><b>销售报表 Agent</b><span>企业销售分析平台</span></div>
+    <div class="ds"><span class="dot"></span>Online Retail.xlsx</div>
+    <div class="askwrap">
+      <input placeholder="用自然语言提问，例如「2011年11月复购率是多少」">
+      <button class="btn">分析</button>
+    </div>
+    <button class="ghost">☰</button>
+    <div class="userbox">
+      <div class="av">唐<span class="st st-online"></span></div>
+      <div class="nm">唐宇<small>在线</small></div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:8px">状态下拉（点头像展开）</div>
+      <div class="styledrop" style="position:static;box-shadow:none">
+        <div class="cur"><span class="sd" style="background:#22C55E"></span>在线 — 可以提问</div>
+        <div><span class="sd" style="background:#EF4444"></span>忙碌中 — 正在分析中</div>
+        <div><span class="sd" style="background:#F59E0B"></span>离开 — 暂停使用</div>
+        <div><span class="sd" style="background:#777"></span>离线 — 退出登录</div>
+        <div style="border-top:1px solid var(--g11);margin:6px 0;padding:0"></div>
+        <div>个人设置</div>
+        <div>退出登录</div>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:8px">自动流转规则（建议）</div>
+      <table>
+        <thead><tr><th>触发</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td>登录成功</td><td><span class="sd" style="background:#22C55E;display:inline-block"></span> 在线</td></tr>
+          <tr><td>提交问题 / 正在分析</td><td><span class="sd" style="background:#EF4444;display:inline-block"></span> 忙碌中</td></tr>
+          <tr><td>无操作超过 10 分钟</td><td><span class="sd" style="background:#F59E0B;display:inline-block"></span> 离开</td></tr>
+          <tr><td>退出登录 / 关页</td><td><span class="sd" style="background:#777;display:inline-block"></span> 离线</td></tr>
+          <tr><td>手动覆盖</td><td>以手动为准（直到下次自动触发）</td></tr>
+        </tbody>
+      </table>
+      <div class="note" style="margin-top:10px;margin-bottom:0">
+        分析中显示「忙碌中」还有个实际好处：让用户知道<b>这个请求正在跑</b>（而不是以为卡死），
+        这与现有 loading 三态天然契合。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ ③ 导入 ══════════ -->
+<div class="panel">
+  <h2>③ 表格导入（向导式）<span class="tag good">导入</span></h2>
+  <div class="note">上传 → 预览 → 字段映射 → 确认。支持 xlsx / xls / csv。多 Sheet 可选。</div>
+  <div class="steps">
+    <div class="step done"><span class="n">1</span>选择文件</div><div class="bar"></div>
+    <div class="step on"><span class="n">2</span>预览与映射</div><div class="bar"></div>
+    <div class="step"><span class="n">3</span>确认导入</div>
+  </div>
+  <div class="drop">
+    <div>把文件拖到这里，或 <b>点击选择文件</b></div>
+    <div class="fmt">支持 .xlsx / .xls / .csv ｜ 单文件 ≤ 50MB ｜ 多 Sheet 文件可指定工作表</div>
+  </div>
+  <div style="margin-top:14px;font-size:12px;color:var(--t2)">
+    已选：<b>2011年11月销售台账.xlsx</b> （3.2MB）
+    <span class="tagpill" style="margin-left:8px">工作表：Sheet1 ▾</span>
+    <span class="tagpill">共 8,411 行 × 8 列</span>
+  </div>
+  <div class="tblwrap">
+    <table>
+      <thead><tr><th>InvoiceNo</th><th>StockCode</th><th>Description</th><th>Quantity</th><th>InvoiceDate</th><th>UnitPrice</th><th>CustomerID</th><th>Country</th></tr></thead>
+      <tbody>
+        <tr><td>536365</td><td>85123A</td><td>WHITE HANGING HEART T-LIGHT HOLDER</td><td class="num">6</td><td>2011-11-01 08:26</td><td class="num">2.55</td><td class="num">17850</td><td>United Kingdom</td></tr>
+        <tr><td>536365</td><td>71053</td><td>WHITE METAL LANTERN</td><td class="num">6</td><td>2011-11-01 08:26</td><td class="num">3.39</td><td class="num">17850</td><td>United Kingdom</td></tr>
+        <tr><td>536366</td><td>84406B</td><td>CREAM CUPID HEARTS COAT HANGER</td><td class="num">8</td><td>2011-11-01 08:28</td><td class="num">2.75</td><td class="num">17850</td><td>United Kingdom</td></tr>
+        <tr><td>536367</td><td>84879</td><td>ASSORTED COLOUR BIRD ORNAMENT</td><td class="num">32</td><td>2011-11-01 08:34</td><td class="num">1.69</td><td class="num">13047</td><td>United Kingdom</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div style="font-size:12px;color:var(--t2);margin-top:14px">字段映射（自动匹配，可改）</div>
+  <div class="map">
+    <div class="sel">InvoiceNo → 订单号</div><div class="ok">✓ 已识别</div><div class="sel">CustomerID → 客户号</div>
+    <div class="sel">StockCode → 商品编码</div><div class="ok">✓ 已识别</div><div class="sel">Country → 国家</div>
+    <div class="sel">Quantity → 数量</div><div class="ok">✓ 已识别</div><div class="sel">UnitPrice → 单价</div>
+    <div class="sel">InvoiceDate → 日期</div><div class="ok">✓ 已识别</div><div class="sel" style="color:var(--t3)">（未映射字段将被忽略）</div>
+  </div>
+  <div style="margin-top:16px;display:flex;gap:10px">
+    <button class="btn">确认导入</button>
+    <button class="ghost">取消</button>
+  </div>
+</div>
+
+<!-- ══════════ ④ 导出 ══════════ -->
+<div class="panel">
+  <h2>④ 表格导出 <span class="tag good">导出</span></h2>
+  <div class="note">表格上方一排按钮；导出可在后端生成（带格式 xlsx 用模板，CSV 纯数据）。</div>
+  <div class="kvrow" style="margin-bottom:12px">
+    <span>当前视图：客户排行 · 2011-11-01 ~ 2011-11-30 · 按销售额倒序 · 共 <b>1,664</b> 条</span>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+    <button class="btn">导出 Excel (.xlsx)</button>
+    <button class="ghost">导出 CSV</button>
+    <button class="ghost">导出当前页（10 条）</button>
+    <button class="ghost">复制表格</button>
+    <span style="color:var(--t3);font-size:11px;margin-left:6px">导出内容与页面同源（同一套确定性计算，导出不影响数字）</span>
+  </div>
+  <div class="tblwrap" style="max-height:200px">
+    <table>
+      <thead><tr><th>#</th><th>客户号</th><th>销售额</th><th>订单数</th><th>购买次数</th><th>平均每单</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>17450</td><td class="num">27,869.45</td><td class="num">10</td><td class="num">10</td><td class="num">2,786.95</td></tr>
+        <tr><td>2</td><td>14096</td><td class="num">27,827.78</td><td class="num">4</td><td class="num">4</td><td class="num">6,956.94</td></tr>
+        <tr><td>3</td><td>14646</td><td class="num">24,500.11</td><td class="num">3</td><td class="num">3</td><td class="num">8,166.70</td></tr>
+        <tr><td>…</td><td>…</td><td class="num">…</td><td class="num">…</td><td class="num">…</td><td class="num">…</td></tr>
+        <tr><td>1664</td><td>12346</td><td class="num">152.00</td><td class="num">1</td><td class="num">1</td><td class="num">152.00</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel" style="border-color:var(--brand)">
+  <h2>⑤ 这三件事怎么落地（顺序建议）</h2>
+  <div class="grid3">
+    <div>
+      <div style="font-size:13px;margin-bottom:6px">STEP A · 表格 + UI</div>
+      <div style="font-size:12px;color:var(--t2);line-height:1.9">
+        客户/产品/销售三页出真表格<br>分页 · 排序 · <b>导入</b> · <b>导出 xlsx/csv</b><br>
+        顶栏遮挡修复（收进菜单）
+      </div>
+    </div>
+    <div>
+      <div style="font-size:13px;margin-bottom:6px">STEP B · 登录 + 状态</div>
+      <div style="font-size:12px;color:var(--t2);line-height:1.9">
+        登录页（QQ 形态参考）<br>本地会话（真鉴权归 TASK-011）<br>
+        在线 / 忙碌中 / 离开 / 离线 四态
+      </div>
+    </div>
+    <div>
+      <div style="font-size:13px;margin-bottom:6px">STEP C · 接入补齐</div>
+      <div style="font-size:12px;color:var(--t2);line-height:1.9">
+        Excel 多 Sheet · PPT 接入<br>Word 表格保留<br>接入后预览 + 字段映射
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

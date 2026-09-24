@@ -99,6 +99,22 @@ const API = (() => {
     return text ? `?${text}` : "";
   };
 
+  // 从 Content-Disposition 里取文件名：优先 RFC 5987 的 `filename*=UTF-8''...`（中文名），
+  // 取不到再用 `filename=`。两个都没有就让调用方兜底 —— 文件名的"权威来源"是后端。
+  function filenameFrom(disposition) {
+    const header = disposition || "";
+    const extended = header.match(/filename\*=UTF-8''([^;]+)/i);
+    if (extended) {
+      try {
+        return decodeURIComponent(extended[1]);
+      } catch (err) {
+        return extended[1];
+      }
+    }
+    const plain = header.match(/filename="?([^";]+)"?/i);
+    return plain ? plain[1] : "";
+  }
+
   // ── 指标目录：**从后端读**（不是前端写死的清单）────────────────────────
   // 后端没有单独的"指标目录"端点，但 FastAPI 的 /openapi.json 里，
   // ExecuteRequest.metrics 的字段说明写着合法取值（"可选：['sales_amount', …]"），
@@ -185,6 +201,54 @@ const API = (() => {
     })),
     listConversations: (params) => request(`/api/conversations${query(params)}`),
     getConversation: (id) => request(`/api/conversations/${encodeURIComponent(id)}`),
+
+    // ── 数据源 / 业务表 / 导入 / 导出（STEP A）─────────────────────────
+    // 分页、排序、筛选、聚合、导出**全部由后端算**：这里只把用户的查询条件原样传过去，
+    // 前端不做任何排序/分页/统计（否则就会出现"页面 = B、接口 = A"的第二套计算路径）。
+    listDatasets: (params) => request(`/api/datasets${query(params)}`),
+    getDataset: (datasetId) => request(`/api/datasets/${encodeURIComponent(datasetId)}`),
+
+    readTable: (table, params) => request(`/api/tables/${encodeURIComponent(table)}${query(params)}`),
+
+    // 导入向导：① 上传 + 只读检查（文件类型 / 工作表 / 前 N 行 / 字段猜测）
+    inspectDataset(file) {
+      const form = new FormData();
+      form.append("file", file, file.name);
+      return request("/api/datasets/inspect", { method: "POST", body: form });
+    },
+    // ② 确认导入：登记成数据集（后端会如实标"分析未开通"，前端不美化这句话）
+    importDataset: (payload) => request("/api/datasets/import", json(payload)),
+
+    // 导出：**同一个查询条件**打后端的导出端点，拿到二进制再交给页面存盘。
+    // 用 fetch + Blob（不是直接跳转）：后端明确拒绝时（如"超过单次导出上限"）
+    // 错误体是统一 JSON，页面上要显示那句人话，而不是把 JSON 甩到新标签页里。
+    async exportTable(table, params, format) {
+      const url = `/api/tables/${encodeURIComponent(table)}/export${query({ ...params, format })}`;
+      let response;
+      try {
+        response = await fetch(url);
+      } catch (err) {
+        throw new ApiError(0, "network_error", "连不上服务（网络不通或服务未启动），请稍后重试。");
+      }
+      if (!response.ok) {
+        const body = await response.text();
+        let payload = null;
+        try {
+          payload = JSON.parse(body);
+        } catch (err) {
+          payload = null;
+        }
+        const error = payload && payload.error ? payload.error : null;
+        throw new ApiError(
+          response.status,
+          (error && error.code) || `http_${response.status}`,
+          (error && error.message) || body.slice(0, 400) || `HTTP ${response.status}`,
+          payload,
+        );
+      }
+      const blob = await response.blob();
+      return { blob, filename: filenameFrom(response.headers.get("content-disposition")) };
+    },
 
     // 下载地址一律用**后端返回的相对 URL**（download_url）拼当前源，前端不自己拼路径
     downloadUrl: (relative) => new URL(relative, window.location.origin).href,

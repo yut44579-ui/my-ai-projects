@@ -14,10 +14,11 @@
 
   const $ = (id) => document.getElementById(id);
 
-  const ROUTES = ["overview", "sales", "customers", "products", "anomaly", "weekly", "data", "settings"];
+  const ROUTES = ["overview", "sales", "customers", "products", "anomaly", "weekly",
+                  "raw", "data", "settings"];
   const PAGE_TITLES = {
     overview: "首页", sales: "销售分析", customers: "客户分析", products: "产品分析",
-    anomaly: "异常发现", weekly: "周报中心", data: "数据管理", settings: "系统设置",
+    anomaly: "异常发现", weekly: "周报中心", raw: "原始数据", data: "数据管理", settings: "系统设置",
   };
 
   // 指标名 → 中文标签（**只是标签**；指标清单与数值都来自后端）
@@ -49,6 +50,12 @@
     conversations: [],     // GET /api/conversations 的历史列表
     search: "",
     metricsCatalog: { names: [], source: "loading" },
+    datasets: [],          // GET /api/datasets 的列表（数据源）
+    tables: {},            // 四张业务表的查询结果（key = 表名）：分页/排序/筛选全由后端算
+    tablePanels: {},       // 表格面板实例（每张表一个，负责组装查询条件与渲染）
+    inspect: null,         // 导入向导第 1 步的结果（文件类型/工作表/预览/字段映射）
+    imported: null,        // 导入向导第 2 步的结果（登记出来的数据集）
+    menuOpen: false,
   };
 
   // ══════════════════════════════════════════════════════════════════════
@@ -239,7 +246,7 @@
     banner("loading", "正在读取系统状态…");
     const results = await Promise.allSettled([
       loadHealth(), loadTasks(), loadExecutions(), loadDocuments(),
-      loadConversations(), loadCapabilities(),
+      loadConversations(), loadCapabilities(), loadDatasets(),
     ]);
     const failed = results.find((item) => item.status === "rejected");
     if (failed) {
@@ -259,46 +266,47 @@
     const snapshot = health.data_snapshot || {};
     const stateInfo = health.state || {};
 
-    const label = snapshot.path
-      ? `数据源：${String(snapshot.path).split(/[\\/]/).pop()} · ${snapshot.match ? "哈希一致" : "哈希不一致"}`
-      : "数据源：未配置";
-    setText("datasource-label", label);
+    // 页面上的每一句都是**业务语言**：说"数据源是否与登记时一致"，不说哈希怎么算的。
+    const sourceName = snapshot.path ? String(snapshot.path).split(/[\\/]/).pop() : "";
+    setText("datasource-label", sourceName ? `数据源：${sourceName}` : "数据源：未配置");
     const dot = $("datasource-dot");
     if (dot) dot.className = `dot ${snapshot.match ? "ok" : "bad"}`;
+    const chip = $("datasource-chip");
+    if (chip) {
+      chip.title = sourceName
+        ? `当前数据源：${sourceName}${snapshot.match ? "（与登记时一致）" : "（与登记时不一致，请检查数据文件）"}`
+        : "当前数据源：未配置";
+    }
 
-    setText("fact-data", "");
     const factData = $("fact-data");
     if (factData) {
-      factData.innerHTML = `数据源：<b>${escapeHtml(snapshot.path ? String(snapshot.path).split(/[\\/]/).pop() : "—")}</b>` +
-        ` · 快照 ${snapshot.exists ? "存在" : "缺失"} · 哈希 ${snapshot.match ? "一致" : "不一致"} · ${fmtBytes(snapshot.size_bytes)}`;
+      factData.innerHTML = `数据源：<b>${escapeHtml(sourceName || "—")}</b>` +
+        ` · ${snapshot.exists ? "文件在" : "文件缺失"} · ${fmtBytes(snapshot.size_bytes)}`;
     }
     const factTemplate = $("fact-template");
     if (factTemplate) {
       const template = health.template || {};
-      factTemplate.innerHTML = `模板：<b>${escapeHtml(template.path ? String(template.path).split(/[\\/]/).pop() : "—")}</b>` +
-        ` · ${template.exists ? "存在" : "缺失"}`;
+      factTemplate.innerHTML = `报表模板：<b>${escapeHtml(template.path ? String(template.path).split(/[\\/]/).pop() : "—")}</b>` +
+        ` · ${template.exists ? "可用" : "缺失"}`;
     }
     const factState = $("fact-state");
     if (factState) {
-      factState.innerHTML = `状态文件：<b>${stateInfo.readable ? "可读" : "不可读"}</b>` +
-        ` · 上传 ${fmtInt(stateInfo.uploads)} / 执行 ${fmtInt(stateInfo.executions)} / 任务 ${fmtInt(stateInfo.tasks)}`;
+      factState.innerHTML = `数据记录：<b>${stateInfo.readable ? "可读写" : "不可读写"}</b>` +
+        ` · 数据源 ${fmtInt(state.datasets.length || 1)} / 报表任务 ${fmtInt(stateInfo.tasks)}` +
+        ` / 执行记录 ${fmtInt(stateInfo.executions)}`;
     }
     const factCode = $("fact-code");
-    if (factCode) factCode.innerHTML = `数据校验：<b>${snapshot.match ? "快照哈希一致" : "快照哈希不一致"}</b>`;
-
-    setText("side-version", `版本：${text(health.api_version)}`);
-    setText("side-perm", `权限与安全：未启用`);
-    // 单用户部署，未做鉴权 —— 这两行如实写"当前就是这样"，不暗示已有权限体系
-    setText("side-user", "当前用户：本地（单用户模式）");
-    setText("side-role", "角色：owner（尚未做鉴权）");
+    if (factCode) {
+      factCode.innerHTML = `数据校验：<b>${snapshot.match ? "与登记时一致" : "与登记时不一致"}</b>`;
+    }
 
     setText("rp-service", `${text(health.service)} · ${text(health.status)}`);
-    setText("rp-api-version", text(health.api_version));
-    setText("rp-state-readable", stateInfo.readable ? "可读" : "不可读");
-    setText("rp-counts", `${fmtInt(stateInfo.uploads)} / ${fmtInt(stateInfo.executions)} / ${fmtInt(stateInfo.tasks)}`);
+    setText("rp-state-readable", stateInfo.readable ? "可读写" : "不可读写");
+    setText("rp-counts", `${fmtInt(state.datasets.length || 1)} / ${fmtInt(stateInfo.tasks)}` +
+      ` / ${fmtInt(stateInfo.executions)}`);
     const rpSnapshot = $("rp-snapshot");
     if (rpSnapshot) {
-      rpSnapshot.textContent = snapshot.match ? "通过（哈希一致）" : "未通过 / 缺失";
+      rpSnapshot.textContent = snapshot.match ? "通过" : "未通过";
       rpSnapshot.className = snapshot.match ? "ok" : "bad";
     }
 
@@ -313,10 +321,9 @@
     const rows = [
       ["服务", text(health.service)],
       ["状态", text(health.status)],
-      ["API 版本", text(health.api_version)],
       ["服务时间", fmtTime(health.time)],
-      ["数据源哈希一致", (health.data_snapshot || {}).match ? "是" : "否"],
-      ["模板存在", (health.template || {}).exists ? "是" : "否"],
+      ["数据源与登记一致", (health.data_snapshot || {}).match ? "是" : "否"],
+      ["报表模板可用", (health.template || {}).exists ? "是" : "否"],
     ];
     rows.forEach(([key, value]) => {
       const row = document.createElement("tr");
@@ -331,12 +338,11 @@
       clear(storage);
       const info = health.state || {};
       [
-        ["状态目录", text(info.state_dir)],
-        ["状态格式版本", text(info.schema_version)],
-        ["上传记录数", fmtInt(info.uploads)],
+        ["数据源数", fmtInt(state.datasets.length || 1)],
+        ["报表任务数", fmtInt(info.tasks)],
         ["执行记录数", fmtInt(info.executions)],
-        ["任务数", fmtInt(info.tasks)],
-        ["可读", info.readable ? "是" : "否"],
+        ["上传文件数", fmtInt(info.uploads)],
+        ["可读写", info.readable ? "是" : "否"],
       ].forEach(([key, value]) => {
         const row = document.createElement("tr");
         cell(row, key);
@@ -368,7 +374,6 @@
     renderKpis();
     renderTrend();
     renderConclusions();
-    renderSales();
   }
 
   function renderKpis() {
@@ -489,30 +494,8 @@
     });
   }
 
-  function renderSales() {
-    const body = $("sales-table-body");
-    const latest = latestSuccess();
-    if (!body) return;
-    clear(body);
-    const metrics = (latest && latest.metrics) || {};
-    const names = Object.keys(metrics);
-    if (!latest || !names.length) {
-      toggleEmpty("sales-empty", false);
-      setText("sales-caption", "数据来源：历史执行记录");
-      return;
-    }
-    toggleEmpty("sales-empty", true);
-    names.forEach((name) => {
-      const row = document.createElement("tr");
-      cell(row, metricLabel(name));
-      const value = metrics[name];
-      cell(row, typeof value === "number" ? (name.endsWith("amount") ? fmtMoney(value) : fmtInt(value)) : text(value), "num");
-      cell(row, `执行 ${latest.execution_id}`).className = "num";
-      body.appendChild(row);
-    });
-    setText("sales-caption",
-      `最近一次成功执行 ${latest.execution_id} · ${fmtTime(latest.created_at)} · 数据来源：历史执行记录`);
-  }
+  // 「销售分析」页现在是**真表格**（客户/产品/销售/原始数据四张表见文件下半部分）：
+  // 维度 × 指标全部向后端要，所以这里不再从执行记录里拼指标卡。
 
   // ══════════════════════════════════════════════════════════════════════
   // 渲染：数据管理（任务 / Spec / 执行 / 记录）
@@ -543,40 +526,51 @@
     select.value = state.selectedTaskId;
   }
 
+  // 已上传的文件：只显示业务字段（文件 / 行数 / 列数 / 上传时间）。
+  // 内部编号与哈希是审计信息，界面上不出现（文件名的权威来源是上传时的原名）。
   function renderFiles() {
     const body = $("files-table-body");
-    const custBody = $("cust-files-body");
     if (body) clear(body);
-    if (custBody) clear(custBody);
 
-    // 上传记录本身没有列表端点（12 端点冻结），所以这里列的是**任务绑定的数据文件**（真实字段）
     const byFile = new Map();
     state.tasks.forEach((task) => {
       if (!task.file_id) return;
-      const entry = byFile.get(task.file_id) || { file_id: task.file_id, filename: task.source_filename, sha256: task.data_sha256, tasks: [] };
-      entry.tasks.push(task.name);
+      const entry = byFile.get(task.file_id)
+        || { file_id: task.file_id, filename: task.source_filename, rows: task.rows, columns: task.columns, created_at: task.created_at };
       byFile.set(task.file_id, entry);
     });
-    const rows = [...byFile.values()].filter((entry) => matchesSearch(entry.filename, entry.file_id));
+    const rows = [...byFile.values()].filter((entry) => matchesSearch(entry.filename));
     rows.forEach((entry) => {
-      if (body) {
-        const row = document.createElement("tr");
-        cell(row, text(entry.filename));
-        cell(row, entry.file_id).className = "num";
-        cell(row, shortHash(entry.sha256)).className = "num";
-        cell(row, entry.tasks.join("、"));
-        body.appendChild(row);
-      }
-      if (custBody) {
-        const row = document.createElement("tr");
-        cell(row, text(entry.filename));
-        cell(row, entry.file_id).className = "num";
-        cell(row, shortHash(entry.sha256)).className = "num";
-        custBody.appendChild(row);
-      }
+      if (!body) return;
+      const row = document.createElement("tr");
+      cell(row, text(entry.filename));
+      cell(row, typeof entry.rows === "number" ? fmtInt(entry.rows) : "—").className = "num";
+      cell(row, typeof entry.columns === "number" ? fmtInt(entry.columns) : "—").className = "num";
+      cell(row, fmtTime(entry.created_at));
+      body.appendChild(row);
     });
     toggleEmpty("files-empty", rows.length > 0);
-    toggleEmpty("cust-files-empty", rows.length > 0);
+    renderTaskFileOptions(rows);
+  }
+
+  // 建任务时的"数据文件"下拉：显示文件名（业务标识），值仍是内部的 file_id（不显示给用户）
+  function renderTaskFileOptions(rows) {
+    const select = $("task-file-id");
+    if (!select) return;
+    const current = select.value;
+    clear(select);
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = rows.length ? "（请选择数据文件）" : "（还没有上传文件）";
+    select.appendChild(placeholder);
+    rows.forEach((entry) => {
+      const option = document.createElement("option");
+      option.value = entry.file_id;
+      option.textContent = entry.filename || "未命名文件";
+      select.appendChild(option);
+    });
+    if ([...select.options].some((option) => option.value === current)) select.value = current;
+    updateCreatePrecondition();
   }
 
   // ── 文档资料（TASK-003）──────────────────────────────────────────────
@@ -591,10 +585,8 @@
     rows.forEach((doc) => {
       const row = document.createElement("tr");
       cell(row, text(doc.filename));
-      cell(row, doc.doc_id).className = "num";
       cell(row, fmtInt(doc.chars)).className = "num";
       cell(row, fmtInt(doc.blocks)).className = "num";
-      cell(row, shortHash(doc.sha256)).className = "num";
       cell(row, fmtTime(doc.created_at));
 
       const action = document.createElement("td");
@@ -918,14 +910,10 @@
       clear(meta);
       const summary = task.spec_summary || {};
       const fields = [
-        ["task_id", task.task_id],
         ["名称", task.name],
-        ["状态", task.status],
-        ["Spec 版本", `${text(task.spec_id)} v${text(task.spec_version)}`],
+        ["状态", task.status === "has_run" ? "执行过" : "已创建"],
         ["数据文件", task.source_filename],
-        ["文件编号", task.file_id],
-        ["数据哈希", shortHash(task.data_sha256)],
-        ["快照一致", task.data_snapshot_match ? "是" : "否"],
+        ["数据源校验", task.data_snapshot_match ? "通过" : "未通过"],
         ["区间", `${text(summary.start)} ~ ${text(summary.end)}`],
         ["指标", (summary.metrics || []).map(metricLabel).join("、")],
         ["创建时间", fmtTime(task.created_at)],
@@ -1052,6 +1040,8 @@
     const workspace = $("workspace");
     if (workspace) workspace.scrollTop = 0;
     document.title = `${PAGE_TITLES[state.route]} · 销售报表 Agent`;
+    // 进到表格页才去要数据（四张表都由后端算，没必要在首屏一次全拉）
+    ensureTableLoaded(state.route);
   }
 
   function goto(route) {
@@ -1484,17 +1474,60 @@
     }
   }
 
+  // 顶栏：Logo / 数据源 / 提问框 / ☰ 菜单 / 用户区。
+  // 菜单里的每一条都指向**已经能用的东西**（历史提问、原始数据、导入数据、生成报告、设置）；
+  // 通知还没做，就明确写"暂未提供"并保持不可点 —— 不摆一个点了没反应的按钮。
   function bindTopbar() {
-    $("global-search").addEventListener("input", (event) => {
-      state.search = event.target.value.trim();
-      renderExecutions();
-      renderFiles();
-      renderDocuments();
-      renderWeeklyTasks();
+    const button = $("btn-menu");
+    const menu = $("topbar-menu");
+    const closeMenu = () => {
+      state.menuOpen = false;
+      if (menu) hide(menu);
+      if (button) button.setAttribute("aria-expanded", "false");
+    };
+    if (button && menu) {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        state.menuOpen = !state.menuOpen;
+        if (state.menuOpen) show(menu); else hide(menu);
+        button.setAttribute("aria-expanded", state.menuOpen ? "true" : "false");
+      });
+      // 点菜单外面 / 按 Esc 都要关上（菜单不该赖在屏幕上）
+      document.addEventListener("click", () => { if (state.menuOpen) closeMenu(); });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && state.menuOpen) closeMenu();
+      });
+      menu.addEventListener("click", (event) => event.stopPropagation());
+    }
+    const goWithMenu = (id, action) => {
+      const item = $(id);
+      if (!item) return;
+      item.addEventListener("click", () => {
+        closeMenu();
+        action();
+      });
+    };
+    goWithMenu("menu-item-history", () => { goto("overview"); scrollToChatHistory(); });
+    goWithMenu("menu-item-raw", () => goto("raw"));
+    goWithMenu("menu-item-import", () => goto("data"));
+    goWithMenu("menu-item-report", () => {
+      goto("overview");
+      const input = $("hero-nl-input") || $("nl-input");
+      if (input) {
+        if (!input.value.trim()) input.value = REPORT_EXAMPLE;
+        input.focus();
+      }
+      scrollToChat();
     });
-    $("btn-history").addEventListener("click", () => goto("data"));
-    $("btn-settings").addEventListener("click", () => goto("settings"));
+    goWithMenu("menu-item-settings", () => goto("settings"));
+    const notify = $("menu-item-notify");
+    if (notify) notify.disabled = true;
     $("avatar").addEventListener("click", () => goto("settings"));
+  }
+
+  function scrollToChatHistory() {
+    const box = $("chat-history-wrap");
+    if (box && box.scrollIntoView) box.scrollIntoView({ block: "start" });
   }
 
   function bindRightPanel() {
@@ -1730,8 +1763,6 @@
       const el = $(id);
       if (el) el.title = hint;
     });
-    const notify = $("btn-notify");
-    if (notify) notify.title = "通知：暂未提供";
     const facts = $("hero-facts");
     if (facts) facts.title = "以上四项为最近一次读取到的真实状态";
   }
@@ -1851,6 +1882,620 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════
+  // 业务表格（客户 / 产品 / 销售 / 原始数据）
+  //
+  // 【铁律】分页、排序、筛选、聚合、导出**全部由后端确定性计算**，这里只做三件事：
+  //   ① 把用户的操作组装成查询参数；
+  //   ② 把后端返回的 columns / items / total 渲染出来；
+  //   ③ 点表头 = 改排序键再请求一次 —— **绝不拿本地这几行自己排**。
+  //      （前端排序会形成第二套计算路径：将来"接口 = A、页面 = B"，破坏确定性。）
+  //
+  // 列名、对齐、数字格式也都来自后端（columns），前端不维护第二份表头。
+  // ══════════════════════════════════════════════════════════════════════
+  const TABLE_PAGE_SIZES = [20, 50, 100, 200];
+  // 销售表的维度与指标：**取值由后端定**（这里只是显示名，选错后端会明确拒绝）
+  const SALES_DIMENSIONS = [["day", "按日"], ["week", "按周"], ["country", "按国家"]];
+  const SALES_METRICS = [["sales_amount", "销售额"], ["order_count", "订单数"],
+                         ["customer_count", "客户数"], ["avg_order_amount", "客单价"]];
+  const TABLE_SPECS = {
+    customers: { table: "customers", rootId: "tbl-customers", noteId: "cust-scope-note",
+                 emptyId: "tbl-customers-empty", searchPlaceholder: "客户号", sales: false },
+    products: { table: "products", rootId: "tbl-products", noteId: "prod-scope-note",
+                emptyId: "tbl-products-empty", searchPlaceholder: "商品编码或名称", sales: false },
+    sales: { table: "sales", rootId: "tbl-sales", noteId: "sales-scope-note",
+             emptyId: "tbl-sales-empty", searchPlaceholder: "期间", sales: true },
+    raw: { table: "raw", rootId: "tbl-raw", noteId: "raw-scope-note", emptyId: "tbl-raw-empty",
+           searchPlaceholder: "订单号 / 商品 / 客户 / 国家", sales: false },
+  };
+
+  // 单元格显示：**后端给 format**，前端只负责按格式排版（不做任何运算）
+  function formatCell(value, format) {
+    if (value === null || value === undefined || value === "") return "—";
+    if (format === "money") return fmtMoney(value);
+    if (format === "int") return fmtInt(value);
+    if (format === "qty") return fmtInt(Math.round(value));
+    if (format === "pct") return `${Number(value).toFixed(2)}%`;
+    if (format === "date") return String(value).slice(0, 10);
+    if (format === "datetime") return String(value).replace("T", " ").slice(0, 19);
+    return String(value);
+  }
+
+  function button(label, className) {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = className || "btn btn-sm";
+    el.textContent = label;
+    return el;
+  }
+
+  function selectBox(options, value) {
+    const el = document.createElement("select");
+    options.forEach(([key, label]) => {
+      const option = document.createElement("option");
+      option.value = key;
+      option.textContent = label;
+      el.appendChild(option);
+    });
+    if (value !== undefined) el.value = value;
+    return el;
+  }
+
+  function field(label, control) {
+    const wrap = document.createElement("label");
+    wrap.className = "field-inline";
+    const span = document.createElement("span");
+    span.className = "field-inline-label";
+    span.textContent = label;
+    wrap.appendChild(span);
+    wrap.appendChild(control);
+    return wrap;
+  }
+
+  function createTablePanel(spec) {
+    const root = $(spec.rootId);
+    const panel = {
+      spec,
+      query: { page: 1, page_size: 50, sort: "", order: "", search: "" },
+      payload: null,
+      elements: {},
+      loaded: false,
+    };
+    if (!root) return panel;
+
+    // ── 工具条 ────────────────────────────────────────────────────────
+    const toolbar = document.createElement("div");
+    toolbar.className = "toolbar";
+
+    const startInput = document.createElement("input");
+    startInput.type = "date";
+    const endInput = document.createElement("input");
+    endInput.type = "date";
+    const rangeBox = document.createElement("div");
+    rangeBox.className = "range";
+    rangeBox.appendChild(startInput);
+    const tilde = document.createElement("span");
+    tilde.className = "muted-sm";
+    tilde.textContent = "~";
+    rangeBox.appendChild(tilde);
+    rangeBox.appendChild(endInput);
+
+    const searchInput = document.createElement("input");
+    searchInput.type = "search";
+    searchInput.placeholder = spec.searchPlaceholder || "搜索";
+
+    const dimensionSelect = selectBox(SALES_DIMENSIONS, "day");
+    const metricSelect = selectBox(SALES_METRICS, "sales_amount");
+    const pageSizeSelect = selectBox(
+      TABLE_PAGE_SIZES.map((size) => [String(size), `${size} 条/页`]), "50",
+    );
+
+    const queryButton = button("查询", "btn btn-sm btn-primary");
+    const resetButton = button("重置");
+    const exportXlsx = button("导出 Excel");
+    const exportCsv = button("导出 CSV");
+    const statusLine = document.createElement("span");
+    statusLine.className = "muted-sm";
+    statusLine.id = `${spec.rootId}-status`;
+
+    toolbar.appendChild(field("时间范围", rangeBox));
+    toolbar.appendChild(field("搜索", searchInput));
+    if (spec.sales) {
+      toolbar.appendChild(field("维度", dimensionSelect));
+      toolbar.appendChild(field("指标", metricSelect));
+    }
+    toolbar.appendChild(queryButton);
+    toolbar.appendChild(resetButton);
+    const spacer = document.createElement("span");
+    spacer.className = "toolbar-spacer";
+    toolbar.appendChild(spacer);
+    toolbar.appendChild(statusLine);
+    toolbar.appendChild(field("每页", pageSizeSelect));
+    toolbar.appendChild(exportXlsx);
+    toolbar.appendChild(exportCsv);
+    root.appendChild(toolbar);
+
+    // ── 表体 ──────────────────────────────────────────────────────────
+    const wrap = document.createElement("div");
+    wrap.className = "table-wrap";
+    const table = document.createElement("table");
+    table.className = "table";
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    head.appendChild(headRow);
+    const body = document.createElement("tbody");
+    table.appendChild(head);
+    table.appendChild(body);
+    wrap.appendChild(table);
+    root.appendChild(wrap);
+
+    // 空状态块**用页面上那一个**（HTML 里已经有），不另造一个 ——
+    // 页面只有一处空状态定义，测试与走查都盯得住。
+    const empty = spec.emptyId ? $(spec.emptyId) : null;
+
+    const pager = document.createElement("div");
+    pager.className = "pager";
+    const prev = button("上一页");
+    const next = button("下一页");
+    const pageInfo = document.createElement("span");
+    pageInfo.className = "muted-sm";
+    const summary = document.createElement("span");
+    summary.className = "muted-sm pager-summary";
+    pager.appendChild(prev);
+    pager.appendChild(pageInfo);
+    pager.appendChild(next);
+    pager.appendChild(summary);
+    root.appendChild(pager);
+
+    const footer = document.createElement("p");
+    footer.className = "note";
+    footer.id = `${spec.rootId}-note`;
+    root.appendChild(footer);
+
+    panel.elements = { startInput, endInput, searchInput, dimensionSelect, metricSelect,
+                       pageSizeSelect, statusLine, headRow, body, empty, prev, next,
+                       pageInfo, summary, footer };
+
+    // ── 渲染 ──────────────────────────────────────────────────────────
+    panel.render = (payload) => {
+      panel.payload = payload;
+      panel.loaded = true;
+      const columns = payload.columns || [];
+      const rows = payload.items || [];
+
+      clear(headRow);
+      columns.forEach((column) => {
+        const th = document.createElement("th");
+        th.textContent = column.label || column.key;
+        if (column.align === "right") th.className = "num";
+        if (column.note) th.title = column.note;
+        const sortable = !(payload.table === "raw" && column.key === "row_no");
+        if (sortable) {
+          th.classList.add("sortable");
+          if (payload.sort === column.key) {
+            th.classList.add(payload.order === "asc" ? "sorted-asc" : "sorted-desc");
+            th.title = `${th.title ? `${th.title} · ` : ""}当前排序：${payload.order === "asc" ? "升序" : "降序"}`;
+          }
+          // 点表头 → **向后端要一次新排序**（不是拿本地数据排）
+          th.addEventListener("click", () => {
+            const same = panel.query.sort === column.key;
+            panel.query.sort = column.key;
+            panel.query.order = same && panel.query.order === "desc" ? "asc" : "desc";
+            panel.query.page = 1;
+            panel.load();
+          });
+        }
+        headRow.appendChild(th);
+      });
+
+      clear(body);
+      rows.forEach((item) => {
+        const row = document.createElement("tr");
+        columns.forEach((column) => {
+          const td = cell(row, formatCell(item[column.key], column.format));
+          if (column.align === "right") td.className = "num";
+        });
+        body.appendChild(row);
+      });
+      if (empty) empty.hidden = rows.length > 0;
+      wrap.hidden = rows.length === 0;
+
+      prev.disabled = payload.page <= 1;
+      next.disabled = payload.page >= payload.page_count;
+      pageInfo.textContent = `第 ${fmtInt(payload.page)} / ${fmtInt(payload.page_count)} 页 · 共 ${fmtInt(payload.total)} 条`;
+      const summaryParts = [];
+      const totals = payload.summary || {};
+      if (typeof totals.count === "number") summaryParts.push(`条件命中 ${fmtInt(totals.count)} 条`);
+      if (typeof totals.sales_amount === "number") {
+        summaryParts.push(`合计销售额 ${fmtMoney(totals.sales_amount)}${currencySymbol()}`);
+      }
+      if (typeof totals.metric_total === "number" && totals.metric_label) {
+        summaryParts.push(`${totals.metric_label}合计 ${formatCell(totals.metric_total, "money")}`);
+      }
+      summary.textContent = summaryParts.join(" · ");
+
+      const notes = [];
+      if (totals.note) notes.push(totals.note);
+      (payload.notes || []).forEach((note) => notes.push(note));
+      footer.textContent = notes.join(" ");
+
+      const noteBox = $(spec.noteId);
+      if (noteBox) {
+        noteBox.textContent = payload.dataset
+          ? `${payload.dataset.name} · 更新于 ${fmtTime(payload.dataset.updated_at)}`
+          : "";
+      }
+      statusLine.textContent = "";
+    };
+
+    panel.load = async () => {
+      const query = panel.query;
+      const params = {
+        page: query.page,
+        page_size: query.page_size,
+        search: query.search,
+        start: panel.elements.startInput.value,
+        end: panel.elements.endInput.value,
+      };
+      if (query.sort) {
+        params.sort = query.sort;
+        params.order = query.order;
+      }
+      if (spec.sales) {
+        params.dimension = panel.elements.dimensionSelect.value;
+        params.metric = panel.elements.metricSelect.value;
+      }
+      statusLine.textContent = "正在读取…";
+      try {
+        const payload = await API.readTable(spec.table, params);
+        panel.query.page = payload.page;
+        panel.query.page_size = payload.page_size;
+        panel.query.sort = payload.sort;
+        panel.query.order = payload.order;
+        if (Number(panel.elements.pageSizeSelect.value) !== payload.page_size) {
+          panel.elements.pageSizeSelect.value = String(payload.page_size);
+        }
+        panel.render(payload);
+      } catch (err) {
+        statusLine.textContent = "";
+        banner("error", `读取业务表格失败：${escapeHtml(err.message)}`);
+      }
+    };
+
+    panel.exportTo = async (format) => {
+      const params = {
+        search: panel.query.search,
+        start: panel.elements.startInput.value,
+        end: panel.elements.endInput.value,
+      };
+      if (panel.query.sort) {
+        params.sort = panel.query.sort;
+        params.order = panel.query.order;
+      }
+      if (spec.sales) {
+        params.dimension = panel.elements.dimensionSelect.value;
+        params.metric = panel.elements.metricSelect.value;
+      }
+      statusLine.textContent = "正在按当前条件生成导出文件…";
+      try {
+        const result = await API.exportTable(spec.table, params, format);
+        downloadBlob(result.filename, result.blob);
+        statusLine.textContent = "已按当前筛选与排序导出完整结果。";
+      } catch (err) {
+        statusLine.textContent = "";
+        // 后端拒绝导出时（如超过单次上限）把**它的原话**显示出来 —— 那是给用户看的
+        banner("error", `导出失败：${escapeHtml(err.message)}`);
+      }
+    };
+
+    // ── 事件 ──────────────────────────────────────────────────────────
+    queryButton.addEventListener("click", () => {
+      panel.query.search = searchInput.value.trim();
+      panel.query.page = 1;
+      panel.load();
+    });
+    searchInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      queryButton.click();
+    });
+    resetButton.addEventListener("click", () => {
+      startInput.value = "";
+      endInput.value = "";
+      searchInput.value = "";
+      panel.query = { page: 1, page_size: panel.query.page_size, sort: "", order: "", search: "" };
+      if (spec.sales) {
+        dimensionSelect.value = "day";
+        metricSelect.value = "sales_amount";
+      }
+      panel.load();
+    });
+    pageSizeSelect.addEventListener("change", () => {
+      panel.query.page_size = Number(pageSizeSelect.value);
+      panel.query.page = 1;
+      panel.load();
+    });
+    prev.addEventListener("click", () => {
+      if (panel.query.page > 1) {
+        panel.query.page -= 1;
+        panel.load();
+      }
+    });
+    next.addEventListener("click", () => {
+      panel.query.page += 1;
+      panel.load();
+    });
+    if (spec.sales) {
+      // 换维度 / 指标 → 重新向后端要数据（行内容与排序规则都会变）
+      dimensionSelect.addEventListener("change", () => {
+        panel.query.sort = "";
+        panel.query.order = "";
+        panel.query.page = 1;
+        panel.load();
+      });
+      metricSelect.addEventListener("change", () => {
+        panel.query.sort = "";
+        panel.query.order = "";
+        panel.query.page = 1;
+        panel.load();
+      });
+    }
+    exportXlsx.addEventListener("click", () => panel.exportTo("xlsx"));
+    exportCsv.addEventListener("click", () => panel.exportTo("csv"));
+
+    return panel;
+  }
+
+  function downloadBlob(filename, blob) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename || "export";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    queueMicrotask(() => URL.revokeObjectURL(url));
+  }
+
+  function bindTablePanels() {
+    Object.values(TABLE_SPECS).forEach((spec) => {
+      state.tablePanels[spec.table] = createTablePanel(spec);
+    });
+  }
+
+  // 进入页面时按需加载（加载过就不再重复请求；想刷新有「查询」按钮）
+  function ensureTableLoaded(route) {
+    const spec = TABLE_SPECS[route];
+    if (!spec) return;
+    const panel = state.tablePanels[spec.table];
+    if (!panel || panel.loaded) return;
+    panel.load().catch(() => {});
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 数据源列表 + 导入向导（数据管理页）
+  // ══════════════════════════════════════════════════════════════════════
+  async function loadDatasets() {
+    const payload = await API.listDatasets({ limit: 100 });
+    state.datasets = payload.datasets || [];
+    renderDatasets();
+  }
+
+  function renderDatasets() {
+    const body = $("datasets-body");
+    if (body) clear(body);
+    state.datasets.forEach((dataset) => {
+      if (!body) return;
+      const row = document.createElement("tr");
+      cell(row, text(dataset.name));
+      cell(row, fmtInt(dataset.row_count)).className = "num";
+      cell(row, fmtInt(dataset.column_count)).className = "num";
+      const range = dataset.date_range || {};
+      cell(row, range.start && range.end ? `${range.start} ~ ${range.end}` : "—");
+      cell(row, fmtTime(dataset.updated_at));
+      const statusCell = document.createElement("td");
+      const badge = document.createElement("span");
+      badge.className = `badge ${dataset.analysis_enabled ? "success" : "warn"}`;
+      badge.textContent = dataset.status_label || "—";
+      statusCell.appendChild(badge);
+      row.appendChild(statusCell);
+      body.appendChild(row);
+    });
+    toggleEmpty("datasets-empty", state.datasets.length > 0);
+    const note = $("datasets-note");
+    if (note) {
+      const analyzable = state.datasets.filter((item) => item.analysis_enabled);
+      const pending = state.datasets.filter((item) => !item.analysis_enabled);
+      const parts = [];
+      if (analyzable.length) {
+        parts.push(`业务表格当前基于「${analyzable[0].name}」计算。`);
+      }
+      if (pending.length) {
+        parts.push(`另有 ${pending.length} 个已登记的数据源：分析能力尚未开通，`
+          + "系统不会拿它们的数字冒充结果。");
+      }
+      note.textContent = parts.join(" ");
+    }
+  }
+
+  async function inspectDatasetFile() {
+    const input = $("ds-file-input");
+    if (!input || !input.files || !input.files.length) {
+      status("ds-import-state", "请先选择一个 .xlsx / .xlsm / .csv 文件。", "error");
+      return;
+    }
+    status("ds-import-state", "正在读取文件（只读前若干行，不把整表塞进浏览器）…", "loading");
+    hide($("ds-import-result"));
+    try {
+      state.inspect = await API.inspectDataset(input.files[0]);
+      renderInspect(state.inspect);
+      status("ds-import-state", "文件已检查完成，请确认工作表与字段映射后导入。", "success");
+    } catch (err) {
+      state.inspect = null;
+      hide($("ds-inspect"));
+      status("ds-import-state", err.message, "error");
+    }
+  }
+
+  function renderInspect(inspect) {
+    const box = $("ds-inspect");
+    if (!box) return;
+    show(box);
+    const meta = $("ds-inspect-meta");
+    if (meta) {
+      meta.textContent = `${inspect.filename} · ${fmtInt(inspect.rows)} 行 × `
+        + `${fmtInt(inspect.column_count)} 列 · ${inspect.read_note || ""}`;
+    }
+    const sheetField = $("ds-sheet-field");
+    const sheetSelect = $("ds-sheet");
+    if (sheetSelect) {
+      clear(sheetSelect);
+      (inspect.sheets || []).forEach((name) => {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        sheetSelect.appendChild(option);
+      });
+      if (inspect.sheet) sheetSelect.value = inspect.sheet;
+    }
+    if (sheetField) sheetField.hidden = !(inspect.sheets || []).length;
+
+    const nameInput = $("ds-name");
+    if (nameInput && !nameInput.value) {
+      nameInput.value = String(inspect.filename || "").replace(/\.[^.]+$/, "");
+    }
+
+    const count = $("ds-preview-count");
+    if (count) count.textContent = String((inspect.preview || []).length);
+    const table = $("ds-preview-table");
+    if (table) {
+      clear(table);
+      const head = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      (inspect.columns || []).forEach((column) => {
+        const th = document.createElement("th");
+        th.textContent = column;
+        headRow.appendChild(th);
+      });
+      head.appendChild(headRow);
+      table.appendChild(head);
+      const body = document.createElement("tbody");
+      (inspect.preview || []).forEach((row) => {
+        const tr = document.createElement("tr");
+        (inspect.columns || []).forEach((column) => {
+          cell(tr, row[column] === null || row[column] === undefined ? "—" : String(row[column]));
+        });
+        body.appendChild(tr);
+      });
+      table.appendChild(body);
+    }
+
+    const mapping = $("ds-mapping");
+    if (mapping) {
+      clear(mapping);
+      (inspect.required_fields || []).forEach((fieldSpec) => {
+        const wrap = document.createElement("label");
+        wrap.className = "field-inline";
+        const label = document.createElement("span");
+        label.className = "field-inline-label";
+        label.textContent = fieldSpec.label || fieldSpec.key;
+        wrap.appendChild(label);
+        const options = [["", "（不导入这一列）"]]
+          .concat((inspect.columns || []).map((name) => [name, name]));
+        const select = selectBox(options, fieldSpec.mapped_to || "");
+        select.dataset.targetField = fieldSpec.key;
+        wrap.appendChild(select);
+        mapping.appendChild(wrap);
+      });
+    }
+    const note = $("ds-import-note");
+    if (note) {
+      note.textContent = inspect.mapping_complete
+        ? "字段映射已齐；确认后会把文件登记为新的数据源。"
+        : `还缺 ${inspect.missing_fields.length} 个必需字段（${inspect.missing_fields.join("、")}）`
+          + "—— 仍可登记，但缺字段的数据源不能参与分析。";
+    }
+  }
+
+  async function importDataset() {
+    const inspect = state.inspect;
+    if (!inspect) {
+      status("ds-import-state", "请先「上传并检查」一个文件。", "error");
+      return;
+    }
+    const fieldMap = {};
+    const mapping = $("ds-mapping");
+    if (mapping) {
+      mapping.querySelectorAll("select[data-target-field]").forEach((select) => {
+        if (select.value) fieldMap[select.dataset.targetField] = select.value;
+      });
+    }
+    const payload = {
+      upload_id: inspect.upload_id,
+      name: ($("ds-name") || {}).value || "",
+      sheet: ($("ds-sheet") || {}).value || "",
+      field_map: fieldMap,
+    };
+    status("ds-import-state", "正在登记数据源…", "loading");
+    try {
+      state.imported = await API.importDataset(payload);
+      renderImportResult(state.imported);
+      await loadDatasets();
+      status("ds-import-state", "已登记为数据源。", "success");
+    } catch (err) {
+      state.imported = null;
+      hide($("ds-import-result"));
+      status("ds-import-state", err.message, "error");
+    }
+  }
+
+  function renderImportResult(dataset) {
+    const box = $("ds-import-result");
+    if (!box) return;
+    clear(box);
+    show(box);
+    const title = document.createElement("div");
+    title.className = "import-title";
+    title.textContent = `已登记：${dataset.name}`;
+    box.appendChild(title);
+
+    const rows = [
+      ["行数", fmtInt(dataset.row_count)],
+      ["列数", fmtInt(dataset.column_count)],
+      ["数据范围", dataset.date_range ? `${dataset.date_range.start} ~ ${dataset.date_range.end}` : "—"],
+      ["导入时间", fmtTime(dataset.imported_at)],
+      ["字段映射", dataset.mapping_complete ? "完整" : `缺 ${(dataset.missing_fields || []).length} 个必需字段`],
+      ["状态", dataset.status_label || "—"],
+    ];
+    const table = document.createElement("table");
+    table.className = "table";
+    const body = document.createElement("tbody");
+    rows.forEach(([key, value]) => {
+      const tr = document.createElement("tr");
+      cell(tr, key);
+      cell(tr, text(value), "num");
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    const wrap = document.createElement("div");
+    wrap.className = "table-wrap";
+    wrap.appendChild(table);
+    box.appendChild(wrap);
+
+    const note = document.createElement("p");
+    note.className = "note";
+    note.textContent = dataset.analysis_note
+      || "该数据源已登记；分析能力尚未开通，系统不会用它的数据算任何数字。";
+    box.appendChild(note);
+  }
+
+  function bindDatasetImport() {
+    const inspectButton = $("btn-ds-inspect");
+    if (inspectButton) inspectButton.addEventListener("click", () => inspectDatasetFile());
+    const importButton = $("btn-ds-import");
+    if (importButton) importButton.addEventListener("click", () => importDataset());
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
   // 启动
   // ══════════════════════════════════════════════════════════════════════
   async function init() {
@@ -1862,6 +2507,8 @@
     bindDocuments();
     bindChat();
     bindReportShortcut();
+    bindTablePanels();
+    bindDatasetImport();
     renderInertControls();
     await renderMetricOptions();
     hide($("upload-result-wrap"));
@@ -1875,6 +2522,8 @@
     renderAiConclusion();
     await refreshAll();
     if (state.selectedTaskId) await selectTask(state.selectedTaskId);
+    renderDatasets();
+    ensureTableLoaded(state.route);
     // 深链提问放在最后：能力清单与页面骨架都已就绪，自动提问走的是**和手动点击
     // 完全同一条**链路（同样的 askQuestion、同样的渲染）。
     askFromHash();

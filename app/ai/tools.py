@@ -234,6 +234,41 @@ def _amount_of(rows: pd.DataFrame) -> float:
     return float(engine_metrics.line_amount(rows).sum())
 
 
+# ── 公开包装（STEP A 的表格查询层用；下划线实现仍只有一处）────────────────
+# 为什么要这几行：业务表（客户/产品/销售/原始）必须与问答工具**同一套口径**，
+# 但那些实现是下划线私有的。这里给一层有名字的公开入口，表格层不必去摸私有名，
+# 也不会有人误以为"表格另有一套算法"。行为 = 直接调用下面这些下划线函数。
+def raw_window(start: _dt.date, end: _dt.date) -> pd.DataFrame:
+    """区间内的**原始行**（只按时间筛选，不套 D16 排除规则）。"""
+    window, _valid = _valid_window(start, end)
+    return window
+
+
+def valid_rows(start: _dt.date, end: _dt.date) -> pd.DataFrame:
+    """区间内的**有效行**（D16 三条排除规则全开），带一列算好的 `_amount`。"""
+    return _valid_rows(start, end)
+
+
+def customer_table(rows: pd.DataFrame) -> pd.DataFrame:
+    """按客户号汇总（购买次数 = distinct InvoiceNo）—— 与客户分析工具同一处实现。"""
+    return _customer_table(rows)
+
+
+def product_table(rows: pd.DataFrame) -> pd.DataFrame:
+    """按 StockCode 汇总 —— 与产品排行 / 商品分析同一处实现。"""
+    return _product_table(rows)
+
+
+def customer_activity() -> dict[str, Any]:
+    """整个数据集的逐客户首购/末购（新客与沉睡客户用）—— 带进程级缓存。"""
+    return _dataset_customer_activity()
+
+
+def bucket_of(stamps: pd.Series, granularity: str) -> tuple[pd.Series, str]:
+    """时间戳 → 桶起点（**全项目唯一**的分桶规则：日=当天；周=周一起算）。"""
+    return _bucket_of(stamps, granularity)
+
+
 # ════════════════════════════════════════════════════════════════════════
 # 工具 ①：sales_summary
 # ════════════════════════════════════════════════════════════════════════
@@ -2209,8 +2244,14 @@ __all__ = [
     "WEEK_START_WEEKDAY",
     "build_attribution",
     "build_customer_scope",
+    "bucket_of",
     "currency_unit",
+    "customer_activity",
     "customer_analysis",
+    "customer_table",
+    "product_table",
+    "raw_window",
+    "valid_rows",
     "dataset_bounds",
     "dataset_profile",
     "product_analysis",

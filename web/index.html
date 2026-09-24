@@ -15,41 +15,48 @@
 
 <div class="app">
 
-  <!-- ═══ 顶栏 60px ═══════════════════════════════════════════════════ -->
+  <!-- ═══ 顶栏 60px ═══════════════════════════════════════════════════
+       只留 5 个元素：Logo / 数据源 / 提问框（吃满剩余宽度） / ☰ 菜单 / 用户区。
+       其余入口（历史、设置、导入数据、原始数据）都收进 ☰ 菜单或左侧导航 ——
+       挤成一排的结果就是按钮被压成单字（用户反馈过的问题）。
+       窄窗口下：提问框先缩、数据源文字用「…」截断（hover 看全），**任何按钮都不切字**。 -->
   <header class="topbar">
     <div class="brand">
       <div class="brand-logo">SR</div>
       <div class="brand-text">
         <div class="brand-title">销售报表 Agent</div>
-        <div class="brand-sub">企业销售分析平台 · 确定性计算</div>
+        <div class="brand-sub">企业销售分析平台</div>
       </div>
     </div>
 
-    <div class="topbar-mid">
-      <label class="search" title="过滤当前页面的列表（任务 / 执行记录 / 数据文件）">
-        <span class="search-icon">⌕</span>
-        <input id="global-search" type="search" placeholder="搜索任务 / 执行记录 / 数据文件" autocomplete="off">
-      </label>
-
-      <div class="chip" title="数据源快照：最近一次读取到的数据概况">
-        <span class="dot" id="datasource-dot"></span>
-        <span id="datasource-label">数据源：读取中…</span>
-      </div>
-
-      <div class="nl-entry">
-        <input id="nl-input" type="text" placeholder="用自然语言提问，例如「2011年11月卖了多少」" autocomplete="off">
-        <button id="nl-ask" class="btn btn-primary btn-sm">分析</button>
-        <!-- 这句是 JS 还没跑起来时的兜底文案；renderNlNote() 会用后端能力清单覆盖它。
-             两处都不写「LLM」——业务界面上只说「模型」，不说内部组件名。 -->
-        <span class="nl-note" id="nl-note">自然语言入口：可问销售汇总 / 趋势 / 产品排行 / 区间比较 / 国家分布（数字全部由程序算，文字由模型整理）</span>
-      </div>
+    <div class="chip" id="datasource-chip" title="当前数据源">
+      <span class="dot" id="datasource-dot"></span>
+      <span id="datasource-label">数据源：读取中…</span>
     </div>
 
-    <div class="topbar-right">
-      <button class="icon-btn" id="btn-notify" title="通知：暂未提供">通知</button>
-      <button class="icon-btn" id="btn-history" title="跳到数据管理 · 执行记录">历史</button>
-      <button class="icon-btn" id="btn-settings" title="跳到系统设置">设置</button>
-      <div class="avatar" id="avatar" title="当前用户">本</div>
+    <div class="nl-entry">
+      <input id="nl-input" type="text" placeholder="用自然语言提问，例如「2011年11月卖了多少」" autocomplete="off">
+      <button id="nl-ask" class="btn btn-primary btn-sm">分析</button>
+      <!-- 这句是 JS 还没跑起来时的兜底文案；renderNlNote() 会用后端能力清单覆盖它。
+           两处都不写「LLM」——业务界面上只说「模型」，不说内部组件名。 -->
+      <span class="nl-note" id="nl-note">自然语言入口：可问销售汇总 / 趋势 / 产品排行 / 区间比较 / 国家分布（数字全部由程序算，文字由模型整理）</span>
+    </div>
+
+    <div class="topbar-actions">
+      <button class="icon-btn" id="btn-menu" title="菜单" aria-haspopup="true" aria-expanded="false">☰</button>
+      <div class="menu" id="topbar-menu" hidden>
+        <button class="menu-item" id="menu-item-history">历史提问</button>
+        <button class="menu-item" id="menu-item-raw">原始数据</button>
+        <button class="menu-item" id="menu-item-import">导入数据</button>
+        <button class="menu-item" id="menu-item-report">生成销售报告</button>
+        <button class="menu-item" id="menu-item-settings">系统设置</button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" id="menu-item-notify" title="通知：暂未提供">通知（暂未提供）</button>
+      </div>
+      <div class="user-area" title="当前用户">
+        <div class="avatar" id="avatar">本</div>
+        <span class="user-name">本地用户</span>
+      </div>
     </div>
   </header>
 
@@ -63,16 +70,13 @@
       <a class="nav-item" id="nav-anomaly" href="#/anomaly"><span class="nav-ico">⚠</span>异常发现</a>
       <a class="nav-item" id="nav-weekly" href="#/weekly"><span class="nav-ico">▤</span>周报中心</a>
       <div class="nav-sep"></div>
+      <a class="nav-item" id="nav-raw" href="#/raw"><span class="nav-ico">▦</span>原始数据</a>
       <a class="nav-item" id="nav-data" href="#/data"><span class="nav-ico">⛁</span>数据管理</a>
       <a class="nav-item" id="nav-settings" href="#/settings"><span class="nav-ico">⚙</span>系统设置</a>
     </nav>
 
-    <div class="perm-card">
-      <div class="perm-title"><span class="shield">🛡</span><span id="side-perm">权限与安全：未启用</span></div>
-      <div class="perm-row" id="side-user">当前用户：本地（单用户模式）</div>
-      <div class="perm-row" id="side-role">角色：owner（尚未做鉴权）</div>
-      <div class="perm-row" id="side-version">版本：读取中…</div>
-    </div>
+    <!-- 左下角原来那三行（版本号 / 角色 / 权限与安全未启用）已撤掉：
+         它们是实现细节，不是用户要看的东西（前端展示规范）。 -->
   </aside>
 
   <!-- ═══ 中央工作区 ══════════════════════════════════════════════════ -->
@@ -268,62 +272,71 @@
       </div>
     </section>
 
-    <!-- ── 页面：销售分析 ─────────────────────────────────────────── -->
+    <!-- ── 页面：销售分析（真表格：维度 × 指标，全部由后端算）─────────── -->
     <section class="page" id="page-sales" hidden>
       <div class="card">
         <div class="card-head">
-          <h2>销售分析 · 最近一次成功执行的指标明细</h2>
-          <span class="muted-sm" id="sales-caption">数据来源：历史执行记录</span>
+          <h2>销售分析</h2>
+          <span class="muted-sm" id="sales-scope-note"></span>
         </div>
-        <div class="table-wrap">
-          <table class="table">
-            <thead><tr><th>指标</th><th class="num">数值</th><th>说明</th></tr></thead>
-            <tbody id="sales-table-body"></tbody>
-          </table>
+        <!-- 表格外壳由 app.js 按后端给的列定义生成（列名/对齐/格式只有后端一处定义） -->
+        <div id="tbl-sales"></div>
+        <div class="empty" id="tbl-sales-empty">
+          <div class="empty-ico">▦</div>
+          <div class="empty-title">还没有读到数据</div>
+          <div class="empty-hint">在「数据管理」里确认数据源状态；也可能是这个时间范围里确实没有记录。</div>
         </div>
-        <div class="empty" id="sales-empty">
-          <div class="empty-ico">◔</div>
-          <div class="empty-title">还没有成功执行记录</div>
-          <div class="empty-hint">本页只展示系统真实返回的指标；没有执行记录时不放示例数字。</div>
-        </div>
-        <p class="note">多周期对比、环比/同比、按国家归因，直接在「自然语言问答」里提问即可。</p>
       </div>
     </section>
 
-    <!-- ── 页面：客户分析 ─────────────────────────────────────────── -->
+    <!-- ── 页面：客户分析（真表格）──────────────────────────────────── -->
     <section class="page" id="page-customers" hidden>
       <div class="card">
-        <div class="card-head"><h2>客户分析</h2></div>
-        <div class="empty">
-          <div class="empty-ico">◍</div>
-          <div class="empty-title">客户分析走「自然语言问答」</div>
-          <div class="empty-hint">客户排行、购买频次、复购率、数据集内新客、沉睡客户都能直接问（例：2011年11月的复购率是多少？）。本页不单独铺一张客户明细表。</div>
+        <div class="card-head">
+          <h2>客户分析</h2>
+          <span class="muted-sm" id="cust-scope-note"></span>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-head"><h2>当前可用的数据文件</h2><span class="muted-sm">来自任务绑定</span></div>
-        <div class="table-wrap">
-          <table class="table">
-            <thead><tr><th>文件</th><th>文件编号</th><th>数据哈希</th></tr></thead>
-            <tbody id="cust-files-body"></tbody>
-          </table>
-        </div>
-        <div class="empty" id="cust-files-empty">
-          <div class="empty-ico">⛁</div>
-          <div class="empty-title">还没有任何任务绑定的数据文件</div>
-          <div class="empty-hint">去「数据管理」上传真实 Excel 并建一个任务，这里就能看到它绑定的文件与哈希。</div>
+        <div id="tbl-customers"></div>
+        <div class="empty" id="tbl-customers-empty">
+          <div class="empty-ico">▦</div>
+          <div class="empty-title">还没有读到数据</div>
+          <div class="empty-hint">在「数据管理」里确认数据源状态；也可能是这个时间范围里确实没有记录。</div>
         </div>
       </div>
     </section>
 
-    <!-- ── 页面：产品分析 ─────────────────────────────────────────── -->
+    <!-- ── 页面：产品分析（真表格）──────────────────────────────────── -->
     <section class="page" id="page-products" hidden>
       <div class="card">
-        <div class="card-head"><h2>产品分析</h2></div>
-        <div class="empty">
-          <div class="empty-ico">◈</div>
-          <div class="empty-title">商品分析走「自然语言问答」</div>
-          <div class="empty-hint">商品排行、指定商品趋势、退货与取消分析都能直接问（例：85123A 和 10002 在2011年11月的销售趋势）。本页不单独铺一张商品明细表。</div>
+        <div class="card-head">
+          <h2>产品分析</h2>
+          <span class="muted-sm" id="prod-scope-note"></span>
+        </div>
+        <div id="tbl-products"></div>
+        <div class="empty" id="tbl-products-empty">
+          <div class="empty-ico">▦</div>
+          <div class="empty-title">还没有读到数据</div>
+          <div class="empty-hint">在「数据管理」里确认数据源状态；也可能是这个时间范围里确实没有记录。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 页面：原始数据（第二层：原始行浏览器，默认只给一页）────────── -->
+    <section class="page" id="page-raw" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>原始数据</h2>
+          <span class="muted-sm" id="raw-scope-note"></span>
+        </div>
+        <p class="note">
+          这里是数据源里的原样行：含取消单、负数量等未套用分析口径的记录。
+          要按业务口径看数字，请用「销售分析 / 客户分析 / 产品分析」三张表。
+        </p>
+        <div id="tbl-raw"></div>
+        <div class="empty" id="tbl-raw-empty">
+          <div class="empty-ico">▦</div>
+          <div class="empty-title">还没有读到数据</div>
+          <div class="empty-hint">在「数据管理」里确认数据源状态；也可能是这个时间范围里确实没有记录。</div>
         </div>
       </div>
     </section>
@@ -378,10 +391,73 @@
       </div>
     </section>
 
-    <!-- ── 页面：数据管理（旧链路全保留）────────────────────────────── -->
+    <!-- ── 页面：数据管理（数据源 + 导入 + 文档；旧的报表链路收在最后）──── -->
     <section class="page" id="page-data" hidden>
       <div class="card">
-        <div class="card-head"><h2>① 上传数据</h2></div>
+        <div class="card-head">
+          <h2>数据源</h2>
+          <span class="muted-sm">业务表格里的数字都来自这里的某一个数据源</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr>
+              <th>数据源</th><th class="num">行数</th><th class="num">列数</th>
+              <th>数据范围</th><th>更新时间</th><th>状态</th>
+            </tr></thead>
+            <tbody id="datasets-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="datasets-empty">
+          <div class="empty-ico">⛁</div>
+          <div class="empty-title">还没有读到数据源</div>
+          <div class="empty-hint">系统内置的销售数据源会显示在这里；导入的表格也会登记成新的数据源。</div>
+        </div>
+        <p class="note" id="datasets-note"></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>导入数据</h2>
+          <span class="muted-sm">Excel / CSV → 登记为数据源</span>
+        </div>
+        <div class="row">
+          <input id="ds-file-input" type="file" accept=".xlsx,.xlsm,.csv">
+          <button id="btn-ds-inspect" class="btn btn-primary">上传并检查</button>
+          <span class="muted-sm" id="ds-import-state">选择 .xlsx / .xlsm / .csv 后点「上传并检查」，先看清内容再决定导入。</span>
+        </div>
+
+        <!-- 第 2 步：工作表 / 编码 / 前 N 行预览 / 字段映射（**全部来自后端真实读取**） -->
+        <div id="ds-inspect" hidden>
+          <div class="inspect-meta" id="ds-inspect-meta"></div>
+          <div class="grid2">
+            <label class="field" id="ds-sheet-field">工作表<select id="ds-sheet"></select></label>
+            <label class="field">数据源名称<input id="ds-name" type="text" placeholder="例如：2026 年销售数据"></label>
+          </div>
+          <div class="field">
+            <span class="field-label">前 <b id="ds-preview-count">0</b> 行预览（只读这么多，不把整表塞进浏览器）</span>
+            <div class="table-wrap">
+              <table class="table" id="ds-preview-table"></table>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label">字段映射（左边是分析要用的字段，右边选文件里的列）</span>
+            <div class="map-grid" id="ds-mapping"></div>
+          </div>
+          <div class="row">
+            <button id="btn-ds-import" class="btn btn-primary">确认导入</button>
+            <span class="muted-sm" id="ds-import-note"></span>
+          </div>
+        </div>
+
+        <div id="ds-import-result" hidden></div>
+      </div>
+
+      <!-- 旧链路：按模板出 xlsx 的报表流程。功能一个没少，但收在一处 ——
+           它是"高级用法"，不该和客户/产品/销售这些日常表格混在一起。 -->
+      <details class="legacy" open>
+        <summary>高级：按模板出报表（固化报表任务 / 执行记录）</summary>
+        <div class="card">
+          <div class="card-head"><h2>① 上传数据</h2></div>
         <div class="row">
           <input id="file-input" type="file" accept=".xlsx,.xls">
           <button id="btn-upload" class="btn btn-primary">上传</button>
@@ -395,25 +471,25 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>数据文件</h2><span class="muted-sm">来自任务绑定</span></div>
+        <div class="card-head"><h2>已上传的文件</h2><span class="muted-sm">可用作报表任务的数据来源</span></div>
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>文件</th><th>文件编号</th><th>数据哈希</th><th>用于任务</th></tr></thead>
+            <thead><tr><th>文件</th><th class="num">行数</th><th class="num">列数</th><th>上传时间</th></tr></thead>
             <tbody id="files-table-body"></tbody>
           </table>
         </div>
         <div class="empty" id="files-empty">
           <div class="empty-ico">⛁</div>
-          <div class="empty-title">还没有数据文件</div>
-          <div class="empty-hint">上传成功后建一个任务，文件与哈希会显示在这里。</div>
+          <div class="empty-title">还没有上传过文件</div>
+          <div class="empty-hint">在上面「上传数据」里传一个 Excel，它会出现在这里。</div>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>② 建任务（固化 Report Spec）</h2></div>
+        <div class="card-head"><h2>② 建任务（把报表规格冻结下来）</h2></div>
         <div class="grid2">
           <label class="field">任务名称<input id="task-name" type="text" placeholder="例如：上周销售汇总"></label>
-          <label class="field">文件编号（来自上传结果）<input id="task-file-id" type="text" placeholder="上传后自动填入"></label>
+          <label class="field">数据文件<select id="task-file-id"><option value="">（还没有上传文件）</option></select></label>
           <label class="field">开始日期<input id="task-start" type="date"></label>
           <label class="field">结束日期<input id="task-end" type="date"></label>
         </div>
@@ -429,7 +505,7 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>③ Report Spec（冻结在任务里）</h2></div>
+        <div class="card-head"><h2>③ 报表规格（建任务时冻结下来，之后不会变）</h2></div>
         <div class="row">
           <label class="field">选择任务
             <select id="task-select"><option value="">（还没有任务）</option></select>
@@ -443,7 +519,7 @@
         <div class="empty" id="spec-empty">
           <div class="empty-ico">▤</div>
           <div class="empty-title">还没有选中任何任务</div>
-          <div class="empty-hint">先上传数据并建一个任务；选中后这里显示的就是任务里冻结的 Spec 原文（刷新后重新读取）。</div>
+          <div class="empty-hint">先上传数据并建一个任务；选中后这里显示的就是这条任务冻结下来的取数规格（刷新后重新读取）。</div>
         </div>
       </div>
 
@@ -468,7 +544,7 @@
       </div>
 
       <div class="card">
-        <div class="card-head"><h2>⑤ 执行记录（审计凭据）</h2></div>
+        <div class="card-head"><h2>⑤ 执行记录</h2></div>
         <div class="row"><button id="btn-refresh-exec" class="btn">刷新</button></div>
         <div class="table-wrap">
           <table class="table">
@@ -479,9 +555,11 @@
         <div class="empty" id="exec-empty">
           <div class="empty-ico">▤</div>
           <div class="empty-title">还没有执行记录</div>
-          <div class="empty-hint">执行记录是系统落盘的审计凭据；成功与失败都会记，刷新页面也不会丢。</div>
+          <div class="empty-hint">每次执行都会留下记录（成功与失败都记），刷新页面也不会丢。</div>
         </div>
       </div>
+
+      </details>
 
       <!--
         ── 文档资料（TASK-003）────────────────────────────────────────────
@@ -503,7 +581,7 @@
 
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>文档</th><th>文档编号</th><th class="num">字符数</th><th class="num">块</th><th>数据哈希</th><th>上传时间</th><th>操作</th></tr></thead>
+            <thead><tr><th>文档</th><th class="num">字符数</th><th class="num">段落块</th><th>上传时间</th><th>操作</th></tr></thead>
             <tbody id="docs-table-body"></tbody>
           </table>
         </div>
@@ -553,10 +631,10 @@
       </div>
       <div class="card">
         <div class="card-head"><h2>企业化能力（尚未启用）</h2></div>
-        <div class="switch-row"><span>用户与权限（RBAC）</span><button class="switch" id="sec-rbac" disabled>未启用</button></div>
-        <div class="switch-row"><span>访问控制白名单 / 黑名单</span><button class="switch" id="sec-acl" disabled>未启用</button></div>
-        <div class="switch-row"><span>熔断机制</span><button class="switch" id="sec-circuit" disabled>未启用</button></div>
-        <p class="note">这里刻意不摆任何假的状态标签：这三项能力尚未实现，开关就是禁用的，点了也不会变。</p>
+        <div class="switch-row"><span>用户与权限</span><button class="switch" id="sec-rbac" disabled>未启用</button></div>
+        <div class="switch-row"><span>访问控制</span><button class="switch" id="sec-acl" disabled>未启用</button></div>
+        <div class="switch-row"><span>服务熔断</span><button class="switch" id="sec-circuit" disabled>未启用</button></div>
+        <p class="note">这三项能力尚未实现，开关保持禁用；界面不会显示任何不实的状态。</p>
       </div>
     </section>
 
@@ -581,36 +659,32 @@
 
     <div class="card rp-card">
       <div class="tabs" id="rp-tabs">
-        <button class="tab" id="rp-tab-perm" data-pane="rp-pane-perm">权限</button>
+        <button class="tab" id="rp-tab-perm" data-pane="rp-pane-perm">用户</button>
         <button class="tab" id="rp-tab-security" data-pane="rp-pane-security">安全</button>
         <button class="tab" id="rp-tab-circuit" data-pane="rp-pane-circuit">熔断</button>
         <button class="tab" id="rp-tab-status" data-pane="rp-pane-status">系统状态</button>
       </div>
 
       <div class="pane" id="rp-pane-perm">
-        <div class="kv"><span>当前用户</span><b>本地（单用户模式）</b></div>
-        <div class="kv"><span>角色</span><b>owner</b></div>
-        <div class="kv"><span>鉴权</span><b class="warn">未启用</b></div>
-        <p class="note">单用户单进程部署，全部功能当前不做鉴权；鉴权落地前，这里不摆任何"已授权"状态标签。</p>
+        <div class="kv"><span>当前用户</span><b>本地用户</b></div>
+        <div class="kv"><span>使用方式</span><b>单人使用</b></div>
+        <p class="note">当前版本不校验登录身份；用户与权限会在后续版本提供。</p>
       </div>
 
       <div class="pane" id="rp-pane-security" hidden>
-        <div class="kv"><span>白名单</span><b class="warn">未启用</b></div>
-        <div class="kv"><span>黑名单</span><b class="warn">未启用</b></div>
-        <div class="kv"><span>数据快照校验</span><b class="ok" id="rp-snapshot">读取中…</b></div>
-        <p class="note">数据快照校验已实现：执行前会核对数据文件的哈希，确认没被改过。白 / 黑名单尚未实现。</p>
+        <div class="kv"><span>访问控制</span><b class="warn">未启用</b></div>
+        <div class="kv"><span>数据源校验</span><b class="ok" id="rp-snapshot">读取中…</b></div>
+        <p class="note">每次分析前都会核对数据源与登记时一致（没被改过）；访问控制尚未提供。</p>
       </div>
 
       <div class="pane" id="rp-pane-circuit" hidden>
-        <div class="kv"><span>熔断机制</span><b class="warn">未启用</b></div>
-        <p class="note">状态以文件形式保存，当前需单进程运行。</p>
+        <div class="kv"><span>服务熔断</span><b class="warn">未启用</b></div>
       </div>
 
       <div class="pane" id="rp-pane-status" hidden>
         <div class="kv"><span>服务</span><b id="rp-service">读取中…</b></div>
-        <div class="kv"><span>API 版本</span><b id="rp-api-version">读取中…</b></div>
-        <div class="kv"><span>状态文件</span><b id="rp-state-readable">读取中…</b></div>
-        <div class="kv"><span>上传 / 执行 / 任务</span><b id="rp-counts">读取中…</b></div>
+        <div class="kv"><span>数据状态</span><b id="rp-state-readable">读取中…</b></div>
+        <div class="kv"><span>数据源 / 任务 / 执行</span><b id="rp-counts">读取中…</b></div>
       </div>
     </div>
   </aside>

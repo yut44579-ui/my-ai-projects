@@ -192,26 +192,6 @@ button { font-family: inherit; }
 .brand-title { font-size: 14px; font-weight: 600; }
 .brand-sub { font-size: 11px; color: var(--text-2); }
 
-.topbar-mid { display: flex; align-items: center; gap: 12px; flex: 1 1 auto; min-width: 0; }
-
-.search {
-  display: flex; align-items: center; gap: 6px;
-  background: var(--bg-inset);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctrl);
-  padding: 0 var(--td-compact-padding); height: var(--td-medium-height);
-  flex: 0 1 34%; min-width: 160px;
-}
-.search:hover { border-color: var(--border-strong); }
-.search:focus-within { border-color: var(--td-brand-color); background: var(--td-brand-color-focus); }
-.search-icon { color: var(--text-3); font-size: 14px; }
-.search input {
-  background: none; border: 0; outline: none; color: var(--text-1);
-  font-size: 13px; width: 100%; height: 100%;
-}
-.search input::placeholder { color: var(--text-3); }
-.search input:disabled { color: var(--text-4); cursor: not-allowed; }
-
 .chip {
   display: flex; align-items: center; gap: 7px;
   background: var(--bg-inset); border: 1px solid var(--border);
@@ -234,7 +214,6 @@ button { font-family: inherit; }
 .nl-entry input:disabled { color: var(--text-4); cursor: not-allowed; }
 .nl-note { font-size: 11px; color: var(--text-2); white-space: nowrap; }
 
-.topbar-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .icon-btn {
   background: var(--bg-inset); border: 1px solid var(--border); color: var(--text-2);
   border-radius: var(--radius-ctrl); height: var(--td-medium-height);
@@ -582,7 +561,6 @@ button { font-family: inherit; }
 @media (max-width: 860px) {
   .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid2 { grid-template-columns: minmax(0, 1fr); }
-  .topbar-mid .search { flex: 1 1 auto; }
   .nl-entry { display: none; }
 }
 
@@ -692,4 +670,107 @@ button { font-family: inherit; }
 @media (max-width: 860px) {
   .chain-body { padding-left: 10px; }
   .chat-history-row { align-items: flex-start; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   STEP A：顶栏重排 / 业务表格 / 分页 / 导入向导
+   —— 顶栏只留 5 个元素，其余收进 ☰ 菜单；窄窗口下提问框先缩、
+      数据源文字用「…」截断，按钮**永不换行、永不切字**。
+   ══════════════════════════════════════════════════════════════════════ */
+.topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; position: relative; }
+.user-area {
+  display: flex; align-items: center; gap: 8px;
+  padding-left: 8px; border-left: 1px solid var(--border);
+  flex: 0 0 auto; max-width: 160px;
+}
+.user-name {
+  font-size: 12px; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.menu {
+  position: absolute; top: calc(var(--td-medium-height) + 10px); right: 0;
+  min-width: 176px; padding: 6px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--td-radius-medium); z-index: 40;
+}
+.menu-item {
+  display: block; width: 100%; text-align: left;
+  background: none; border: 0; border-radius: var(--radius-ctrl);
+  color: var(--text-1); font-size: 13px; padding: 8px 10px; cursor: pointer;
+  white-space: nowrap;
+}
+.menu-item:hover:not(:disabled) { background: var(--bg-inset); color: var(--text-1); }
+.menu-item:disabled { color: var(--text-4); cursor: not-allowed; }
+.menu-sep { height: 1px; background: var(--border); margin: 6px 4px; }
+
+/* 顶栏的三个弹性元素：数据源可截断、提问框吃满剩余宽度 */
+.topbar .chip { flex: 0 1 auto; min-width: 0; max-width: 260px; overflow: hidden; }
+.topbar .chip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar .nl-entry { flex: 1 1 auto; min-width: 0; }
+.topbar .nl-entry input { flex: 1 1 auto; min-width: 120px; width: auto; }
+.topbar .nl-note { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; max-width: 380px; }
+.topbar .btn, .topbar .icon-btn { flex: 0 0 auto; white-space: nowrap; }
+
+/* 表格工具条：一行放不下就换行（换行也不会切字） */
+.toolbar {
+  display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border); margin-bottom: 12px;
+}
+.toolbar-spacer { flex: 1 1 auto; }
+.field-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.field-inline-label { white-space: nowrap; }
+.field-inline input, .field-inline select {
+  height: var(--td-medium-height); padding: 0 8px; font-size: 12px;
+  background: var(--bg-inset); color: var(--text-1);
+  border: 1px solid var(--border); border-radius: var(--radius-ctrl); outline: none;
+}
+.field-inline input:focus, .field-inline select:focus {
+  border-color: var(--td-brand-color); background: var(--td-brand-color-focus);
+}
+.field-inline input[type="date"] { width: 138px; }
+.field-inline input[type="search"] { width: 180px; }
+.range { display: inline-flex; align-items: center; gap: 6px; }
+
+.pager {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
+}
+.pager-summary { margin-left: auto; }
+
+/* 可排序表头：点一下是**向后端要新排序**（不是本地排序） */
+.table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.table th.sortable:hover { color: var(--text-1); }
+.table th.sorted-asc::after { content: " ▲"; font-size: 9px; }
+.table th.sorted-desc::after { content: " ▼"; font-size: 9px; }
+.table td, .table th { white-space: nowrap; }
+.table-wrap { border: 1px solid var(--border); border-radius: var(--td-radius-medium); }
+
+/* 旧链路（按模板出报表）收在一处 */
+.legacy { margin-bottom: var(--gap); }
+.legacy > summary {
+  cursor: pointer; font-size: 13px; color: var(--text-2);
+  padding: 10px 12px; background: var(--bg-section);
+  border: 1px solid var(--border); border-radius: var(--td-radius-medium);
+  margin-bottom: var(--gap);
+}
+.legacy > summary:hover { color: var(--text-1); }
+
+/* 导入向导 */
+.inspect-meta {
+  font-size: 12px; color: var(--text-2); margin: 12px 0;
+  padding: 8px 10px; background: var(--bg-inset);
+  border: 1px solid var(--border); border-radius: var(--radius-ctrl);
+}
+.map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.map-grid select { width: 100%; }
+.import-title { font-size: 13px; font-weight: 600; margin: 12px 0 8px; }
+#import-result, #ds-import-result { margin-top: 8px; }
+
+@media (max-width: 1500px) {
+  .topbar .nl-note { display: none; }        /* 先让说明文字让位，别挤按钮 */
+}
+@media (max-width: 1100px) {
+  .topbar .chip span:last-child { display: none; }   /* 再窄就只留状态点（hover 仍有完整信息） */
+  .brand-sub { display: none; }
+  .user-name { display: none; }
 }

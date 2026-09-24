@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>销售报表 Agent · 最终版原型（登录 / 状态 / 导入导出）</title>
+<style>
+  :root{
+    --brand:#4582e6; --brand-hover:#2667d4; --brand-active:#699ef5; --brand-light:#1b2f51;
+    --brand-6:#054bbe;
+    --success:#059465; --error:#c64751; --warning:#cf6e2d;
+    --g14:#181818; --g13:#242424; --g12:#2c2c2c; --g11:#393939; --g10:#4b4b4b;
+    --g9:#5e5e5e; --g7:#8b8b8b; --g5:#c6c6c6;
+    --t1:rgba(255,255,255,.9); --t2:rgba(255,255,255,.55); --t3:rgba(255,255,255,.35);
+    --r3:3px; --r6:6px; --r12:12px; --r999:999px;
+    --glass:rgba(255,255,255,.045);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--g14);color:var(--t1);font:13px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding:24px}
+  h1{font-size:18px;margin-bottom:6px}
+  .sub{color:var(--t2);font-size:12px;margin-bottom:22px}
+  .panel{background:var(--g13);border:1px solid var(--g11);border-radius:var(--r6);padding:16px;margin-bottom:22px}
+  .panel h2{font-size:14px;margin-bottom:4px}
+  .panel .note{color:var(--t3);font-size:11px;margin-bottom:14px}
+  .tag{display:inline-block;border-radius:var(--r3);padding:1px 7px;font-size:11px;margin-left:6px}
+  .tag.good{background:rgba(5,148,101,.15);color:#5d9;border:1px solid rgba(5,148,101,.4)}
+  .tag.warn{background:rgba(207,110,45,.15);color:#f9a;border:1px solid rgba(207,110,45,.4)}
+
+  /* ═══════════ 登录页（最终版）═══════════ */
+  .login-shell{position:relative;border-radius:var(--r12);overflow:hidden;border:1px solid var(--g11);
+               background:radial-gradient(1100px 520px at -10% -20%,#173463 0%,transparent 60%),
+                          radial-gradient(900px 460px at 110% 120%,#0d429a 0%,transparent 55%),
+                          var(--g13);
+               display:grid;grid-template-columns:1.05fr .95fr;min-height:520px}
+  .glow{position:absolute;width:340px;height:340px;border-radius:50%;filter:blur(90px);opacity:.5;pointer-events:none}
+  .glow.a{background:#054bbe;left:-90px;top:-90px}
+  .glow.b{background:#0052d9;right:-80px;bottom:-110px}
+  .aside{position:relative;padding:38px 40px;display:flex;flex-direction:column;justify-content:space-between}
+  .brandline{display:flex;align-items:center;gap:10px}
+  .logo{width:36px;height:36px;border-radius:var(--r6);background:linear-gradient(140deg,var(--brand-active),var(--brand-6));
+        display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;
+        box-shadow:0 4px 14px rgba(69,130,230,.45)}
+  .brandline b{font-size:15px} .brandline span{display:block;font-size:11px;color:var(--t3)}
+  .hero{margin:auto 0}
+  .hero h2{font-size:26px;line-height:1.5;font-weight:600;letter-spacing:.3px}
+  .hero h2 em{font-style:normal;background:linear-gradient(92deg,#96bbf8,#4582e6);
+              -webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p{color:var(--t2);font-size:12.5px;margin-top:12px;line-height:1.9;max-width:330px}
+  .feats{display:flex;flex-wrap:wrap;gap:7px;margin-top:20px}
+  .feats span{border:1px solid var(--g11);background:var(--glass);border-radius:var(--r999);
+              padding:3px 11px;font-size:11px;color:var(--t2);backdrop-filter:blur(6px)}
+  .proof{display:flex;gap:26px;margin-top:26px}
+  .proof div b{display:block;font-size:17px;color:#fff;font-variant-numeric:tabular-nums}
+  .proof div span{font-size:11px;color:var(--t3)}
+  .aside-foot{font-size:11px;color:var(--t3)}
+
+  .formside{position:relative;padding:36px 42px;border-left:1px solid var(--g11);
+            background:rgba(24,24,24,.45);backdrop-filter:blur(14px);display:flex;flex-direction:column;justify-content:center}
+  .card{background:rgba(44,44,44,.55);border:1px solid var(--g11);border-radius:var(--r12);padding:26px 26px 22px;
+        backdrop-filter:blur(18px);box-shadow:0 18px 48px rgba(0,0,0,.45)}
+  .card h3{font-size:17px;font-weight:600}
+  .card .hello{font-size:12px;color:var(--t3);margin-top:3px}
+  .tabs{display:flex;gap:4px;background:var(--g14);border:1px solid var(--g11);border-radius:var(--r6);
+        padding:3px;margin:18px 0 20px}
+  .tabs button{flex:1;background:transparent;border:0;color:var(--t2);font-size:12.5px;padding:7px 0;
+               border-radius:var(--r3);cursor:pointer;font-family:inherit}
+  .tabs button.on{background:var(--brand);color:#fff}
+  .tabs button:not(.on):hover{background:var(--glass);color:var(--t1)}
+  .pane{display:none} .pane.on{display:block}
+  .fld{margin-bottom:15px}
+  .fld label{display:block;font-size:11.5px;color:var(--t2);margin-bottom:6px}
+  .inp{display:flex;align-items:center;gap:9px;background:var(--g14);border:1px solid var(--g11);
+       border-radius:var(--r3);padding:0 11px;height:42px;transition:.15s}
+  .inp:focus-within{border-color:var(--brand);box-shadow:0 0 0 3px rgba(69,130,230,.16)}
+  .inp.err{border-color:var(--error);box-shadow:0 0 0 3px rgba(198,71,81,.14)}
+  .inp .ic{color:var(--t3);font-size:12px;width:14px;text-align:center}
+  .inp input{flex:1;background:transparent;border:0;color:var(--t1);font-size:13px;height:100%;outline:0;font-family:inherit}
+  .inp input::placeholder{color:var(--t3)}
+  .inp .act{color:var(--t3);font-size:11px;cursor:pointer;user-select:none}
+  .inp .act:hover{color:var(--brand-active)}
+  .hint{font-size:11px;color:var(--error);margin-top:5px;display:none}
+  .hint.on{display:block}
+  .row{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--t2);margin:2px 0 20px}
+  .chk{display:flex;align-items:center;gap:7px;cursor:pointer}
+  .box{width:14px;height:14px;border:1px solid var(--g10);border-radius:3px;display:inline-block;position:relative}
+  .box.on{background:var(--brand);border-color:var(--brand)}
+  .box.on::after{content:"✓";position:absolute;left:2px;top:-4px;font-size:11px;color:#fff}
+  .link{color:var(--brand-active);cursor:pointer} .link:hover{text-decoration:underline}
+  .main{width:100%;height:42px;background:var(--brand);border:0;border-radius:var(--r3);color:#fff;font-size:14px;
+        cursor:pointer;font-family:inherit;transition:.15s;display:flex;align-items:center;justify-content:center;gap:8px}
+  .main:hover{background:var(--brand-hover);box-shadow:0 6px 18px rgba(69,130,230,.35)}
+  .main:disabled{background:var(--g10);cursor:not-allowed;box-shadow:none}
+  .spin{width:13px;height:13px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;
+        animation:sp .8s linear infinite;display:none}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .main.loading .spin{display:block}
+  .foot{text-align:center;font-size:11.5px;color:var(--t3);margin-top:16px}
+  .foot a{color:var(--brand-active);text-decoration:none;margin:0 5px;cursor:pointer}
+  .banner{display:none;background:rgba(198,71,81,.12);border:1px solid rgba(198,71,81,.4);color:#f0a0a4;
+          border-radius:var(--r3);padding:9px 12px;font-size:12px;margin-bottom:16px}
+  .banner.on{display:block}
+  .banner.ok{background:rgba(5,148,101,.12);border-color:rgba(5,148,101,.4);color:#7dd3ae}
+  .guestbox{background:var(--g14);border:1px solid var(--g11);border-radius:var(--r6);padding:16px;text-align:center}
+  .guestbox .av{width:52px;height:52px;border-radius:50%;margin:0 auto 12px;display:flex;align-items:center;
+                justify-content:center;font-size:20px;background:var(--brand-light);border:2px solid var(--brand)}
+  .guestbox .nm{font-size:16px;font-weight:600;letter-spacing:.5px}
+  .guestbox .tip{font-size:11.5px;color:var(--t3);margin-top:7px;line-height:1.8}
+  .qr{display:flex;gap:20px;align-items:center}
+  .qrimg{width:132px;height:132px;background:#fff;border-radius:var(--r6);display:flex;align-items:center;
+         justify-content:center;color:#333;font-size:11px;text-align:center;padding:8px;line-height:1.5}
+  .qr p{font-size:12px;color:var(--t2);line-height:1.9}
+
+  /* ═══════════ 顶栏 + 状态 ═══════════ */
+  .topbar{background:var(--g12);border:1px solid var(--g11);border-radius:var(--r3);padding:0 12px;
+          display:flex;gap:13px;align-items:center;height:54px}
+  .topbar .logo{width:28px;height:28px;border-radius:var(--r3);font-size:11px}
+  .bt b{display:block;font-size:13px} .bt span{display:block;font-size:10.5px;color:var(--t3)}
+  .ds{display:flex;align-items:center;gap:6px;color:var(--t2);font-size:11.5px;border:1px solid var(--g11);
+      border-radius:var(--r999);padding:3px 10px;flex:0 0 auto}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--success)}
+  .askwrap{flex:1;display:flex;gap:8px;min-width:180px}
+  .askwrap input{flex:1;background:var(--g14);border:1px solid var(--g11);border-radius:var(--r3);color:var(--t1);
+                 padding:8px 11px;font-size:13px;font-family:inherit;min-width:0}
+  .askwrap input:focus{outline:0;border-color:var(--brand);box-shadow:0 0 0 3px rgba(69,130,230,.16)}
+  .btn{background:var(--brand);color:#fff;border:0;border-radius:var(--r3);padding:8px 15px;font-size:13px;cursor:pointer;font-family:inherit}
+  .ghost{background:transparent;color:var(--t1);border:1px solid var(--g10);border-radius:var(--r3);
+         padding:7px 10px;font-size:12px;cursor:pointer;font-family:inherit}
+  .ghost:hover{border-color:var(--brand);color:var(--brand-active)}
+  .userbox{display:flex;align-items:center;gap:9px;border:1px solid var(--g11);border-radius:var(--r999);
+           padding:3px 11px 3px 3px;flex:0 0 auto}
+  .av{width:28px;height:28px;border-radius:50%;background:var(--brand-light);border:1px solid var(--brand);
+      display:flex;align-items:center;justify-content:center;font-size:11.5px;position:relative;flex:0 0 28px}
+  .av .st{position:absolute;right:-2px;bottom:-2px;width:11px;height:11px;border-radius:50%;border:2px solid var(--g12)}
+  .st-online{background:#22C55E} .st-busy{background:#EF4444} .st-away{background:#F59E0B} .st-offline{background:#777}
+  .userbox .nm{font-size:12px;line-height:1.3}
+  .userbox .nm small{display:block;font-size:10px;color:var(--t3)}
+  .states{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+  .statecard{background:var(--g12);border:1px solid var(--g11);border-radius:var(--r6);padding:13px;text-align:center}
+  .statecard .big{width:38px;height:38px;border-radius:50%;margin:0 auto 9px;display:flex;align-items:center;
+                  justify-content:center;font-size:15px;color:#fff;position:relative}
+  .statecard .t{font-size:12.5px} .statecard .d{font-size:10.5px;color:var(--t3);margin-top:3px}
+  .flowtable{width:100%;border-collapse:collapse;font-size:12px;margin-top:14px}
+  .flowtable th,.flowtable td{padding:6px 9px;text-align:left;border-bottom:1px solid var(--g11)}
+  .flowtable th{color:var(--t2);font-weight:500;background:var(--g12)}
+
+  /* ═══════════ 导入导出 ═══════════ */
+  table.t{width:100%;border-collapse:collapse;font-size:12px}
+  table.t th,table.t td{padding:6px 9px;text-align:left;border-bottom:1px solid var(--g11);white-space:nowrap}
+  table.t th{color:var(--t2);font-weight:500;background:var(--g12);position:sticky;top:0}
+  table.t td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .tblwrap{border:1px solid var(--g11);border-radius:var(--r3);overflow:auto;max-height:220px;margin-top:12px}
+  .steps{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+  .step{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--t3)}
+  .step .n{width:20px;height:20px;border-radius:50%;border:1px solid var(--g10);display:flex;align-items:center;
+           justify-content:center;font-size:11px}
+  .step.on{color:var(--t1)} .step.on .n{background:var(--brand);border-color:var(--brand);color:#fff}
+  .step.done .n{background:var(--success);border-color:var(--success);color:#fff}
+  .step .bar{width:34px;height:1px;background:var(--g10)}
+  .drop{border:1px dashed var(--g10);border-radius:var(--r6);padding:24px;text-align:center;color:var(--t2);
+        background:var(--glass)}
+  .drop b{color:var(--t1)} .drop .fmt{font-size:11px;color:var(--t3);margin-top:6px}
+  .map{display:grid;grid-template-columns:1fr 32px 1fr;gap:8px;align-items:center;font-size:12px;margin-top:10px}
+  .map .sel{background:var(--g14);border:1px solid var(--g11);border-radius:var(--r3);padding:6px 9px}
+  .map .ok{color:var(--success);text-align:center;font-size:11px}
+  .pill{display:inline-block;background:var(--brand-light);color:var(--brand-active);border-radius:var(--r999);
+        padding:1px 9px;font-size:11px;margin-right:6px;margin-top:4px}
+  .flexrow{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+</style>
+</head>
+<body>
+
+<h1>销售报表 Agent · 最终版原型</h1>
+<div class="sub">登录（可交互）· 在线状态 · 表格导入/导出 · 全部 TDesign 官方 token ｜ 点标签 / 输密码 / 点登录都能试</div>
+
+<div style="background:rgba(207,110,45,.10);border:1px solid rgba(207,110,45,.42);border-left:3px solid var(--warning);
+            border-radius:var(--r6);padding:12px 15px;margin-bottom:22px;font-size:12.5px;line-height:1.9;color:#f0c9a0">
+  <b>⚠️ 这是「原型说明页」，不是最终前端界面。</b><br>
+  页面里那些灰色小字（「参考了 Dribbble…」「属 TASK-011」「与 loading 三态联动」「同一套确定性计算」等）
+  <b>只是我写给你看的说明</b>，帮你判断方案。<br>
+  <b>最终前端只保留业务内容</b>：表格、数字、业务语言的状态与提示 —— 代码块、接口路径、TASK 编号、
+  哈希、版本号、实现过程一律不出现（已写入 <code style="color:#f0c9a0">docs/前端展示规范.md</code>）。
+</div>
+
+<!-- ═══ ① 登录页 ═══ -->
+<div class="panel">
+  <h2>① 登录页（最终版）<span class="tag good">可交互：切标签 / 显示密码 / 试登录</span><span class="tag warn">游客模式随机分配「游客XXXXX」</span></h2>
+  <div class="note">
+    参考了 Dribbble「Modern Dark Login Screen」与 SaaS 最佳实践：<b>左右分栏 + 玻璃拟态 + 「欢迎回来」微文案 + 多种登录方式 + 清晰找回路径</b>。
+    左侧不放装饰图，放<b>产品能干什么</b>与<b>可核对的数字</b>——让你登录前就知道它诚实。
+  </div>
+
+  <div class="login-shell">
+    <div class="glow a"></div><div class="glow b"></div>
+
+    <!-- 左：品牌与价值 -->
+    <div class="aside">
+      <div class="brandline">
+        <div class="logo">SR</div>
+        <div><b>销售报表 Agent</b><span>企业销售分析平台 · 确定性计算</span></div>
+      </div>
+      <div class="hero">
+        <h2>用大白话问，<br>拿<em>可核对的数字</em>答。</h2>
+        <p>每个金额都由程序确定性地算出来，不是模型编的。<br>谁算的、怎么算的、覆盖多少数据，都能追溯。</p>
+        <div class="feats">
+          <span>自然语言问答</span><span>销售 / 客户 / 产品</span><span>一键周报</span>
+          <span>Excel · CSV 导入导出</span><span>Word / PDF / PPT 接入</span>
+        </div>
+        <div class="proof">
+          <div><b>541,909</b><span>行真实数据</span></div>
+          <div><b>1,664</b><span>有成交客户</span></div>
+          <div><b>D16</b><span>口径可追溯</span></div>
+        </div>
+      </div>
+      <div class="aside-foot">© 2026 销售报表 Agent · 本地部署 · v0.3</div>
+    </div>
+
+    <!-- 右：表单 -->
+    <div class="formside">
+      <div class="card">
+        <div class="banner" id="banner"></div>
+
+        <h3 id="cardTitle">欢迎回来 👋</h3>
+        <div class="hello" id="cardHello">登录后即可开始分析</div>
+
+        <div class="tabs">
+          <button class="on" data-pane="pwd">账号登录</button>
+          <button data-pane="qr">扫码登录</button>
+          <button data-pane="guest">游客登录</button>
+        </div>
+
+        <!-- 账号密码 -->
+        <div class="pane on" id="pane-pwd">
+          <div class="fld">
+            <label>姓名</label>
+            <div class="inp" id="w1">
+              <span class="ic">👤</span>
+              <input id="name" value="唐宇" placeholder="登录后显示这个名字" autocomplete="off">
+            </div>
+            <div class="hint" id="h1">请输入姓名（2~20 个字符）</div>
+          </div>
+          <div class="fld">
+            <label>密码</label>
+            <div class="inp" id="w2">
+              <span class="ic">🔒</span>
+              <input id="pwd" type="password" value="123456" placeholder="请输入密码">
+              <span class="act" id="eye">显示</span>
+            </div>
+            <div class="hint" id="h2">密码至少 6 位</div>
+          </div>
+          <div class="row">
+            <div class="chk" id="rem"><span class="box on"></span>记住我</div>
+            <div class="link">忘记密码？</div>
+          </div>
+          <button class="main" id="btn1"><span class="spin"></span><span id="btn1t">登 录</span></button>
+          <div class="foot">还没有账号？<a>立即注册</a>·<a>使用游客模式</a></div>
+        </div>
+
+        <!-- 扫码 -->
+        <div class="pane" id="pane-qr">
+          <div class="qr">
+            <div class="qrimg">二维码占位<br>（本地部署可走<br>口令扫码）</div>
+            <p>用手机扫一扫登录<br><span style="color:var(--t3);font-size:11px">扫码登录属可选能力，本地单机可关</span></p>
+          </div>
+        </div>
+
+        <!-- 游客 -->
+        <div class="pane" id="pane-guest">
+          <div class="guestbox">
+            <div class="av" id="gav">游</div>
+            <div class="nm" id="gnm">游客 X X X X X</div>
+            <div class="tip">
+              游客登录会自动分配一个随机名字（形如「游客a7k2m」）<br>
+              数据与设置不落个人档案，退出即清
+            </div>
+          </div>
+          <div style="height:20px"></div>
+          <button class="main" id="btn3"><span class="spin"></span><span id="btn3t">以游客身份进入</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ② 登录后顶栏 + 状态 ═══ -->
+<div class="panel">
+  <h2>② 登录后的顶栏与在线状态 <span class="tag good">在线 / 忙碌中 / 离开 / 离线</span></h2>
+  <div class="note">头像右下角一个状态点，旁边写状态文字；名字就是你登录时填的（游客则是「游客XXXXX」）。</div>
+
+  <div class="topbar">
+    <div class="logo">SR</div>
+    <div class="bt"><b>销售报表 Agent</b><span>企业销售分析平台</span></div>
+    <div class="ds"><span class="dot"></span>Online Retail.xlsx · 哈希一致</div>
+    <div class="askwrap">
+      <input placeholder="用自然语言提问，例如「2011年11月复购率是多少」">
+      <button class="btn">分析</button>
+    </div>
+    <button class="ghost">☰ 菜单</button>
+    <div class="userbox">
+      <div class="av">唐<span class="st st-online"></span></div>
+      <div class="nm">唐宇<small>在线</small></div>
+    </div>
+  </div>
+
+  <div class="states">
+    <div class="statecard"><div class="big" style="background:#22C55E">●</div><div class="t">在线</div><div class="d">登录成功 · 可以提问</div></div>
+    <div class="statecard"><div class="big" style="background:#EF4444">●</div><div class="t">忙碌中</div><div class="d">正在分析 · 与 loading 三态联动</div></div>
+    <div class="statecard"><div class="big" style="background:#F59E0B">●</div><div class="t">离开</div><div class="d">无操作超 10 分钟</div></div>
+    <div class="statecard"><div class="big" style="background:#777">●</div><div class="t">离线</div><div class="d">退出登录 / 关闭页面</div></div>
+  </div>
+
+  <table class="flowtable">
+    <thead><tr><th>触发</th><th>状态</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>登录成功</td><td>在线</td><td>名字 = 登录时填的；游客 = 游客XXXXX</td></tr>
+      <tr><td>提交问题 / 正在分析</td><td>忙碌中</td><td>顺带解决"以为页面卡死"的困惑</td></tr>
+      <tr><td>无操作 &gt; 10 分钟</td><td>离开</td><td>不影响后台任务继续跑</td></tr>
+      <tr><td>退出登录 / 关页</td><td>离线</td><td>本地会话清除</td></tr>
+      <tr><td>手动点头像切换</td><td>以手动为准</td><td>直到下次自动触发</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ═══ ③ 导入 ═══ -->
+<div class="panel">
+  <h2>③ 表格导入（向导）<span class="tag good">xlsx / xls / csv · 多 Sheet</span></h2>
+  <div class="steps">
+    <div class="step done"><span class="n">1</span>选择文件</div><div class="bar"></div>
+    <div class="step on"><span class="n">2</span>预览与字段映射</div><div class="bar"></div>
+    <div class="step"><span class="n">3</span>确认导入</div>
+  </div>
+  <div class="drop"><div>把文件拖到这里，或 <b>点击选择文件</b></div>
+    <div class="fmt">支持 .xlsx / .xls / .csv ｜ 单文件 ≤ 50MB ｜ 多 Sheet 可指定工作表</div></div>
+  <div style="margin-top:14px;font-size:12px;color:var(--t2)">
+    已选：<b>2011年11月销售台账.xlsx</b>（3.2MB）
+    <span class="pill">工作表：Sheet1 ▾</span><span class="pill">8,411 行 × 8 列</span>
+  </div>
+  <div class="tblwrap">
+    <table class="t"><thead><tr><th>InvoiceNo</th><th>StockCode</th><th>Description</th><th>Quantity</th><th>InvoiceDate</th><th>UnitPrice</th><th>CustomerID</th><th>Country</th></tr></thead>
+    <tbody>
+      <tr><td>536365</td><td>85123A</td><td>WHITE HANGING HEART T-LIGHT HOLDER</td><td class="num">6</td><td>2011-11-01 08:26</td><td class="num">2.55</td><td class="num">17850</td><td>United Kingdom</td></tr>
+      <tr><td>536366</td><td>71053</td><td>WHITE METAL LANTERN</td><td class="num">6</td><td>2011-11-01 08:26</td><td class="num">3.39</td><td class="num">17850</td><td>United Kingdom</td></tr>
+      <tr><td>536367</td><td>84406B</td><td>CREAM CUPID HEARTS COAT HANGER</td><td class="num">8</td><td>2011-11-01 08:28</td><td class="num">2.75</td><td class="num">17850</td><td>United Kingdom</td></tr>
+      <tr><td>536368</td><td>84879</td><td>ASSORTED COLOUR BIRD ORNAMENT</td><td class="num">32</td><td>2011-11-01 08:34</td><td class="num">1.69</td><td class="num">13047</td><td>United Kingdom</td></tr>
+    </tbody></table>
+  </div>
+  <div style="font-size:12px;color:var(--t2);margin-top:14px">字段映射（自动识别，可改）</div>
+  <div class="map">
+    <div class="sel">InvoiceNo → 订单号</div><div class="ok">✓</div><div class="sel">CustomerID → 客户号</div>
+    <div class="sel">StockCode → 商品编码</div><div class="ok">✓</div><div class="sel">Country → 国家</div>
+    <div class="sel">Quantity → 数量</div><div class="ok">✓</div><div class="sel">UnitPrice → 单价</div>
+    <div class="sel">InvoiceDate → 日期</div><div class="ok">✓</div><div class="sel" style="color:var(--t3)">未映射字段忽略</div>
+  </div>
+  <div style="margin-top:16px" class="flexrow"><button class="btn">确认导入</button><button class="ghost">取消</button></div>
+</div>
+
+<!-- ═══ ④ 导出 ═══ -->
+<div class="panel">
+  <h2>④ 表格导出<span class="tag good">xlsx（带格式）/ csv</span></h2>
+  <div class="note">当前视图：客户排行 · 2011-11-01 ~ 2011-11-30 · 按销售额倒序 · 共 1,664 条</div>
+  <div class="flexrow" style="margin-bottom:12px">
+    <button class="btn">导出 Excel (.xlsx)</button>
+    <button class="ghost">导出 CSV</button>
+    <button class="ghost">导出当前页</button>
+    <button class="ghost">复制表格</button>
+    <span style="color:var(--t3);font-size:11px">导出与页面同源（同一套确定性计算）</span>
+  </div>
+  <div class="tblwrap" style="max-height:190px">
+    <table class="t"><thead><tr><th>#</th><th>客户号</th><th>销售额</th><th>订单数</th><th>购买次数</th><th>平均每单</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>17450</td><td class="num">27,869.45</td><td class="num">10</td><td class="num">10</td><td class="num">2,786.95</td></tr>
+      <tr><td>2</td><td>14096</td><td class="num">27,827.78</td><td class="num">4</td><td class="num">4</td><td class="num">6,956.94</td></tr>
+      <tr><td>3</td><td>14646</td><td class="num">24,500.11</td><td class="num">3</td><td class="num">3</td><td class="num">8,166.70</td></tr>
+      <tr><td>…</td><td>…</td><td class="num">…</td><td class="num">…</td><td class="num">…</td><td class="num">…</td></tr>
+      <tr><td>1664</td><td>12346</td><td class="num">152.00</td><td class="num">1</td><td class="num">1</td><td class="num">152.00</td></tr>
+    </tbody></table>
+  </div>
+</div>
+
+<!-- ═══ ⑤ 登录时要做的权限/校验（用户要求"该有的都要做好"）═══ -->
+<div class="panel" style="border-color:var(--brand)">
+  <h2>⑤ 登录流程要做的「该有的事」（清单）</h2>
+  <div class="note">你要的"基本登录时该做的权限或其他需要" —— 这是我会全部实现的清单</div>
+  <table class="flowtable">
+    <thead><tr><th>项</th><th>做法</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>姓名 = 登录时填的名字</td><td>登录表单填姓名；登录后顶栏/状态/历史提问都显示这个名字</td><td>本轮做</td></tr>
+      <tr><td>游客登录</td><td>自动分配「游客 + 5 位随机串」（如 游客a7k2m），头像取首字</td><td>本轮做</td></tr>
+      <tr><td>密码校验</td><td>本地口令 + 哈希存储（不存明文）；首次使用引导设置口令</td><td>本轮做</td></tr>
+      <tr><td>记住我</td><td>本地令牌（可设有效期），下次免登录</td><td>本轮做</td></tr>
+      <tr><td>连续错误限制</td><td>连续 N 次失败后短暂冷却，并给明确提示</td><td>本轮做</td></tr>
+      <tr><td>失效/退出</td><td>退出即清会话；令牌过期自动回登录页</td><td>本轮做</td></tr>
+      <tr><td>在线状态四态</td><td>在线 / 忙碌中 / 离开 / 离线，自动流转 + 手动覆盖</td><td>本轮做</td></tr>
+      <tr><td>操作留痕</td><td>登录 / 退出 / 提问都带操作者名字进记录（可审计）</td><td>本轮做</td></tr>
+      <tr><td>多用户 / 角色权限</td><td>owner / 分析员 / 只读等角色与数据隔离</td><td>TASK-011（P2，暂缓）</td></tr>
+      <tr><td>第三方登录 / SSO</td><td>企业微信、飞书、OAuth</td><td>后续（需外网与凭证）</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+  // 标签切换
+  document.querySelectorAll('.tabs button').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
+      document.querySelectorAll('.pane').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      document.getElementById('pane-' + b.dataset.pane).classList.add('on');
+      const map = {pwd:['欢迎回来 👋','登录后即可开始分析'], qr:['扫码登录','用手机扫码即可进入'], guest:['游客模式','无需注册，随机分配名字']};
+      document.getElementById('cardTitle').textContent = map[b.dataset.pane][0];
+      document.getElementById('cardHello').textContent = map[b.dataset.pane][1];
+      banner('', '');
+    };
+  });
+  // 记住我
+  document.getElementById('rem').onclick = e => e.currentTarget.querySelector('.box').classList.toggle('on');
+  // 显示密码
+  document.getElementById('eye').onclick = () => {
+    const i = document.getElementById('pwd');
+    const isPwd = i.type === 'password';
+    i.type = isPwd ? 'text' : 'password';
+    document.getElementById('eye').textContent = isPwd ? '隐藏' : '显示';
+  };
+  function banner(msg, cls) {
+    const b = document.getElementById('banner');
+    if (!msg) { b.className = 'banner'; return; }
+    b.className = 'banner on ' + (cls || '');
+    b.textContent = msg;
+  }
+  // 登录（含校验 + 忙碌态演示）
+  document.getElementById('btn1').onclick = () => {
+    const name = document.getElementById('name').value.trim();
+    const pwd  = document.getElementById('pwd').value;
+    const w1 = document.getElementById('w1'), w2 = document.getElementById('w2');
+    const h1 = document.getElementById('h1'), h2 = document.getElementById('h2');
+    w1.classList.remove('err'); w2.classList.remove('err');
+    h1.classList.remove('on');  h2.classList.remove('on');
+    let ok = true;
+    if (name.length < 2 || name.length > 20) { w1.classList.add('err'); h1.classList.add('on'); ok = false; }
+    if (pwd.length < 6) { w2.classList.add('err'); h2.classList.add('on'); ok = false; }
+    if (!ok) { banner('请先修正标红的输入项', ''); return; }
+    const btn = document.getElementById('btn1');
+    btn.classList.add('loading'); btn.disabled = true;
+    document.getElementById('btn1t').textContent = '正在登录…（此时状态=忙碌中）';
+    banner('正在校验口令…', '');
+    setTimeout(() => {
+      btn.classList.remove('loading'); btn.disabled = false;
+      document.getElementById('btn1t').textContent = '登 录';
+      banner('登录成功：' + name + '（状态 → 在线）', 'ok');
+    }, 1600);
+  };
+  // 游客名（随机）
+  document.getElementById('btn3').onclick = () => {
+    const s = Math.random().toString(36).slice(2, 7);
+    const nm = '游客' + s;
+    document.getElementById('gnm').textContent = nm;
+    document.getElementById('gav').textContent = '游';
+    const btn = document.getElementById('btn3');
+    btn.classList.add('loading'); btn.disabled = true;
+    document.getElementById('btn3t').textContent = '正在进入…';
+    setTimeout(() => {
+      btn.classList.remove('loading'); btn.disabled = false;
+      document.getElementById('btn3t').textContent = '以游客身份进入';
+      banner('已以「' + nm + '」进入（游客数据退出即清）', 'ok');
+    }, 1200);
+  };
+</script>
+</body>
+</html>

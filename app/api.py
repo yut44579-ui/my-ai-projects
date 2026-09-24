@@ -68,7 +68,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import api_chat, api_documents, prewarm, state
+from app import api_chat, api_datasets, api_documents, prewarm, state
 from app.engine import executor, loader, renderer
 from app.engine import metrics as engine_metrics
 from app.spec.models import (
@@ -1530,6 +1530,14 @@ app.include_router(api_documents.router)
 # 走既有 metrics/executor 确定性算出，`answer.py` 的数字核对闸门负责挡住 LLM 自己造的数。
 # 位置同样必须在 mount("/") **之前**。
 app.include_router(api_chat.router)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 数据源与业务表（STEP A）—— 走**新路径** `/api/datasets*` `/api/tables*`
+# ════════════════════════════════════════════════════════════════════════
+# 既有端点（含冻结的 /api/upload）一个字没改：数据源登记、业务表的分页/排序/筛选、
+# 导出（xlsx/csv）整个装在 app/api_datasets.py 里。位置同样必须在 mount("/") **之前**。
+app.include_router(api_datasets.router)
 
 
 # ════════════════════════════════════════════════════════════════════════

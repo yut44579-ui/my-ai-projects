@@ -362,6 +362,33 @@ def count_conversations() -> int:
 
 
 # ════════════════════════════════════════════════════════════════════════
+# ⑥ 数据集登记（STEP A：数据源身份）
+# ════════════════════════════════════════════════════════════════════════
+def record_dataset(dataset: dict) -> dict:
+    """落盘一个数据集并返回它。
+
+    与 record_conversation 同一条约定：**记录的形状由产生它的那一层决定**
+    （这里由 `app/datasets/registry.py` 决定），state.py 只负责存 ——
+    否则同一个形状会有两处定义，改一处忘一处。
+    """
+    return repositories.datasets().add(dataset)
+
+
+def get_dataset(dataset_id: str) -> dict | None:
+    """按 dataset_id 取（不存在返回 None，由调用方回 404）。"""
+    return repositories.datasets().get(dataset_id)
+
+
+def list_datasets(limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    """数据集列表（新的在前）+ 总数。"""
+    return repositories.datasets().list(limit, offset)
+
+
+def count_datasets() -> int:
+    return repositories.datasets().count()
+
+
+# ════════════════════════════════════════════════════════════════════════
 # 健康检查概览
 # ════════════════════════════════════════════════════════════════════════
 def state_summary() -> dict:

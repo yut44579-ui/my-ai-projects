@@ -37,6 +37,9 @@ EXECUTIONS_FILE = "executions.json"
 TASKS_FILE = "tasks.json"
 DOCUMENTS_FILE = "documents.json"
 CONVERSATIONS_FILE = "conversations.json"
+# 数据集登记表（STEP A）：一个"数据源"就是一个 Dataset —— 带 id、来源文件、行数/时间范围、
+# 口径绑定与导入时间。文件哈希只在这一层与后端里流转，前端只显示业务字段。
+DATASETS_FILE = "datasets.json"
 
 # 落盘格式版本（R005 required_change #11）：三个 JSON 都写顶层 schema_version
 SCHEMA_VERSION = 1
@@ -106,6 +109,12 @@ def conversations_file() -> Path:
     """自然语言对话记录（TASK-004）。落 state/ 与其它记录同级：
     对话里带着"当时算出来的数字"，和 tasks/executions 一样是**审计凭据**，不该另起一处。"""
     return state_dir() / CONVERSATIONS_FILE
+
+
+def datasets_file() -> Path:
+    """数据集登记表（STEP A）。与其它记录同级：它也是**审计凭据**
+    （"这个数字基于哪个数据源、哪套口径"要靠它回答）。"""
+    return state_dir() / DATASETS_FILE
 
 
 # ════════════════════════════════════════════════════════════════════════

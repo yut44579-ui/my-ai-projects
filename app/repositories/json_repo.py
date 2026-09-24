@@ -16,6 +16,7 @@ from typing import Callable
 from app.repositories import json_store
 from app.repositories.base import (
     ConversationRepository,
+    DatasetRepository,
     DocumentRepository,
     ExecutionRepository,
     TaskRepository,
@@ -185,6 +186,27 @@ class JsonConversationRepository(_JsonRepositoryBase, ConversationRepository):
         return self._collection.find(
             lambda record: record.get("conversation_id") == conversation_id
         )
+
+    def list(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+        records = self._collection.all()
+        return records[offset:offset + limit], len(records)
+
+    def count(self) -> int:
+        return self._collection.count()
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑥ 数据集（STEP A：数据源身份 —— id / 来源 / 行数 / 时间范围 / 口径绑定）
+# ════════════════════════════════════════════════════════════════════════
+class JsonDatasetRepository(_JsonRepositoryBase, DatasetRepository):
+    def __init__(self, path_getter: Callable[[], Path] | None = None) -> None:
+        super().__init__(JsonCollection(path_getter or json_store.datasets_file, "datasets"))
+
+    def add(self, record: dict) -> dict:
+        return self._collection.insert_front(record)
+
+    def get(self, dataset_id: str) -> dict | None:
+        return self._collection.find(lambda record: record.get("dataset_id") == dataset_id)
 
     def list(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
         records = self._collection.all()

@@ -37,6 +37,7 @@ from app.repositories import json_store
 from app.repositories.base import (
     REPOSITORY_INTERFACES,
     ConversationRepository,
+    DatasetRepository,
     DocumentRepository,
     ExecutionRepository,
     TaskRepository,
@@ -44,6 +45,7 @@ from app.repositories.base import (
 )
 from app.repositories.json_repo import (
     JsonConversationRepository,
+    JsonDatasetRepository,
     JsonDocumentRepository,
     JsonExecutionRepository,
     JsonTaskRepository,
@@ -77,6 +79,11 @@ def build_conversation_repository(path_getter: Callable[[], Path] | None = None)
     return JsonConversationRepository(path_getter)
 
 
+def build_dataset_repository(path_getter: Callable[[], Path] | None = None) -> DatasetRepository:
+    """造一个数据集仓库（STEP A：数据源身份 —— id/来源/行数/时间范围/口径绑定）。"""
+    return JsonDatasetRepository(path_getter)
+
+
 # ════════════════════════════════════════════════════════════════════════
 # 默认实例（惰性构造一次，全局共用）
 # ════════════════════════════════════════════════════════════════════════
@@ -85,6 +92,7 @@ _tasks: TaskRepository | None = None
 _executions: ExecutionRepository | None = None
 _documents: DocumentRepository | None = None
 _conversations: ConversationRepository | None = None
+_datasets: DatasetRepository | None = None
 
 
 def uploads() -> UploadRepository:
@@ -127,28 +135,40 @@ def conversations() -> ConversationRepository:
     return _conversations
 
 
+def datasets() -> DatasetRepository:
+    """数据集登记表（`state/datasets.json`，STEP A）。"""
+    global _datasets
+    if _datasets is None:
+        _datasets = build_dataset_repository()
+    return _datasets
+
+
 __all__ = [
     "UploadRepository",
     "TaskRepository",
     "ExecutionRepository",
     "DocumentRepository",
     "ConversationRepository",
+    "DatasetRepository",
     "REPOSITORY_INTERFACES",
     "JsonUploadRepository",
     "JsonTaskRepository",
     "JsonExecutionRepository",
     "JsonDocumentRepository",
     "JsonConversationRepository",
+    "JsonDatasetRepository",
     "build_upload_repository",
     "build_task_repository",
     "build_execution_repository",
     "build_document_repository",
     "build_conversation_repository",
+    "build_dataset_repository",
     "uploads",
     "tasks",
     "executions",
     "documents",
     "conversations",
+    "datasets",
     "json_store",
     "LOCK",
     "SCHEMA_VERSION",

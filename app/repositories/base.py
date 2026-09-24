@@ -158,6 +158,39 @@ class ConversationRepository(ABC):
         """对话记录总数。"""
 
 
+class DatasetRepository(ABC):
+    """数据集登记表（`state/datasets.json`）：STEP A 引入的**数据源身份**。
+
+    为什么它必须存在（评审的硬条件）：一个数字从哪来，必须答得出来 ——
+    "基于哪个数据源、哪套口径、哪次导入"。所以每个 Dataset 记的是
+    `dataset_id / source_file / file_hash / row_count / columns / date_range /
+     imported_at / metric_definition / analysis_enabled`。
+
+    与 UploadRepository 的区别：上传记录回答"文件收进来了吗"（一次收件），
+    数据集回答"这是一个可被引用的数据源吗"（带口径、带时间范围、可被分析结果引用的身份）。
+    文件字节仍然复用上传的落盘件（`stored_path`/`file_hash` 指过去），不重复存一份。
+
+    与 DocumentRepository 的区别：文档是**非结构化输入**（Word/PDF → 文本），
+    数据集是**结构化输入**（Excel/CSV → 可查询的表）。两条管道语义不同，不合并。
+    """
+
+    @abstractmethod
+    def add(self, record: dict) -> dict:
+        """登记一个数据集（插到最前）；返回落盘的那条。"""
+
+    @abstractmethod
+    def get(self, dataset_id: str) -> dict | None:
+        """按 dataset_id 取；不存在返回 None（由调用方决定回 404）。"""
+
+    @abstractmethod
+    def list(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+        """分页列表（新的在前）+ 总数。"""
+
+    @abstractmethod
+    def count(self) -> int:
+        """数据集总数。"""
+
+
 # 便于测试/未来扩展统一遍历（新增仓库时记得加进来）
 REPOSITORY_INTERFACES: tuple[type, ...] = (
     UploadRepository,
@@ -165,6 +198,7 @@ REPOSITORY_INTERFACES: tuple[type, ...] = (
     ExecutionRepository,
     DocumentRepository,
     ConversationRepository,
+    DatasetRepository,
 )
 
 __all__ = [
@@ -173,6 +207,7 @@ __all__ = [
     "ExecutionRepository",
     "DocumentRepository",
     "ConversationRepository",
+    "DatasetRepository",
     "REPOSITORY_INTERFACES",
     "Callable",
 ]
