@@ -12,6 +12,15 @@
 const API = (() => {
   "use strict";
 
+  // 请求超时用的信号（浏览器原生能力，不需要自己起定时器）。
+  // 老浏览器没这个 API 时返回 undefined —— 那就退回"不设上限"，
+  // 宁可慢，也不要因为设不了上限就整个请求报错。
+  const timeoutSignal = (ms) => (
+    typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(ms)
+      : undefined
+  );
+
   class ApiError extends Error {
     constructor(status, code, message, payload) {
       super(message);
@@ -27,6 +36,11 @@ const API = (() => {
     try {
       response = await fetch(path, options);
     } catch (err) {
+      // 「压根连不上」与「这次请求超时了」要分开说 —— 用户能采取的动作不一样
+      // （前者得去起服务，后者只要等一等再试）
+      if (err && err.name === "TimeoutError") {
+        throw new ApiError(0, "timeout", "读取超时：服务响应太慢，请稍后重试。");
+      }
       // 网络层就失败了（服务没起 / 被防火墙拦）—— 明确说清楚，别让上层猜
       throw new ApiError(0, "network_error", `连不上服务（网络不通或服务未启动），请稍后重试。`);
     }
@@ -152,7 +166,10 @@ const API = (() => {
     ApiError,
     metricCatalog,
 
-    health: () => request("/api/health"),
+    // 顶栏那一栏要**尽快给结论**：健康检查单独设 8 秒上限 ——
+    // 超过就当"读不到"处理，界面给人话提示，不让它一直停在"读取中"。
+    // （只有这一条请求设上限：别的地方可能是真的慢，掐掉会把"慢"误判成"坏"。）
+    health: () => request("/api/health", { signal: timeoutSignal(8000) }),
 
     upload(file) {
       const form = new FormData();

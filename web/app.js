@@ -244,7 +244,10 @@
   async function refreshAll() {
     banner("loading", "正在读取系统状态…");
     const results = await Promise.allSettled([
-      loadHealth(), loadTasks(), loadExecutions(), loadDocuments(),
+      // 健康检查**一到就先更新顶栏那一栏**（用户最先盯着看的地方），不等其它请求 ——
+      // 否则一条慢请求就能把"数据源"一直拖在"读取中"上（用户实测反馈的病灶就是它）。
+      loadHealth().then(renderDatasourceChip).catch(renderDatasourceUnknown),
+      loadTasks(), loadExecutions(), loadDocuments(),
       loadConversations(), loadCapabilities(), loadDatasets(),
     ]);
     const failed = results.find((item) => item.status === "rejected");
@@ -253,7 +256,48 @@
     } else {
       banner(null);
     }
+    // 顶栏那一栏**不许永远停在"读取中"**：读完这一轮就得给个结论 ——
+    // 拿到了显示文件名，没拿到给人话（用户反馈过的原文：「一直在加载是什么鬼」）。
+    if (!state.health) renderDatasourceUnknown();
     renderDerived();
+  }
+
+  // 顶栏那一栏：**只看健康检查的结果**（数据源文件名 + 与登记时是否一致）。
+  // 单独一个函数是为了让它能"一到就画"，不被别的请求拖着。
+  function renderDatasourceChip() {
+    const snapshot = (state.health || {}).data_snapshot || {};
+    const sourceName = snapshot.path ? String(snapshot.path).split(/[\\/]/).pop() : "";
+    setText("datasource-label", sourceName ? `数据源：${sourceName}` : "数据源：未配置");
+    const dot = $("datasource-dot");
+    if (dot) dot.className = `dot ${snapshot.match ? "ok" : "bad"}`;
+    const chip = $("datasource-chip");
+    if (chip) {
+      chip.title = sourceName
+        ? `当前数据源：${sourceName}${snapshot.match ? "（与登记时一致）" : "（与登记时不一致，请检查数据文件）"}`
+        : "当前数据源：未配置";
+    }
+  }
+
+  // 顶栏数据源：没读到就说人话，并说清用户能做什么（别让人盯着"读取中"干等）。
+  // 顺带把页面上其它"读取中…"的壳一起换成同一句人话 —— 那些句子是**首屏静态壳**，
+  // 不换的话用户会以为系统卡住了（实际只是这一轮没读到）。
+  function renderDatasourceUnknown() {
+    setText("datasource-label", "数据源：暂时读不到，可刷新页面重试");
+    const dot = $("datasource-dot");
+    if (dot) dot.className = "dot bad";
+    const chip = $("datasource-chip");
+    if (chip) chip.title = "这次没读到数据源信息：服务可能还没就绪，刷新页面会重新读取。";
+    const rows = [
+      ["fact-data", "数据源：暂时读不到"],
+      ["fact-template", "报表模板：暂时读不到"],
+      ["fact-state", "数据状态：暂时读不到"],
+      ["fact-code", "数据校验：暂时读不到"],
+      ["rp-service", "暂时读不到"],
+      ["rp-state-readable", "暂时读不到"],
+      ["rp-counts", "暂时读不到"],
+      ["rp-snapshot", "暂时读不到"],
+    ];
+    rows.forEach(([id, message]) => setText(id, message));
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -266,16 +310,9 @@
     const stateInfo = health.state || {};
 
     // 页面上的每一句都是**业务语言**：说"数据源是否与登记时一致"，不说哈希怎么算的。
+    // 顶栏那一栏由 renderDatasourceChip 负责（它要能"一到就画"，所以是独立函数）。
+    renderDatasourceChip();
     const sourceName = snapshot.path ? String(snapshot.path).split(/[\\/]/).pop() : "";
-    setText("datasource-label", sourceName ? `数据源：${sourceName}` : "数据源：未配置");
-    const dot = $("datasource-dot");
-    if (dot) dot.className = `dot ${snapshot.match ? "ok" : "bad"}`;
-    const chip = $("datasource-chip");
-    if (chip) {
-      chip.title = sourceName
-        ? `当前数据源：${sourceName}${snapshot.match ? "（与登记时一致）" : "（与登记时不一致，请检查数据文件）"}`
-        : "当前数据源：未配置";
-    }
 
     const factData = $("fact-data");
     if (factData) {

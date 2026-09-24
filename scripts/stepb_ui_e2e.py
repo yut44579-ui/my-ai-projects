@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -102,19 +103,152 @@ def server_tail(log_path: Path, lines: int = 12) -> str:
     return "\n".join(body[-lines:]) or "（服务日志是空的）"
 
 
-def dump_dom(edge: str, url: str, width: int = 1600) -> str:
+# ════════════════════════════════════════════════════════════════════════
+# 量尺寸用的**探测代理**（只在验收脚本里存在，产品代码一行都不加）
+#
+# 为什么要有它：登录页"铺满没铺满"必须用**真浏览器量真几何**才算数，
+#   而 Edge 的 --dump-dom 只能导出 DOM、不能执行任意 JS 再回传结果。
+# 做法：本机起一个极小的代理，转发到真服务，**只**把 index.html 的响应
+#   在 </body> 前插一段探测脚本。探测脚本量完把结果写进 <html data-probe="…">，
+#   --dump-dom 一导就带出来了 —— 量到的是真布局，而产品代码里没有任何探测钩子。
+# 探测脚本还会**在页面里走一遍登录**（填名字/密码 → 提交），
+#   用来验"登录后数据源那一栏会不会自己变成真名字"。
+# ════════════════════════════════════════════════════════════════════════
+PROBE_SCRIPT = """
+<script>
+(function () {
+  const readGate = () => {
+    const gate = document.getElementById("login-gate");
+    if (!gate) return null;
+    const rect = gate.getBoundingClientRect();
+    return {
+      w: Math.round(rect.width), h: Math.round(rect.height),
+      left: Math.round(rect.left), top: Math.round(rect.top),
+    };
+  };
+  const label = (id) => {
+    const el = document.getElementById(id);
+    return el ? (el.textContent || "").trim() : null;
+  };
+  const snapshot = () => ({
+    viewport: [window.innerWidth, window.innerHeight],
+    gate: readGate(),
+    gateVisible: !(document.getElementById("login-gate") || {}).hidden,
+    locked: document.body.classList.contains("is-locked"),
+    userName: label("user-name"),
+    bodyHasReading: (document.body.innerText || "").includes("读取中"),
+    bodyText: (document.body.innerText || "").replace(/\\s+/g, " ").slice(0, 160),
+    datasource: label("datasource-label"),
+    scrollWidth: document.documentElement.scrollWidth,
+  });
+  const write = (key, data) => {
+    const box = JSON.parse(document.documentElement.getAttribute("data-probe") || "{}");
+    box[key] = data;
+    document.documentElement.setAttribute("data-probe", JSON.stringify(box));
+  };
+
+  window.addEventListener("load", () => {
+    write("boot", snapshot());                       // ① 登录页阶段
+    const name = document.getElementById("login-name");
+    const pwd = document.getElementById("login-pwd");
+    if (name && pwd) {                               // ② 走一遍登录（真事件，真流程）
+      name.value = "探针唐宇";
+      pwd.value = "123456";
+      document.getElementById("login-form")
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    }
+    setTimeout(() => { write("afterLogin", snapshot()); }, 9000);    // ③ 登录后 9 秒（虚拟时间）内
+    setTimeout(() => { write("afterIdle", snapshot()); }, 13000);   // ④ 再等一会儿看会不会回退
+  });
+})();
+</script>
+"""
+
+
+def start_probe_proxy(upstream_port: int, listen_port: int):
+    """起探测代理（单线程够用：dump-dom 一次只打几个请求）。返回 httpd 对象。"""
+    import http.server
+    import urllib.request
+
+    upstream = f"http://127.0.0.1:{upstream_port}"
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):                                        # noqa: N802（http.server 的命名）
+            try:
+                with urllib.request.urlopen(upstream + self.path, timeout=120) as response:
+                    status = response.status
+                    body = response.read()
+                    # 从 HTTPMessage 上按名取（大小写不敏感）；转成 dict 再取会取不到
+                    content_type = response.headers.get("Content-Type", "")
+                    headers = list(response.headers.items())
+            except Exception as exc:                             # noqa: BLE001 代理层不许把脚本搞崩
+                self.send_error(502, f"proxy upstream failed: {exc}")
+                return
+            if "text/html" in content_type:
+                html = body.decode("utf-8", errors="replace")
+                body = html.replace("</body>", PROBE_SCRIPT + "</body>").encode("utf-8")
+            self.send_response(status)
+            for key, value in headers:
+                if key.lower() in ("content-length", "content-encoding", "transfer-encoding",
+                                   "connection", "keep-alive"):
+                    continue
+                self.send_header(key, value)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):                            # 不刷屏
+            return
+
+    return http.server.ThreadingHTTPServer(("127.0.0.1", listen_port), Handler)
+
+
+def probe_of(dom: str) -> dict:
+    """从导出的 DOM 里取出探测结果（脚本写在 <html data-probe="…"> 上）。"""
+    import html as html_module
+    import json
+
+    match = re.search(r'data-probe="([^"]*)"', dom)
+    if not match:
+        return {}
+    try:
+        return json.loads(html_module.unescape(match.group(1)))
+    except ValueError:
+        return {}
+
+
+def dump_dom(edge: str, url: str, width: int = 1600, height: int = 1000) -> str:
     """Edge 无头打开页面并导出**JS 跑完之后**的 DOM（每次一个干净 profile，等价于全新用户）。"""
     profile = tempfile.mkdtemp(prefix="sra_edge_b_", dir=str(PROJECT_ROOT / "outputs"))
     try:
         completed = subprocess.run(
             [
                 edge, "--headless", "--disable-gpu", "--no-first-run",
-                "--user-data-dir=" + profile, f"--window-size={width},1000",
+                "--user-data-dir=" + profile, f"--window-size={width},{height}",
                 "--virtual-time-budget=25000", "--dump-dom", url,
             ],
             capture_output=True, timeout=240,
         )
         return completed.stdout.decode("utf-8", errors="replace")
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
+
+
+def shoot(edge: str, url: str, path: Path, width: int, height: int) -> bool:
+    """截一张图（给"铺满没铺满、有没有露出主界面"留个肉眼可看的证据）。"""
+    profile = tempfile.mkdtemp(prefix="sra_edge_shot_", dir=str(PROJECT_ROOT / "outputs"))
+    try:
+        completed = subprocess.run(
+            [
+                edge, "--headless", "--disable-gpu", "--no-first-run",
+                "--user-data-dir=" + profile, f"--window-size={width},{height}",
+                "--virtual-time-budget=25000", f"--screenshot={path}", url,
+            ],
+            capture_output=True, timeout=240,
+        )
+        return path.exists() and completed.returncode == 0
     finally:
         shutil.rmtree(profile, ignore_errors=True)
 
@@ -133,9 +267,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="STEP B-UI 真闭环验收")
     parser.add_argument("--port", type=int, default=8530)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--browser-size", default="1600x1000",
+                        help="无头浏览器的窗口尺寸（WxH），量几何与截图都用它")
     args = parser.parse_args()
 
     edge = find_edge()
+    try:
+        browser_w, browser_h = (int(part) for part in str(args.browser_size).lower().split("x"))
+    except ValueError:
+        print(f"窗口尺寸写法不对：{args.browser_size}（应形如 1238x660）")
+        return 2
     workspace = PROJECT_ROOT / "outputs" / f"sra_stepb_{int(time.time())}"
     env = dict(os.environ)
     # 落盘沙箱：本次验收产生的状态 / 上传 / 产出都写进临时目录，跑完可以整目录删掉
@@ -183,26 +324,61 @@ def main() -> int:
             check(page.get("total", 0) > 0 and len(page.get("items", [])) == 5,
                   "客户表分页形状照旧（total / items）", f"total={page.get('total')}")
 
-        # ── ③ 真浏览器：打开根路径，先看到登录页
+        # ── ③ 真浏览器：打开根路径，先看到登录页（经探测代理，能带回真几何）
         step("③ 真浏览器打开根路径（全新用户 → 先看到登录页）")
         if args.no_browser or not edge:
             check(True, "跳过浏览器这一步（--no-browser 或本机没有 Edge）")
         else:
             print(f"   浏览器：{edge}")
-            dom = dump_dom(edge, base)
+            proxy = start_probe_proxy(args.port, args.port + 1)
+            threading.Thread(target=proxy.serve_forever, daemon=True).start()
+            proxy_url = f"http://127.0.0.1:{args.port + 1}/"
+            try:
+                dom = dump_dom(edge, proxy_url, browser_w, browser_h)
+            finally:
+                proxy.shutdown()
             (workspace / "dom_login.html").write_text(dom, encoding="utf-8")
             text = page_text(dom)
             (workspace / "dom_login.txt").write_text(text, encoding="utf-8")
+            probe = probe_of(dom)
+            (workspace / "probe.json").write_text(
+                __import__("json").dumps(probe, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            # ★ 用户实测的两个问题，这里量真几何 / 读真文本
+            boot = probe.get("boot") or {}
+            viewport, gate = boot.get("viewport"), boot.get("gate")
+            if check(bool(viewport and gate), "探测脚本量到了视口与登录页的尺寸",
+                     f"viewport={viewport} gate={gate}"):
+                check(gate["w"] == viewport[0] and gate["h"] == viewport[1]
+                      and gate["left"] == 0 and gate["top"] == 0,
+                      "登录页**铺满整个视口**（宽高相等、左上角归零）",
+                      f"{gate['w']}x{gate['h']} @ {gate['left']},{gate['top']} / 视口 {viewport[0]}x{viewport[1]}")
+                check(boot.get("scrollWidth", 0) <= viewport[0] + 1,
+                      "没有横向溢出（scrollWidth ≤ 视口宽）",
+                      f"scrollWidth={boot.get('scrollWidth')}")
+            check(boot.get("gateVisible") is True, "登录页是显示状态")
+            check(boot.get("bodyHasReading") is False, "登录页上的文字里**没有「读取中」**",
+                  f"看到的文字：{boot.get('bodyText', '')[:60]}")
+            after_login = probe.get("afterLogin") or {}
+            label = after_login.get("datasource") or ""
+            check(bool(label) and "读取中" not in label,
+                  "登录后：数据源那一栏不再是「读取中」", f"「{label}」")
+            check(".xlsx" in label or "数据源：" in label,
+                  "登录后：数据源那一栏是真实名称或人话", f"「{label}」")
+            check(after_login.get("gateVisible") is False, "登录后：登录页收起、进主界面")
+            check((probe.get("afterIdle") or {}).get("datasource") == label,
+                  "再等一会儿标签值稳定（不会又变回读取中）",
+                  f"「{(probe.get('afterIdle') or {}).get('datasource')}」")
 
             gate = re.search(r'<div class="login-gate" id="login-gate"[^>]*>', dom)
-            check(bool(gate) and "hidden" not in gate.group(0),
-                  "登录页**显示着**（根路径先给登录页）")
-            check("is-locked" in dom, "主界面被锁住（body 带 is-locked）")
+            check(bool(gate), "登录页容器在页面上")
+            check(boot.get("locked") is True, "打开时主界面被锁住（body 带 is-locked）")
             check("欢迎回来" in text and "账号登录" in text and "游客登录" in text,
                   "两个入口与欢迎语都渲染出来了")
             check("本地模式" in text, "如实标注了这是本机模式", "（人话，不是技术字样）")
             check("扫码" not in text, "扫码登录没有出现（本轮不做）")
-            check("未登录" in text, "顶栏用户区显示未登录（不是假装有个用户）")
+            check(boot.get("userName") == "未登录", "打开时顶栏显示未登录（不是假装有个用户）",
+                  f"「{boot.get('userName')}」")
             check("离线" in text and "在线" in text, "状态文字在页面上（离线 / 在线）")
 
             facts = re.findall(r"\d{1,3}(?:,\d{3})+", text)
@@ -220,11 +396,20 @@ def main() -> int:
 
             # ── ④ 窄窗口：顶栏不许把「分析」挤成竖排
             step("④ 窄窗口（820px）顶栏不切字")
-            narrow = dump_dom(edge, base, width=820)
+            narrow = dump_dom(edge, base, width=820, height=browser_h)
             narrow_text = page_text(narrow)
             check("账号登录" in narrow_text and "本地模式" in narrow_text,
                   "窄窗口下登录页仍然完整")
             check("分析" in narrow_text, "「分析」按钮的文字没有被压成单字")
+
+            # ── ⑤ 截图留证（登录页全屏的样子，肉眼可查）
+            step("⑤ 截一张登录页的图（给「铺满没铺满」留个肉眼证据）")
+            shot = workspace / f"login-{browser_w}x{browser_h}.png"
+            if shoot(edge, base, shot, browser_w, browser_h):
+                check(shot.stat().st_size > 10_000, "登录页截图已生成",
+                      f"{shot.name}（{shot.stat().st_size // 1024} KB）")
+            else:
+                check(False, "登录页截图没生成")
 
         print(f"\n产物目录：{workspace}")
     finally:

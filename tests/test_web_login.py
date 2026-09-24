@@ -126,6 +126,41 @@ def test_B01_登录页在页面上且先于主界面() -> None:
     assert "body.is-locked" in read("style.css")
 
 
+def test_B01_登录页整屏铺满且不露主界面() -> None:
+    """用户实测反馈：「没有铺满整个页面」—— 原来是"半透明遮罩 + 居中卡片"，
+    卡片浮在被压暗的主界面之上，观感就是个弹窗。
+
+    现在：整块铺满视口、左右分栏各占一半、锁住时主界面**不渲染**
+    （既不露底，也不会把主界面那些「读取中…」混进页面文本里）。
+    """
+    css = read("style.css")
+    gate = re.search(r"\.login-gate\s*\{(.*?)\}", css, re.S).group(1)
+    assert "position: fixed" in gate and "inset: 0" in gate
+    assert "place-items: center" not in gate, "还在把登录页当居中卡片"
+    assert "padding" not in gate, "外层还留着边距（铺不满）"
+    shell = re.search(r"\.login-shell\s*\{(.*?)\}", css, re.S).group(1)
+    assert "min-height: 100%" in shell and "grid-template-columns" in shell
+    # 分栏用 minmax(0, …)：内容再宽也不会把页面撑出横向滚动条
+    assert "minmax(0, 1.08fr)" in shell and "minmax(0, .92fr)" in shell
+    # 表单区：外层铺满，里面的内容限宽 420px 只为好读
+    card = re.search(r"\.login-card\s*\{(.*?)\}", css, re.S).group(1)
+    assert "justify-content: center" in card and "var(--bg-page)" in card
+    inner = re.search(r"\.login-card-inner\s*\{(.*?)\}", css, re.S).group(1)
+    assert "max-width: 420px" in inner and "margin: 0 auto" in inner
+    brand_inner = re.search(r"\.login-brand-inner\s*\{(.*?)\}", css, re.S).group(1)
+    assert "max-width" in brand_inner
+    # 锁住时主界面不渲染（不露底 + 页面文本里不会出现它的"读取中"）
+    assert "body.is-locked .app { display: none; }" in css
+    # 窄屏：上下堆叠（不许横向滚动）；矮窗口再收紧一次间距
+    narrow = re.search(r"@media \(max-width: 900px\)\s*\{(.*?)\n\}", css, re.S).group(1)
+    assert ".login-shell { grid-template-columns: minmax(0, 1fr); }" in narrow
+    assert "@media (max-height: 760px)" in css
+    # 登录页自己不许出现"还在读"的话（读到的数字直接出现，读不到就说读不到）
+    gate_html = re.search(r'<div class="login-gate".*?</div>\s*</div>\s*</div>', read("index.html"), re.S)
+    assert gate_html, "找不到登录页那块结构"
+    assert "读取中" not in gate_html.group(0), "登录页上还有「读取中」这种等待文案"
+
+
 def test_B03_顶栏用户区是头像加名字加状态() -> None:
     html = read("index.html")
     css = read("style.css")

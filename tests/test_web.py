@@ -628,3 +628,63 @@ def test_STEPA_导入向导工作流与诚实边界() -> None:
     # 数据集输入 vs 文档输入：两个入口、两类后缀，没有把上传升级成万能入口
     assert 'accept=".xlsx,.xlsm,.csv"' in html
     assert 'accept=".docx,.pdf"' in html
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑮ 顶栏「数据源」那一栏不许永远停在「读取中」（用户实测反馈）
+#
+# 用户原话：「一直在加载是什么鬼」。实测接口全是 200（health 0.06s / datasets 2.7s），
+# 浏览器控制台零错误 —— 是**前端状态没落地**：健康检查那一段要等所有请求都结束才渲染，
+# 任何一条慢请求都能把它拖在"读取中"上。三条修法：先到先画 / 没读到说人话 / 请求有上限。
+# ════════════════════════════════════════════════════════════════════════
+def test_顶栏数据源不许永远停在读取中() -> None:
+    js, api_js, css = read("app.js"), read("api.js"), read("style.css")
+    # ① 健康检查一到就先画顶栏那一栏（不等其它请求）
+    assert "loadHealth().then(renderDatasourceChip).catch(renderDatasourceUnknown)" in js, \
+        "健康检查没有「先到先画」，一条慢请求就能把它拖在读取中"
+    assert "function renderDatasourceChip()" in js
+    # ② 这一轮没读到 → 人话 + 说清能做什么（不是继续挂着"读取中…"）
+    assert "function renderDatasourceUnknown()" in js
+    assert "暂时读不到，可刷新页面重试" in js
+    assert "if (!state.health) renderDatasourceUnknown();" in js
+    # 首屏那几个静态壳（数据源 / 模板 / 状态 / 校验）也要一起落地
+    for anchor in ("fact-data", "fact-template", "fact-state", "fact-code"):
+        assert anchor in js
+    # ③ 健康检查本身有上限：超时按"读不到"处理（用浏览器原生能力，不起定时器）
+    assert "timeoutSignal(8000)" in api_js and "AbortSignal.timeout" in api_js
+    assert 'err.name === "TimeoutError"' in api_js
+    assert "读取超时" in api_js
+    # 登录页阶段不显示数据源状态（主界面整块不渲染 —— 也就不会被看到"读取中"）
+    assert "body.is-locked .app { display: none; }" in css
+
+
+def test_用hidden收放的元素不会被display压住() -> None:
+    """`hidden` 属性会被**自带 display 的 class** 压过去 —— 这是本项目踩过的真坑：
+
+    `.spinner` 写了 `display: inline-block`，于是 `hidden` 的转圈照样显示在按钮上，
+    看着就像"一直在加载"（用户实测截图里就是它）。凡是自带 display 的元素，
+    要么给它补一条 `.xxx[hidden] { display: none }`，要么别用 hidden 收放。
+    """
+    import re as _re
+
+    css, html = read("style.css"), read("index.html")
+    js = read("app.js") + read("session.js")
+    display_classes = set()
+    for match in _re.finditer(r"\.([a-zA-Z][\w-]*)\s*\{([^}]*)\}", css):
+        if _re.search(r"\bdisplay\s*:\s*(?!none)", match.group(2)):
+            display_classes.add(match.group(1))
+    guarded = set(_re.findall(r"\.([a-zA-Z][\w-]*)\[hidden\]", css))
+    hidden_ids = set(_re.findall(r'(?:hide|show)\(\$?"([\w-]+)"\)', js))
+    hidden_ids |= set(_re.findall(r'\$\("([\w-]+)"\)\.hidden', js))
+    problems = []
+    for element in _re.finditer(r"<[a-z]+[^>]*id=\"([\w-]+)\"[^>]*>", html):
+        tag, element_id = element.group(0), element.group(1)
+        if element_id not in hidden_ids:
+            continue
+        for group in _re.findall(r'class="([^"]+)"', tag):
+            for name in group.split():
+                if name in display_classes and name not in guarded:
+                    problems.append((element_id, name))
+    assert not problems, f"这些元素用 hidden 收不住（自带 display 的 class 没兜底）：{problems}"
+    # 已经踩过的那个必须留着兜底
+    assert ".spinner[hidden] { display: none; }" in css
