@@ -34,7 +34,7 @@ from typing import Any
 
 # 货币单位**只从 tools 取**（`DATASET_CURRENCY` 是全项目唯一出处）。
 # 不反向依赖：tools 不 import answer，所以这里 import 它没有环。
-from app.ai import llm
+from app.ai import export_docs, llm
 from app.ai import tools as ai_tools
 
 # 回答分区的小标题（前端按 key 分区渲染，不靠解析中文标题）
@@ -435,10 +435,18 @@ def build_report_export(
     actions_source: str,
     profile: dict[str, Any],
 ) -> dict[str, Any]:
-    """把报告文档 + 【为什么】/【建议行动】拼成**可下载的那份文件**（Markdown）。
+    """把报告文档 + 【为什么】/【建议行动】拼成**可下载的那几份文件**。
 
-    前端只负责"把这段文本存成文件"（Blob 下载），不拼内容、不算数字 ——
-    导出物与页面上预览的是同一段文本。
+    三件事在这里定下来：
+      ① `markdown` —— 页面上预览的那段文本（也是 Markdown 格式下载到的内容），一个字都不重排；
+      ② `formats`  —— 可下载的格式清单（Word / Excel / Markdown），**默认 Word**：
+         · Word 是文档形态，双击就能打开（用户实测：默认给 .md，Windows 上没有关联程序 →
+           体感是"下载不了"）；Excel 给"要拿数字继续算"的场合；
+         · 三种格式的文件名由后端拼好，前端不拼文件名、不拼扩展名。
+      ③ `filename` / `mime` —— 默认格式的那一份（老字段照旧在，值是新的默认格式）。
+
+    文件内容不在这里生成：Word / Excel 由 `export_docs` 从**同一份冻结报告**渲染，
+    下载接口按 conversation_id 现取现渲染（见 api_chat 的导出端点）。
     """
     currency = ai_tools.DATASET_CURRENCY
     parts = [
@@ -457,12 +465,19 @@ def build_report_export(
         f"> 数据范围：{profile.get('first_day')} ~ {profile.get('last_day')}；"
         f"金额单位：{currency['name']}（{currency['code']}，由项目唯一声明的币种配置给出，数值未做换算）。",
     ]
+    base = report.get("filename") or export_docs.base_filename(
+        report.get("title", "销售报告"), report.get("period_label", "")
+    )
+    choices = export_docs.format_choices(base)
+    default = next(item for item in choices if item["format"] == export_docs.DEFAULT_FORMAT)
     return {
         "title": report.get("title", "销售报告"),
         "period": report.get("period"),
         "period_label": report.get("period_label"),
-        "filename": report.get("filename") or "销售报告.md",
-        "mime": "text/markdown;charset=utf-8",
+        "filename": default["filename"],
+        "mime": default["mime"],
+        "default_format": export_docs.DEFAULT_FORMAT,
+        "formats": choices,
         "markdown": "\n".join(parts).strip() + "\n",
         # 哪几段是模型写的、哪几段是代码写的 —— 导出的文件自己说清楚（不假装）
         "why_source": why_source,

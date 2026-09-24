@@ -493,7 +493,9 @@ def build_report(
         "period_label": f"{current['start']} ~ {current['end']}",
         "comparison_type": comparison_type,
         "comparison_label": answer.comparison_label(comparison_type),
-        "filename": f"{title}-{current['start']}_{current['end']}.md",
+        # 文件名的**主干**（不带扩展名）：导出时可以出 Word / Excel / Markdown 三种，
+        # 扩展名由导出那一层按格式补（见 export_docs），这里只定"这份报告叫什么"。
+        "filename": f"{title}-{current['start']}至{current['end']}",
         "sections": [
             # 摘要是一段连着读的话（`style=paragraph`），不是一串要点
             {"key": "summary", "title": "摘要", "style": "paragraph", "lines": summary_lines},

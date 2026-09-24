@@ -841,7 +841,8 @@
       const save = document.createElement("button");
       save.className = "btn btn-sm";
       save.type = "button";
-      save.textContent = "下载 Markdown";
+      save.textContent = "下载报告";
+      save.title = "默认下载 Word；要 Excel 或 Markdown 就在报告面板上换";
       save.addEventListener("click", () => downloadConversationReport(item.conversation_id, save));
       row.appendChild(save);
 
@@ -857,8 +858,12 @@
       const record = await API.getConversation(conversationId);
       const doc = ((record || {}).answer || {}).export || null;
       if (!doc) throw new Error("这次问答没有可下载的报告");
-      downloadText(doc.filename, doc.markdown, doc.mime);
-      setText("wk-reports-hint", `已下载：${doc.filename}`);
+      // 默认格式由后端给（当前是 Word）—— 文件由后端按冻结的报告现渲染，
+      // 列表页这一个按钮不另做一套格式选择（要换格式去报告面板）
+      const format = doc.default_format || "docx";
+      const chosen = (doc.formats || []).find((item) => item.format === format) || {};
+      window.location.href = API.reportExportUrl(conversationId, format);
+      setText("wk-reports-hint", `已开始下载：${chosen.filename || doc.filename}`);
     } catch (err) {
       // 拿不到就说拿不到 —— 绝不从列表摘要拼一份"看起来像报告"的东西出来
       setText("wk-reports-hint", `下载失败：${(err && err.message) || err}`);
@@ -1264,11 +1269,10 @@
       return;
     }
     // 报告形态（TASK-010）：用户要的是**一份报告**，所以正文只出现一次 ——
-    // 下面是那份文档，页面上预览的与点「下载 Markdown」拿到的**是同一段文本**
-    // （不重新请求、不二次渲染，避免两个版本各说各话）。
+    // 下面是那份文档，页面上预览的与下载到的**是同一份报告**（同一套数字）。
     // 【为什么】/【建议行动】照旧按分区渲染；`what` 段的内容就是这份文档，跳过不重复印。
     const exportDoc = payload.export || null;
-    if (exportDoc) box.appendChild(reportPanel(exportDoc));
+    if (exportDoc) box.appendChild(reportPanel(exportDoc, payload.conversation_id));
     (payload.sections || []).forEach((section) => {
       if (exportDoc && section.key === "what") return;
       const wrap = document.createElement("div");
@@ -1297,11 +1301,19 @@
     });
   }
 
-  // 报告面板：标题 + 文件名 + 预览（原文）+ 下载。内容全部来自后端 `answer.export`
-  // （markdown 与 mime 也是后端给的 —— 前端不自己拼报告、不自己拼文件名）。
-  function reportPanel(doc) {
+  // 报告面板：标题 + 文件名 + 预览（原文）+ 下载。
+  // 内容**全部**来自后端 `answer.export`：文件名、可下载格式、预览文本都是后端给的 ——
+  // 前端不拼报告、不拼文件名、也不算数字。
+  //
+  // 下载格式：默认 Word（后端 `default_format` 说的），另有 Excel / Markdown。
+  // 三种文件都由**后端按同一份报告渲染**（页面上的数字 = 下到的文件里的数字），
+  // 前端只负责把"哪条记录 + 什么格式"拼进下载地址。
+  function reportPanel(doc, conversationId) {
     const wrap = document.createElement("div");
     wrap.className = "report";
+    const choices = doc.formats || [];
+    const pick = (format) => choices.find((item) => item.format === format) || {};
+    const chosen = () => pick(picker.value) || { format: picker.value, filename: doc.filename };
 
     const bar = document.createElement("div");
     bar.className = "report-bar";
@@ -1310,38 +1322,49 @@
     bar.appendChild(title);
     const file = document.createElement("span");
     file.className = "muted-sm";
-    file.textContent = doc.filename || "";
     bar.appendChild(file);
+
+    // 格式选择：选项与默认值都听后端的（前端不写死有哪几种格式）
+    const picker = document.createElement("select");
+    picker.className = "report-format";
+    picker.title = "选择下载格式";
+    choices.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.format;
+      option.textContent = item.label;
+      picker.appendChild(option);
+    });
+    picker.value = doc.default_format || (choices[0] || {}).format || "";
+    picker.addEventListener("change", () => { file.textContent = chosen().filename || ""; });
+    bar.appendChild(picker);
+
     const button = document.createElement("button");
     button.className = "btn btn-primary btn-sm";
     button.type = "button";
-    button.textContent = "下载 Markdown";
-    button.addEventListener("click", () => downloadText(doc.filename, doc.markdown, doc.mime));
+    button.textContent = "下载报告";
+    button.disabled = !conversationId;
+    const hint = document.createElement("p");
+    hint.className = "muted-sm report-hint";
+
+    button.addEventListener("click", () => {
+      const item = chosen();
+      // 下载走**后端现渲染**的真实文件（同一份报告 → 三种格式的数字一致）；
+      // 文件名由后端给，前端只是把名字提前显示出来
+      window.location.href = API.reportExportUrl(conversationId, item.format);
+      hint.textContent = `已开始下载：${item.filename || ""}`;
+    });
     bar.appendChild(button);
     wrap.appendChild(bar);
+    file.textContent = chosen().filename || doc.filename || "";
+
+    hint.textContent = "下面是文字版预览；下载 Word 或 Excel 会拿到同样的数字。";
+    wrap.appendChild(hint);
 
     const pre = document.createElement("pre");
     pre.className = "report-doc";
     pre.textContent = doc.markdown || "";
     wrap.appendChild(pre);
     return wrap;
-  }
-
-  // 下载：Blob + <a download>（零依赖、不引第三方库，也不新增后端端点 ——
-  // 下载的就是上面 <pre> 里那段文本）
-  function downloadText(filename, content, mime) {
-    const blob = new Blob([content || ""], { type: mime || "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename || "report.md";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    // 回收 blob：点完再放，别在 click() 之前就把 URL 撤了。
-    // 用微任务而不是定时器 —— 本次任务一结束就回收，不需要延时；
-    // `test_frontend_has_no_fake_shortcuts` 也禁止前端出现任何定时器字样（防"用延时假装在加载"）。
-    queueMicrotask(() => URL.revokeObjectURL(url));
   }
 
   function line(content, className) {

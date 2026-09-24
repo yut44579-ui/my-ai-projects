@@ -885,10 +885,17 @@ def test_AC09_新端点与既有端点并存():
     }
     assert stepa_paths <= paths
 
-    # 端点总清单**精确**钉死：TASK-004 许新增上面那 4 条、STEP A 许新增这 6 条，
-    # 其余路径（TASK-002C/002D 的 10 个 + TASK-003 的 4 个）必须原样还在。
+    # 报告导出格式那次新增的 1 条：把报告下载成 Word / Excel / Markdown。
+    # 内容现渲染（报告结构冻结在会话记录里），没有第二条计算路径、也没动旧端点。
+    export_paths = {
+        "/api/conversations/{conversation_id}/report/export",
+    }
+    assert export_paths <= paths
+
+    # 端点总清单**精确**钉死：TASK-004 许新增上面那 4 条、STEP A 许新增这 6 条、
+    # 报告导出许新增这 1 条，其余路径（TASK-002C/002D 的 10 个 + TASK-003 的 4 个）必须原样还在。
     # 用集合相等而不是"包含若干条"：新增一条没申报的路径也会在这里被抓住。
-    assert paths - new_paths - stepa_paths == {
+    assert paths - new_paths - stepa_paths - export_paths == {
         "/api/upload", "/api/schema", "/api/execute", "/api/download/{execution_id}",
         "/api/executions", "/api/health",
         "/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/run",

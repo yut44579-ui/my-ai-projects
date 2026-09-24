@@ -947,3 +947,14 @@ body.is-locked { overflow: hidden; }
   /* 最窄才收名字：再挤也留着状态点（hover 有说明） */
   .user-name { display: none; }
 }
+
+/* 报告面板的格式选择（Word / Excel / Markdown）与下载提示
+   —— 选项由后端给（前端不写死有哪几种格式），这里只管它长什么样 */
+.report-bar select.report-format {
+  flex: none; height: var(--td-compact-height); padding: 0 6px;
+  background: var(--bg-inset); color: var(--text-1); font-size: 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-ctrl); outline: none;
+}
+.report-bar select.report-format:hover { border-color: var(--border-strong); }
+.report-bar select.report-format:focus { border-color: var(--td-brand-color); }
+.report-hint { margin: 0; padding: 8px 12px 0; }

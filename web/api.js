@@ -201,6 +201,11 @@ const API = (() => {
     })),
     listConversations: (params) => request(`/api/conversations${query(params)}`),
     getConversation: (id) => request(`/api/conversations/${encodeURIComponent(id)}`),
+    // 报告下载：文件由后端按格式**现渲染**（Word / Excel / Markdown，数字与页面同源）。
+    // 这里只说"哪条记录 + 什么格式"，文件名与内容类型一律由后端给 —— 前端不拼文件名。
+    reportExportUrl: (id, format) => (
+      `/api/conversations/${encodeURIComponent(id)}/report/export${query({ format })}`
+    ),
 
     // ── 数据源 / 业务表 / 导入 / 导出（STEP A）─────────────────────────
     // 分页、排序、筛选、聚合、导出**全部由后端算**：这里只把用户的查询条件原样传过去，

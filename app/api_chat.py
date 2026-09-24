@@ -7,6 +7,7 @@
     POST /api/chat                  提问 → 一整条链路（问题/Intent/工具/事实/回答）
     GET  /api/conversations         历史提问列表（精简摘要，分页）
     GET  /api/conversations/{id}    单次问答的完整记录（刷新页面后靠它恢复）
+    GET  /api/conversations/{id}/report/export  下载这份报告（Word / Excel / Markdown）
 
 ════════════════════════════════════════════════════════════════════════
 【为什么又是独立文件 + 只往 api.py 加两行】
@@ -27,11 +28,14 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import state
+from app.ai import answer as answer_module, export_docs
 from app.ai import intent as intent_module, llm, service, tools
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -133,9 +137,15 @@ def chat_capabilities() -> dict:
                     ("monthly", "销售月报", "按最近一个完整自然月出一份报告（月环比 + 逐周趋势 + 国家/商品结构）"),
                 )
             ],
-            "export": "markdown",
+            # 可下载的格式：**默认 Word**（文档形态、双击能打开），另有 Excel / Markdown。
+            # 前端只读这份清单来渲染格式选择，不自己写死扩展名或文件类型。
+            "export": export_docs.DEFAULT_FORMAT,
+            "export_formats": [
+                {"format": item["format"], "label": item["label"]}
+                for item in export_docs.format_choices("")
+            ],
             "note": "报告里的数字与上面五类问答**同一套计算**（不存在第二套口径）；"
-                    "报告可预览、可下载 Markdown。",
+                    "报告可预览，也能下载成 Word / Excel / Markdown，三种格式的数字完全一致。",
         },
         "examples": [
             "2011年11月一共卖了多少？",
@@ -196,3 +206,76 @@ def get_conversation(conversation_id: str) -> dict:
     if record is None:
         raise ChatApiError(404, "conversation_not_found", f"没有这次问答记录：{conversation_id}")
     return record
+
+
+# ── 4. 下载报告（Word / Excel / Markdown）──────────────────────────────
+def _content_disposition(filename: str, ascii_name: str) -> str:
+    """中文文件名要按 RFC 5987 编码（`filename*=UTF-8''…`），另附一个纯 ASCII 兜底。
+
+    为什么两个都给：`filename` 走 RFC 2616 的写法，老客户端认它；`filename*` 是现代浏览器
+    实际用的那个（中文名才能正确落地）。只给后者，极老的下载器会拿到空名字。
+    """
+    quoted = quote(filename, safe="")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quoted}"
+
+
+@router.get(
+    "/conversations/{conversation_id}/report/export",
+    responses={404: {"description": "conversation_id 不存在（conversation_not_found）"},
+               400: {"description": "这次问答没有报告 / 格式不支持"}},
+    summary="下载这份报告（Word / Excel / Markdown，三种格式数字一致）",
+)
+def export_report(
+    conversation_id: str,
+    fmt: str = Query(default=export_docs.DEFAULT_FORMAT, alias="format",
+                     description="docx / xlsx / md"),
+) -> Response:
+    """把这次问答出的报告渲染成真文件发回去。
+
+    内容**现取现渲染**：报告结构在回答时就冻结在会话记录里（`report_document`），
+    这里只是把它排成 Word / Excel / Markdown —— 不重新算数，也不重新问模型，
+    所以下载到的数字与页面上看到的逐位相同。
+    """
+    record = state.get_conversation(conversation_id)
+    if record is None:
+        raise ChatApiError(404, "conversation_not_found", f"没有这次问答记录：{conversation_id}")
+    report = record.get("report_document")
+    if not report:
+        raise ChatApiError(
+            400, "report_not_available",
+            "这次问答没有出报告 —— 只有周报 / 月报那类问题才有可下载的文件。",
+        )
+    if fmt not in export_docs.FORMATS:
+        raise ChatApiError(
+            400, "report_format_unknown",
+            f"不支持的格式：{fmt}（可用：{' / '.join(export_docs.FORMAT_ORDER)}）",
+        )
+
+    answer = record.get("answer") or {}
+    sections = {item.get("key"): item for item in answer.get("sections") or []}
+    stored = answer.get("export") or {}
+    why_text = (sections.get("why") or {}).get("text", "")
+    actions_text = (sections.get("actions") or {}).get("text", "")
+    profile = record.get("data_profile") or {}
+    markdown = stored.get("markdown") or ""
+    if not markdown:                       # 老记录没存 markdown 时现拼一份，走**同一条**拼接逻辑
+        markdown = answer_module.build_report_export(
+            report, why_text=why_text, actions_text=actions_text,
+            why_source=stored.get("why_source") or "code",
+            actions_source=stored.get("actions_source") or "code",
+            profile=profile,
+        )["markdown"]
+
+    content, filename, mime = export_docs.render_report(
+        report, fmt,
+        why_text=why_text, actions_text=actions_text, profile=profile, markdown=markdown,
+    )
+    # 中文文件名之外再给一个纯 ASCII 兜底名（老下载器认 filename= 那个字段）
+    span = str(report.get("period_label") or "").replace(" ~ ", "_").replace("~", "_")
+    extension = export_docs.FORMATS[fmt]["ext"]
+    ascii_name = f"sales-report-{span}.{extension}" if span else f"sales-report.{extension}"
+    return Response(
+        content=content,
+        media_type=mime,
+        headers={"Content-Disposition": _content_disposition(filename, ascii_name)},
+    )

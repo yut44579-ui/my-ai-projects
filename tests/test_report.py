@@ -154,7 +154,12 @@ def test_T010_能力端点的intents不增项_报告单列():
     periods = {item["key"]: item for item in body["report"]["periods"]}
     assert set(periods) == {"weekly", "monthly"}
     assert periods["weekly"]["title"] == "销售周报"
-    assert body["report"]["export"] == "markdown"
+    # 2026-09-24 用户实测：默认下 .md 在 Windows 上双击打不开（体感"下载不了"），
+    # 默认格式改成 Word；能力清单里把三种格式都摆出来，前端照着渲染格式选择。
+    assert body["report"]["export"] == "docx"
+    assert [item["label"] for item in body["report"]["export_formats"]] == [
+        "Word 文档", "Excel 工作簿", "Markdown 文本",
+    ]
 
 
 @pytest.mark.parametrize("question,expected", [
@@ -359,8 +364,11 @@ def test_T010_文档分区齐全且标题带区间(no_llm):
                                    f"{record['facts']['current_period']['end']}")
     keys = [section["key"] for section in doc["sections"]]
     assert keys == list(REQUIRED_SECTIONS)
-    assert doc["filename"].endswith(".md")
-    assert record["facts"]["current_period"]["start"] in doc["filename"]
+    # 文件名的**主干**不带扩展名（导出时按格式补 .docx / .xlsx / .md，见 export_docs）；
+    # 区间用「至」连接 —— 这是要发出去的文档名，不是内部文件名。
+    assert "." not in doc["filename"]
+    assert doc["filename"] == (f"销售周报-{record['facts']['current_period']['start']}"
+                               f"至{record['facts']['current_period']['end']}")
 
     by_key = {section["key"]: section for section in doc["sections"]}
     # 摘要：3~5 句，且是一段连着读的话
@@ -437,8 +445,12 @@ def test_T010_导出的markdown含七个必需分区与结论建议(no_llm):
     record = _ask(WEEKLY_QUESTION)
     export = record["answer"]["export"]
     assert export is not None
-    assert export["mime"] == "text/markdown;charset=utf-8"
-    assert export["filename"] == record["report_document"]["filename"]
+    # 默认格式是 Word（文件名带 .docx）；Markdown 仍在可选格式里，mime 照旧
+    assert export["default_format"] == "docx"
+    assert export["mime"] == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    assert export["filename"] == record["report_document"]["filename"] + ".docx"
+    markdown_choice = next(item for item in export["formats"] if item["format"] == "md")
+    assert markdown_choice["mime"] == "text/markdown;charset=utf-8"
     md = export["markdown"]
 
     assert md.startswith(f"# 销售周报 · {record['report_document']['period_label']}")
@@ -662,9 +674,11 @@ def test_T010_前端有报告预览与下载():
     app_js = _web("app.js")
     assert 'const REPORT_TOOL = "sales_report"' in app_js      # 与后端同一处常量值
     assert "function reportPanel(" in app_js
-    assert "function downloadText(" in app_js
-    assert "下载 Markdown" in app_js
-    assert "URL.createObjectURL" in app_js and "link.download" in app_js
+    # 下载：格式清单与默认值都来自后端（doc.formats / doc.default_format），
+    # 文件由后端现渲染（Word / Excel / Markdown 三种），前端只拼"哪条记录 + 什么格式"
+    assert "report-format" in app_js and "下载报告" in app_js
+    assert "API.reportExportUrl(" in app_js
+    assert "doc.default_format" in app_js and "doc.formats" in app_js
     # 报告形态下不重复印一遍正文（what 段就是那份文档）
     assert 'section.key === "what"' in app_js
     # 前端不自己拼文件名/内容：一律取后端给的 export
@@ -692,9 +706,9 @@ def test_T010_前端报告样式只用既有token():
     css = _web("style.css")
     assert ".report-doc" in css and ".report-bar" in css
     assert "var(--td-radius-default)" in css
-    # 不引 CDN / 不引第三方库（前端零依赖是既定约束）：下载走本地 Blob、不跳外链
+    # 不引 CDN / 不引第三方库（前端零依赖是既定约束）：下载走同源端点，不跳外链
     assert "cdn." not in css and "cdn." not in _web("app.js")
-    assert "createObjectURL" in _web("app.js") and "link.download" in _web("app.js")
+    assert ".report-format" in css and ".report-hint" in css
     assert 'href="http' not in _web("index.html") and "cdn." not in _web("index.html")
 
 
