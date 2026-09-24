@@ -13,6 +13,100 @@
 </head>
 <body>
 
+<!-- ═══ 登录页 ═══════════════════════════════════════════════════════
+     打开页面先看到它；登录成功后收起来，刷新靠本机记录保持登录态，
+     退出登录再回来。左边是这套系统能干什么，右边是两个入口：账号登录 / 游客登录。
+     页面上的数字（交易行数 / 客户编号数 / 国家地区数）都从当前数据源读出来，
+     不写死在页面里 —— 换数据源它们会跟着变。 -->
+<div class="login-gate" id="login-gate" hidden>
+  <div class="login-shell">
+    <section class="login-brand">
+      <div class="brand">
+        <div class="brand-logo">SR</div>
+        <div class="brand-text">
+          <div class="brand-title">销售报表 Agent</div>
+          <div class="brand-sub">说一句话，报表自己出来</div>
+        </div>
+      </div>
+      <h2 class="login-headline">用大白话提问，销售数字自己算出来</h2>
+      <p class="login-lede">
+        不用背公式、不用记口径。问一句「上个月卖了多少」，系统按同一套口径把数算给你，
+        配上解读，也能导出成 Excel 带走。
+      </p>
+      <ul class="login-caps">
+        <li>自然语言问答</li>
+        <li>销售 · 客户 · 产品</li>
+        <li>一键周报</li>
+        <li>Excel · CSV 导入导出</li>
+      </ul>
+      <div class="login-facts" id="login-facts" hidden>
+        <div class="fact"><b id="fact-rows">—</b><span>交易行数</span></div>
+        <div class="fact"><b id="fact-customers">—</b><span>客户编号数</span></div>
+        <div class="fact"><b id="fact-countries">—</b><span>国家 / 地区数</span></div>
+      </div>
+      <p class="login-facts-note" id="login-facts-note">正在读取当前数据源…</p>
+    </section>
+
+    <section class="card login-card">
+      <h3 class="login-title" id="login-title">欢迎回来 👋</h3>
+      <p class="login-sub" id="login-sub">填个名字就能进，随时可以退出</p>
+
+      <div class="login-tabs">
+        <button class="login-tab is-on" id="ltab-account" type="button">账号登录</button>
+        <button class="login-tab" id="ltab-guest" type="button">游客登录</button>
+      </div>
+
+      <form class="login-form" id="login-form" novalidate>
+        <div class="field">
+          <label class="field-label" for="login-name">姓名</label>
+          <input id="login-name" type="text" maxlength="20" autocomplete="username"
+                 placeholder="2~20 个字，填个你习惯的称呼">
+          <p class="field-msg" id="login-name-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="login-pwd">密码</label>
+          <div class="pwd-wrap">
+            <input id="login-pwd" type="password" autocomplete="current-password" placeholder="至少 6 位">
+            <button class="pwd-eye" id="btn-pwd-eye" type="button" aria-pressed="false">显示</button>
+          </div>
+          <p class="field-msg" id="login-pwd-msg" hidden></p>
+        </div>
+        <div class="login-row">
+          <label class="check"><input type="checkbox" id="login-remember"> 记住我（只记名字，不记密码）</label>
+          <button class="link-btn" id="link-forgot" type="button">忘记密码？</button>
+        </div>
+        <button class="btn btn-primary login-submit" id="btn-login" type="submit">
+          <span class="spinner" id="login-spinner" hidden></span>
+          <span>进入系统</span>
+        </button>
+      </form>
+
+      <div class="login-form" id="guest-pane" hidden>
+        <p class="guest-lede">不用填任何信息，本机给你随机取个名字，直接进来看看。</p>
+        <div class="guest-name" id="guest-name">游客xxxxx</div>
+        <button class="btn btn-primary login-submit" id="btn-guest" type="button">
+          <span class="spinner" id="guest-spinner" hidden></span>
+          <span>以游客身份进入</span>
+        </button>
+        <p class="login-hint">这个名字是本机随机取的，只用于展示与记录，退出后再进来会换一个新的。</p>
+      </div>
+
+      <p class="login-note">
+        本地模式：名字只用于展示与记录，密码只检查长短，本机不保存、不比对。
+      </p>
+      <div class="login-foot">
+        <button class="link-btn" id="link-register" type="button">立即注册</button>
+        <span class="login-foot-sep">·</span>
+        <button class="link-btn" id="link-help" type="button">帮助</button>
+        <span class="login-foot-sep">·</span>
+        <button class="link-btn" id="link-privacy" type="button">隐私</button>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
 <div class="app">
 
   <!-- ═══ 顶栏 60px ═══════════════════════════════════════════════════
@@ -53,9 +147,37 @@
         <div class="menu-sep"></div>
         <button class="menu-item" id="menu-item-notify" title="通知：暂未提供">通知（暂未提供）</button>
       </div>
-      <div class="user-area" title="当前用户">
-        <div class="avatar" id="avatar">本</div>
-        <span class="user-name">本地用户</span>
+      <!-- 用户区：头像（名字首字）+ 名字 + 状态点 + 状态文字，点一下出用户菜单。
+           名字来源是登录时填的那个；状态是本机状态（在线/忙碌中/离开/离线），
+           由登录、分析请求、长时间没操作、退出这几个**真实动作**驱动。 -->
+      <div class="user-area">
+        <button class="user-btn" id="btn-user" aria-haspopup="true" aria-expanded="false" title="账号与状态">
+          <span class="avatar" id="avatar">未</span>
+          <span class="user-name" id="user-name">未登录</span>
+          <span class="user-status" id="user-status">
+            <span class="dot st-offline" id="user-dot"></span>
+            <span class="user-status-text" id="user-status-text">离线</span>
+          </span>
+        </button>
+        <div class="menu user-menu" id="user-menu" hidden>
+          <div class="user-menu-head">
+            <div class="user-menu-name" id="um-name">未登录</div>
+            <div class="user-menu-kind" id="um-kind">还没进来</div>
+          </div>
+          <div class="menu-sep"></div>
+          <div class="user-menu-label">我的状态</div>
+          <button class="menu-item um-status" id="um-status-online" role="menuitemradio" aria-checked="false">
+            <span class="dot st-online"></span>在线</button>
+          <button class="menu-item um-status" id="um-status-busy" role="menuitemradio" aria-checked="false">
+            <span class="dot st-busy"></span>忙碌中</button>
+          <button class="menu-item um-status" id="um-status-away" role="menuitemradio" aria-checked="false">
+            <span class="dot st-away"></span>离开</button>
+          <button class="menu-item um-status" id="um-status-offline" role="menuitemradio" aria-checked="false">
+            <span class="dot st-offline"></span>离线</button>
+          <div class="menu-sep"></div>
+          <button class="menu-item" id="um-settings">个人设置</button>
+          <button class="menu-item" id="um-logout">退出登录</button>
+        </div>
       </div>
     </div>
   </header>
@@ -633,10 +755,10 @@
         </div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>企业化能力（尚未启用）</h2></div>
-        <div class="switch-row"><span>用户与权限</span><button class="switch" id="sec-rbac" disabled>未启用</button></div>
-        <div class="switch-row"><span>访问控制</span><button class="switch" id="sec-acl" disabled>未启用</button></div>
-        <div class="switch-row"><span>服务熔断</span><button class="switch" id="sec-circuit" disabled>未启用</button></div>
+        <div class="card-head"><h2>企业化能力（尚未开通）</h2></div>
+        <div class="switch-row"><span>用户与权限</span><button class="switch" id="sec-rbac" disabled>尚未开通</button></div>
+        <div class="switch-row"><span>访问控制</span><button class="switch" id="sec-acl" disabled>尚未开通</button></div>
+        <div class="switch-row"><span>服务保护</span><button class="switch" id="sec-circuit" disabled>尚未开通</button></div>
         <p class="note">这三项能力尚未实现，开关保持禁用；界面不会显示任何不实的状态。</p>
       </div>
     </section>
@@ -664,24 +786,24 @@
       <div class="tabs" id="rp-tabs">
         <button class="tab" id="rp-tab-perm" data-pane="rp-pane-perm">用户</button>
         <button class="tab" id="rp-tab-security" data-pane="rp-pane-security">安全</button>
-        <button class="tab" id="rp-tab-circuit" data-pane="rp-pane-circuit">熔断</button>
+        <button class="tab" id="rp-tab-circuit" data-pane="rp-pane-circuit">服务保护</button>
         <button class="tab" id="rp-tab-status" data-pane="rp-pane-status">系统状态</button>
       </div>
 
       <div class="pane" id="rp-pane-perm">
-        <div class="kv"><span>当前用户</span><b>本地用户</b></div>
-        <div class="kv"><span>使用方式</span><b>单人使用</b></div>
-        <p class="note">当前版本不校验登录身份；用户与权限会在后续版本提供。</p>
+        <div class="kv"><span>当前用户</span><b id="rp-user-name">未登录</b></div>
+        <div class="kv"><span>身份来源</span><b id="rp-user-kind">—</b></div>
+        <p class="note">本地模式：名字只用于展示与记录，退出登录即清。</p>
       </div>
 
       <div class="pane" id="rp-pane-security" hidden>
-        <div class="kv"><span>访问控制</span><b class="warn">未启用</b></div>
         <div class="kv"><span>数据源校验</span><b class="ok" id="rp-snapshot">读取中…</b></div>
-        <p class="note">每次分析前都会核对数据源与登记时一致（没被改过）；访问控制尚未提供。</p>
+        <p class="note">每次分析前都会核对数据源与登记时一致（没被改过）。</p>
       </div>
 
       <div class="pane" id="rp-pane-circuit" hidden>
-        <div class="kv"><span>服务熔断</span><b class="warn">未启用</b></div>
+        <div class="kv"><span>服务保护</span><b class="warn">尚未开通</b></div>
+        <p class="note">服务出问题时的自动保护还没做；现在遇到问题会把原因如实报出来，不悄悄跳过。</p>
       </div>
 
       <div class="pane" id="rp-pane-status" hidden>
@@ -694,6 +816,9 @@
 
 </div>
 
+<!-- session.js 必须排在 app.js 之前：先决定"要不要先给登录页"，
+     再让 app.js 去读后端数据（未登录时 app.js 的初始化会被挂住，不会白读一遍）。 -->
+<script src="/session.js"></script>
 <script src="/api.js"></script>
 <script src="/app.js"></script>
 </body>

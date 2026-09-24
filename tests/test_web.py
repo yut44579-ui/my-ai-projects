@@ -144,7 +144,7 @@ def strip_comments(source: str) -> str:
 
 def test_frontend_dir_exists() -> None:
     assert (WEB_DIR / "index.html").is_file(), "web/index.html 不存在"
-    for name in ("app.js", "api.js", "style.css"):
+    for name in ("app.js", "api.js", "session.js", "style.css"):
         assert (WEB_DIR / name).is_file(), f"web/{name} 不存在"
 
 
@@ -170,6 +170,7 @@ def test_static_assets_served() -> None:
     expectations = {
         "/app.js": ("javascript", "DOMContentLoaded"),
         "/api.js": ("javascript", "class ApiError"),
+        "/session.js": ("javascript", "requireLogin"),
         "/style.css": ("css", "--bg-page"),
     }
     for path, (kind, marker) in expectations.items():
@@ -320,9 +321,8 @@ def test_界面不渲染技术细节_后端字段照旧() -> None:
     所以先把注释剥掉再查 —— 后端字段一个都没删（那些由 tests/test_chat.py 钉着）。
     """
     html, js = strip_comments(read("index.html")), strip_comments(read("app.js"))
-    for text, name in ((html, "index.html"), (js, "app.js")):
+    for text, name in ((html, "index.html"), (js, "app.js"), (strip_comments(read("session.js")), "session.js")):
         # 「白名单」是**企业安全术语**（访问控制白/黑名单，一条尚未启用的能力说明），
-        # 不是实现细节，界面上保留；「JSON」同理（Spec 查看器的数据格式不是给用户看的机制说明，
         # 但它在 数据管理 页是产品自己的产物）。这里只钉真正刺眼的三类。
         for banned in ("TASK-0", "/api/", "数字闸门", "Intent"):
             assert banned not in text, f"{name} 里还有技术细节：{banned}"
@@ -352,7 +352,7 @@ def test_page_has_no_external_dependency() -> None:
 
 
 def test_frontend_has_no_fake_shortcuts() -> None:
-    for name in ("app.js", "api.js", "index.html", "style.css"):
+    for name in ("app.js", "api.js", "session.js", "index.html", "style.css"):
         body = read(name)
         for marker in FORBIDDEN_IN_FRONTEND:
             assert marker not in body, f"{name} 里出现禁止的造假特征：{marker!r}"
@@ -431,15 +431,17 @@ def test_metric_catalog_comes_from_backend() -> None:
 # DOM id 交叉检查（没有浏览器时，对"一打开就 null 崩"最有效的静态检查）
 # ════════════════════════════════════════════════════════════════════════
 # 结构性 id：由 JS **运行时拼接**或由 CSS/SVG 内部引用，本来就不该出现在字符串字面量里
-STRUCTURAL_ID_PREFIXES = ("page-", "nav-", "rp-pane-")
+# （`um-status-*` = 用户菜单里那四个状态项，session.js 用 `um-status-${状态名}` 拼出来）
+STRUCTURAL_ID_PREFIXES = ("page-", "nav-", "rp-pane-", "um-status-")
 STRUCTURAL_IDS = {"trend-fill"}
 
 
 def test_every_dom_id_used_by_js_exists_in_html() -> None:
     html_ids = set(re.findall(r'id="([^"]+)"', read("index.html")))
     used = set(re.findall(r'\$\("([^"]+)"\)', read("app.js")))
+    used |= set(re.findall(r'\$\("([^"]+)"\)', read("session.js")))
     missing = sorted(used - html_ids)
-    assert not missing, f"app.js 用了 index.html 里不存在的 id：{missing}"
+    assert not missing, f"页面逻辑用了 index.html 里不存在的 id：{missing}"
 
 
 def test_no_static_ornament_ids_in_html() -> None:
@@ -449,7 +451,7 @@ def test_no_static_ornament_ids_in_html() -> None:
       trend-fill 是 SVG 渐变，由 url(#trend-fill) 引用。）
     """
     html_ids = set(re.findall(r'id="([^"]+)"', read("index.html")))
-    js = read("app.js")
+    js = read("app.js") + read("session.js")
     referenced = set(re.findall(r'"([A-Za-z][A-Za-z0-9_-]*)"', js))
     referenced |= set(re.findall(r"'([A-Za-z][A-Za-z0-9_-]*)'", js))
     unused = sorted(
@@ -590,7 +592,7 @@ def test_STEPA_页面不出现技术实现信息() -> None:
     `file_id` 是后端字段名（属性访问），也不渲染，所以这里钉的是**渲染出来的标签**。
     """
     html, js = strip_comments(read("index.html")), strip_comments(read("app.js"))
-    for text, name in ((html, "index.html"), (js, "app.js")):
+    for text, name in ((html, "index.html"), (js, "app.js"), (strip_comments(read("session.js")), "session.js")):
         for banned in ("TASK-", "/api/", "sha256", "哈希", "stored_path",
                        "数字闸门", "白名单", "Repository", "Executor", "pytest"):
             assert banned not in text, f"{name} 里还有技术实现信息：{banned}"

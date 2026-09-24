@@ -141,7 +141,7 @@ const API = (() => {
       const names = matched
         ? matched[1].split(",").map((part) => part.trim().replace(/^['"]|['"]$/g, "")).filter(Boolean)
         : [];
-      if (names.length) return { names, source: "openapi" };
+      if (names.length) return { names, source: "backend" };
     } catch (err) {
       // 读不到就走兜底（下面统一标注），不把页面搞挂
     }

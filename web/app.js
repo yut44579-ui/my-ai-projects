@@ -1142,7 +1142,9 @@
     );
 
     try {
-      state.chat = await API.chat(asked);
+      // 用户状态里的「忙碌中」就绑在这里 —— 这是**真实请求的生命周期**：
+      // 请求发出→忙碌中，响应回来（成功或失败）→回到在线。不是前端自己设个状态糊上去。
+      state.chat = await Session.trackRequest(API.chat(asked));
     } catch (err) {
       // 这一支是**请求本身**失败（网络/HTTP），与"后端答不了这个问题"（记录里的 status）分开
       state.chatError = err;
@@ -1517,7 +1519,8 @@
     goWithMenu("menu-item-settings", () => goto("settings"));
     const notify = $("menu-item-notify");
     if (notify) notify.disabled = true;
-    $("avatar").addEventListener("click", () => goto("settings"));
+    // 用户区（头像 + 名字 + 状态）的点击归 session.js 管：点开的是用户菜单，
+    // 不再是"跳系统设置" —— 那里既看不到名字也改不了状态。
   }
 
   function scrollToChatHistory() {
@@ -1725,7 +1728,7 @@
       label.appendChild(document.createTextNode(metricLabel(name)));
       box.appendChild(label);
     });
-    setText("metrics-source", catalog.source === "openapi"
+    setText("metrics-source", catalog.source === "backend"
       ? "（清单已同步）"
       : "（本次未同步到清单，显示的是内置清单）");
     updateCreatePrecondition();
@@ -1748,9 +1751,9 @@
     renderNlNote();
     // 三个企业化开关：禁用的原因是"能力还没做"，把归口 TASK 写在 title 上（不摆假的状态标签）
     const switches = [
-      ["sec-rbac", "用户与权限（RBAC）尚未实现"],
-      ["sec-acl", "访问控制白 / 黑名单尚未实现"],
-      ["sec-circuit", "熔断机制尚未实现"],
+      ["sec-rbac", "用户与权限尚未实现：现在只有「单人使用」这一种用法"],
+      ["sec-acl", "按名单放行 / 拦截访问尚未实现"],
+      ["sec-circuit", "服务出问题时的自动保护尚未实现"],
     ];
     switches.forEach(([id, hint]) => {
       const el = $(id);
@@ -2591,9 +2594,13 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
-    init().catch((err) => {
-      errorBanner(err);
-      status("upload-state", `初始化失败：${err.message}`, "error");
+    // 先过登录页：没进来之前**不读任何后端数据**（读了也没人看，白等一轮）。
+    // 登录成功后 session.js 会把这段回调放行，走的是**同一个** init()。
+    Session.requireLogin(() => {
+      init().catch((err) => {
+        errorBanner(err);
+        status("upload-state", `初始化失败：${err.message}`, "error");
+      });
     });
   });
 })();

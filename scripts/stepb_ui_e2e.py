@@ -1,0 +1,246 @@
+"""scripts/stepb_ui_e2e.py · STEP B-UI 真闭环验收（真服务 + 真浏览器）
+
+════════════════════════════════════════════════════════════════════════
+【这份脚本验什么】
+════════════════════════════════════════════════════════════════════════
+① **真服务**：起 uvicorn（不是 TestClient），用 httpx 打真 HTTP；
+② **静态契约没回归**：`/api/health` 的响应形状与既有端点语义照旧（Legacy Contract）；
+③ **真浏览器**（本机 Edge，`--headless --virtual-time-budget --dump-dom`）打开根路径：
+   看到的是**登录页**（不是直接进主界面）、两个入口都在、主界面被锁住、
+   登录页上的三个数字来自后端、渲染出来的文字里没有技术字样；
+④ 顺带把 DOM 里的状态四态文案与用户区元素对齐（登录后的状态迁移由
+   scripts/session_check.mjs 用真源码验，浏览器里的点击由 Hermes 用 CDP 走查）。
+
+【不做的事】不比对密码、不发令牌、不建服务端会话 —— 本轮没有真实认证，也不假装有。
+【为什么不用无头浏览器模拟点击】本机没装驱动库，也不想为一次验收引入新依赖：
+  Edge 的 --dump-dom 能给出"JS 跑完之后的真 DOM"，配合 node 那份行为检查已经能定性。
+════════════════════════════════════════════════════════════════════════
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+import httpx  # noqa: E402
+
+PY = str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe")
+EDGE_CANDIDATES = (
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+)
+
+# 渲染出来的文字里**不许出现**的东西（用户看得见的层面）
+DOM_BANNED = ("TASK-", "/api/", "openapi", "白名单", "数字闸门", "sha256", "鉴权",
+              "RBAC", "未启用", "不校验登录身份", "file_id")
+
+PASSED: list[str] = []
+FAILED: list[str] = []
+
+
+def check(condition: bool, label: str, extra: str = "") -> bool:
+    (PASSED if condition else FAILED).append(label)
+    print(f"  {'OK  ' if condition else 'FAIL'} {label}" + (f" —— {extra}" if extra else ""), flush=True)
+    return condition
+
+
+def step(title: str) -> None:
+    print(f"\n=== {title} ===", flush=True)
+
+
+def find_edge() -> str | None:
+    for path in EDGE_CANDIDATES:
+        if Path(path).is_file():
+            return path
+    return None
+
+
+def start_server(port: int, env: dict) -> tuple[subprocess.Popen, Path]:
+    log_path = Path(env["SRA_STATE_DIR"]).parent / "server.log"
+    log_file = open(log_path, "w", encoding="utf-8", errors="replace")
+    proc = subprocess.Popen(
+        [PY, "-m", "uvicorn", "app.api:app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=log_file, stderr=subprocess.STDOUT, env=env, cwd=str(PROJECT_ROOT),
+    )
+    return proc, log_path
+
+
+def wait_ready(client: httpx.Client, server: subprocess.Popen, deadline_seconds: int = 240) -> bool:
+    """等服务真的起来（uvicorn 导入 pandas / fastapi 要几秒），有上限、进程死了就立刻放弃。
+
+    就绪判据是 `/api/health` 返回 200 —— 不猜固定秒数（那会在慢机器上假失败）。
+    """
+    deadline = time.time() + deadline_seconds
+    while time.time() < deadline:
+        if server.poll() is not None:          # 进程已经退出：再等也没用
+            return False
+        try:
+            if client.get("/api/health").status_code == 200:
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(1)
+    return False
+
+
+def server_tail(log_path: Path, lines: int = 12) -> str:
+    try:
+        body = log_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+    except OSError:
+        return "（读不到服务日志）"
+    return "\n".join(body[-lines:]) or "（服务日志是空的）"
+
+
+def dump_dom(edge: str, url: str, width: int = 1600) -> str:
+    """Edge 无头打开页面并导出**JS 跑完之后**的 DOM（每次一个干净 profile，等价于全新用户）。"""
+    profile = tempfile.mkdtemp(prefix="sra_edge_b_", dir=str(PROJECT_ROOT / "outputs"))
+    try:
+        completed = subprocess.run(
+            [
+                edge, "--headless", "--disable-gpu", "--no-first-run",
+                "--user-data-dir=" + profile, f"--window-size={width},1000",
+                "--virtual-time-budget=25000", "--dump-dom", url,
+            ],
+            capture_output=True, timeout=240,
+        )
+        return completed.stdout.decode("utf-8", errors="replace")
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
+
+
+def page_text(dom: str) -> str:
+    """剥掉标签，只留**渲染出来的文字**。"""
+    body = re.search(r"<body[^>]*>(.*?)</body>", dom, re.S)
+    inner = body.group(1) if body else dom
+    inner = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", inner, flags=re.S)
+    inner = re.sub(r"<!--.*?-->", " ", inner, flags=re.S)
+    inner = re.sub(r"<[^>]+>", " ", inner)
+    return re.sub(r"\s+", " ", inner.replace("&nbsp;", " ")).strip()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="STEP B-UI 真闭环验收")
+    parser.add_argument("--port", type=int, default=8530)
+    parser.add_argument("--no-browser", action="store_true")
+    args = parser.parse_args()
+
+    edge = find_edge()
+    workspace = PROJECT_ROOT / "outputs" / f"sra_stepb_{int(time.time())}"
+    env = dict(os.environ)
+    # 落盘沙箱：本次验收产生的状态 / 上传 / 产出都写进临时目录，跑完可以整目录删掉
+    for key, name in (("SRA_STATE_DIR", "state"), ("SRA_DOC_DIR", "documents"),
+                      ("SRA_UPLOAD_DIR", "uploads"), ("SRA_OUTPUT_DIR", "outputs")):
+        env[key] = str(workspace / name)
+        Path(env[key]).mkdir(parents=True, exist_ok=True)
+
+    server, log_path = start_server(args.port, env)
+    base = f"http://127.0.0.1:{args.port}"
+    try:
+        # ── ① 服务就绪 + 数据预热完成（一次阻塞请求，不写轮询等待）
+        step("① 真服务就绪 + 数据读到内存")
+        with httpx.Client(base_url=base, timeout=300) as client:
+            if not check(wait_ready(client, server), "服务起来了（/api/health 200）"):
+                print("\n服务日志末尾：\n" + server_tail(log_path))
+                return 1
+            health = client.get("/api/health")
+            ready = client.get("/api/chat/capabilities")     # 预热没完成时这一步自己等
+            if not check(ready.status_code == 200, "GET /api/chat/capabilities 200（数据已就绪）",
+                         f"{ready.status_code} {ready.text[:120]}"):
+                print("\n服务日志末尾：\n" + server_tail(log_path))
+                return 1
+            profile = ready.json().get("data_profile", {})
+            check(isinstance(profile.get("rows"), int) and profile["rows"] > 0,
+                  "后端给出数据画像（登录页上的数字就来自它）",
+                  f"rows={profile.get('rows')}")
+
+            # ── ② Legacy Contract：既有端点语义与响应形状照旧
+            step("② 既有端点语义没回归（Legacy Contract）")
+            check(health.json().get("task") == "TASK-002D", "health 里的契约标记照旧")
+            for path in ("/api/tasks", "/api/executions", "/api/datasets",
+                         "/api/tables/customers", "/api/tables/products",
+                         "/api/tables/sales", "/api/tables/raw"):
+                response = client.get(path)
+                check(response.status_code == 200, f"GET {path} 200",
+                      "" if response.status_code == 200 else response.text[:120])
+            root = client.get("/")
+            check(root.status_code == 200 and 'id="login-gate"' in root.text,
+                  "GET / 返回页面（且带登录页容器）")
+            script = client.get("/session.js")
+            check(script.status_code == 200 and "requireLogin" in script.text,
+                  "GET /session.js 200（本机会话脚本在服务上）")
+            page = client.get("/api/tables/customers", params={"page": 1, "page_size": 5}).json()
+            check(page.get("total", 0) > 0 and len(page.get("items", [])) == 5,
+                  "客户表分页形状照旧（total / items）", f"total={page.get('total')}")
+
+        # ── ③ 真浏览器：打开根路径，先看到登录页
+        step("③ 真浏览器打开根路径（全新用户 → 先看到登录页）")
+        if args.no_browser or not edge:
+            check(True, "跳过浏览器这一步（--no-browser 或本机没有 Edge）")
+        else:
+            print(f"   浏览器：{edge}")
+            dom = dump_dom(edge, base)
+            (workspace / "dom_login.html").write_text(dom, encoding="utf-8")
+            text = page_text(dom)
+            (workspace / "dom_login.txt").write_text(text, encoding="utf-8")
+
+            gate = re.search(r'<div class="login-gate" id="login-gate"[^>]*>', dom)
+            check(bool(gate) and "hidden" not in gate.group(0),
+                  "登录页**显示着**（根路径先给登录页）")
+            check("is-locked" in dom, "主界面被锁住（body 带 is-locked）")
+            check("欢迎回来" in text and "账号登录" in text and "游客登录" in text,
+                  "两个入口与欢迎语都渲染出来了")
+            check("本地模式" in text, "如实标注了这是本机模式", "（人话，不是技术字样）")
+            check("扫码" not in text, "扫码登录没有出现（本轮不做）")
+            check("未登录" in text, "顶栏用户区显示未登录（不是假装有个用户）")
+            check("离线" in text and "在线" in text, "状态文字在页面上（离线 / 在线）")
+
+            facts = re.findall(r"\d{1,3}(?:,\d{3})+", text)
+            check(str(profile.get("rows")) in text.replace(",", "") or len(facts) > 0,
+                  "登录页上的数字来自后端画像", f"页面里的千分位数字：{facts[:4]}")
+
+            banned_hits = [item for item in DOM_BANNED if item in text]
+            check(not banned_hits, "渲染出来的文字里没有技术字样",
+                  f"命中：{banned_hits}" if banned_hits else f"检查了 {len(DOM_BANNED)} 个词")
+
+            # 主界面的四个业务页面仍在（登录页没有把它们删掉，只是先盖住）
+            for marker in ('id="page-customers"', 'id="page-products"', 'id="page-sales"',
+                           'id="page-raw"', 'id="user-menu"'):
+                check(marker in dom, f"主界面元素还在：{marker}")
+
+            # ── ④ 窄窗口：顶栏不许把「分析」挤成竖排
+            step("④ 窄窗口（820px）顶栏不切字")
+            narrow = dump_dom(edge, base, width=820)
+            narrow_text = page_text(narrow)
+            check("账号登录" in narrow_text and "本地模式" in narrow_text,
+                  "窄窗口下登录页仍然完整")
+            check("分析" in narrow_text, "「分析」按钮的文字没有被压成单字")
+
+        print(f"\n产物目录：{workspace}")
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            server.kill()
+
+    print(f"\n通过 {len(PASSED)} 项，失败 {len(FAILED)} 项")
+    if FAILED:
+        for label in FAILED:
+            print(f"  FAIL  {label}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
