@@ -232,6 +232,13 @@ button { font-family: inherit; }
 .icon-btn:hover:not(:disabled) { color: var(--text-1); border-color: var(--primary); }
 .icon-btn:active:not(:disabled) { background: var(--primary-light); }
 .icon-btn:disabled { color: var(--text-4); cursor: not-allowed; }
+/* 图标型按钮（刷新 / 收起这类）：只画图标，文字进 title + aria-label。
+   方形热区，至少一个中号控件那么高，不做成"小得难点"的图标。 */
+.btn.icon-only, .icon-btn.icon-only {
+  width: var(--td-medium-height); min-width: var(--td-medium-height);
+  padding: 0; display: inline-grid; place-items: center; flex: 0 0 auto;
+}
+.btn.icon-only svg, .icon-btn.icon-only svg { display: block; }
 .avatar {
   width: var(--td-medium-height); height: var(--td-medium-height);
   border-radius: var(--td-radius-circle);
@@ -902,13 +909,24 @@ body.is-locked .app { display: none; }
 .field-msg[hidden] { display: none; }
 .field input.is-bad { border-color: var(--td-error-color); background: var(--td-error-bg); }
 .pwd-wrap { position: relative; display: flex; align-items: center; }
-.pwd-wrap input { width: 100%; padding-right: 56px; }
+.pwd-wrap input { width: 100%; padding-right: 34px; }
+/* 眼睛：只画图标不写字。热区 24×24（手指点得到），默认是弱化的白，
+   鼠标放上去才用品牌色 —— 它是个"开关"，不该跟主按钮抢眼。 */
 .pwd-eye {
-  position: absolute; right: 4px; padding: 4px 8px; cursor: pointer;
+  position: absolute; right: 4px;
+  width: 24px; height: 24px;
+  display: inline-grid; place-items: center;
   background: none; border: 0; border-radius: var(--radius-ctrl);
-  color: var(--text-2); font-size: 12px;
+  color: var(--td-font-white-3); cursor: pointer;
 }
-.pwd-eye:hover { color: var(--text-1); background: var(--bg-hover); }
+.pwd-eye:hover { color: var(--td-brand-color); background: var(--bg-hover); }
+.pwd-eye:focus-visible { outline: 1px solid var(--td-brand-color); outline-offset: 1px; }
+.pwd-eye .eye { display: block; }
+/* 默认（明文藏着）：睁眼 —— 点了就显示明文 */
+.pwd-eye .eye-off { display: none; }
+/* .is-shown（明文已显示）：闭眼带斜线 —— 点了就藏回去 */
+.pwd-eye.is-shown .eye-open { display: none; }
+.pwd-eye.is-shown .eye-off { display: block; }
 .login-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); cursor: pointer; }
 .link-btn {

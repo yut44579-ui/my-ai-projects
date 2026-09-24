@@ -161,6 +161,115 @@ def test_B01_登录页整屏铺满且不露主界面() -> None:
     assert "读取中" not in gate_html.group(0), "登录页上还有「读取中」这种等待文案"
 
 
+def test_B01_登录表单是账号形态而不是填姓名() -> None:
+    """用户实测反馈：「不要弄姓名这个，按照正常腾讯 QQ 那种账号形式的」。
+
+    形态 = 账号 + 密码 + 记住账号 + 忘记密码 / 注册账号 + 一个登录按钮；
+    **仍然只是形态**：不做哈希、不做比对（下一条 B-05/B-11 盯着这一点）。
+    """
+    html, js = read("index.html"), read("session.js")
+    assert "姓名" not in html and "姓名" not in js, "登录页还留着「姓名」这个说法"
+    assert ">账号<" in html, "字段标签没改成「账号」"
+    assert 'placeholder="手机号 / 邮箱 / 用户名"' in html, "账号框的提示语不是「手机号 / 邮箱 / 用户名」"
+    assert 'maxlength="40"' in html, "账号框长度上限没跟着校验一起放宽到 40"
+    assert "记住账号" in html and "记住我" not in html, "「记住我（只记名字）」没改成「记住账号」"
+    assert "登 录" in html and "进入系统" not in html, "主按钮不是 QQ 那种「登 录」"
+    assert "忘记密码" in html and "注册账号" in html, "底部少了忘记密码 / 注册账号"
+    assert "登录后即可开始分析" in html and "填个名字" not in html, "副标题还是「填个名字就能进」"
+    assert "登录后即可开始分析" in js, "切标签时的副标题没跟着改"
+    # 记住账号存的是账号本身，键名沿用旧写法（老用户的「记住」不会丢）
+    assert "sra.remembered-name" in js
+    # 游客那一栏说清"不留身份、退出后名字会变"
+    assert "不留身份" in html and "不留身份" in js
+    # 登录后右上角的口径也是账号，不再叫姓名
+    assert "账号（登录时你自己填的）" in js, "用户区身份说明还在用「名字由你自己填」"
+    assert "名字由你自己填" not in js
+    # 未开通的入口给人话提示，且说清是"尚未开通"而不是做成点不动的死按钮
+    assert "该功能尚未开通" in js
+
+
+def test_B01_密码框用眼睛图标而不是显示隐藏文字() -> None:
+    """用户原话：「不要文字的 要一个眼睛的标志那种」。
+
+    图标一律**内联 SVG**（原生前端，不引图标库）：睁眼 = 点了显示明文，
+    闭眼（加斜线）= 明文已显示，点了藏回去。按钮里不许再有「显示 / 隐藏」两个字。
+    """
+    html, css, js = read("index.html"), read("style.css"), read("session.js")
+    eye = re.search(r'<button class="pwd-eye".*?</button>', html, re.S)
+    assert eye, "找不到密码框那个按钮"
+    block = eye.group(0)
+    assert ">显示<" not in block and ">隐藏<" not in block, "按钮里还写着「显示 / 隐藏」两个字"
+    assert block.count("<svg") == 2, "眼睛图标应当是页面里现成的两个 SVG（睁眼 / 闭眼）"
+    assert 'class="eye eye-open"' in block and 'class="eye eye-off"' in block, "两个图标缺一个"
+    assert 'aria-label="显示密码"' in block and 'title="显示密码"' in block, \
+        "初始态（掩码）的标签与提示应当是「显示密码」"
+    # 线条风格跟页面其它图标一致：换算到 16px 后描边 ~1.2px、端点与拐角都是圆的
+    eye_stroke = float(re.search(r'stroke-width="([\d.]+)"', block).group(1))
+    assert abs(eye_stroke * 16 / 20 - 1.2) < 0.06, "眼睛图标的描边粗细跟其它图标对不上"
+    assert 'stroke-linecap="round"' in block and 'stroke-linejoin="round"' in block, \
+        "线条端点 / 拐角不是圆的（跟页面其它图标风格不一致）"
+    assert 'stroke="currentColor"' in block, "图标没跟着文字颜色走（hover 变不了色）"
+    assert "aria-hidden=\"true\"" in block and 'focusable="false"' in block, \
+        "装饰性 SVG 要让读屏跳过（意思由按钮的 aria-label 说）"
+    # 热区 ≥ 24×24，且弱化色 → hover 品牌色
+    pwd_eye = re.search(r"\.pwd-eye\s*\{(.*?)\}", css, re.S).group(1)
+    assert "width: 24px" in pwd_eye and "height: 24px" in pwd_eye, "眼睛热区不足 24×24（会难点）"
+    assert "var(--td-font-white-3)" in pwd_eye, "默认色应当是弱化的白（--td-font-white-3）"
+    assert ".pwd-eye:hover { color: var(--td-brand-color);" in css, "hover 没有变品牌色"
+    # 两态靠一个类切换，图标跟着状态走（不是固定一个眼睛）
+    assert ".pwd-eye .eye-off { display: none; }" in css
+    assert ".pwd-eye.is-shown .eye-open { display: none; }" in css
+    assert ".pwd-eye.is-shown .eye-off { display: block; }" in css
+    # 状态由 JS 一处管：切类 + 同步 aria-label / title / aria-pressed
+    assert "setEyeState" in js and 'classList.toggle("is-shown", shown)' in js
+    for piece in ('"隐藏密码"', '"显示密码"', '"aria-label"', '"title"', '"aria-pressed"'):
+        assert piece in js, f"眼睛状态没同步到 {piece}"
+    assert 'button.textContent = shown ? "显示"' not in js, "还在往按钮里写文字"
+    # 复位（退出登录）时回到睁眼
+    reset = re.search(r"function resetForm\(\)\s*\{(.*?)\n  \}", js, re.S).group(1)
+    assert "setEyeState(false)" in reset, "退出登录后眼睛没复位"
+    # 不引图标库、不引外部字体
+    for banned in ("iconfont", "font-awesome", "fontawesome", "cdn."):
+        assert banned not in html.lower(), f"引了外部图标资源：{banned}"
+
+
+def test_B01_图标型按钮只画图标且都带提示() -> None:
+    """顺手扫出来的"图标型但写成文字"的按钮：刷新任务列表 / 刷新执行记录 / 收起正文。
+
+    「分析」「登录」「确认导入」这种**动作**按钮保持文字 —— 这里只管纯 UI 开关。
+    """
+    html = read("index.html")
+    for control, label in (("btn-reload-tasks", "刷新任务列表"),
+                           ("btn-refresh-exec", "刷新执行记录"),
+                           ("btn-doc-close", "收起正文")):
+        found = re.search(rf'<button id="{control}".*?</button>', html, re.S)
+        assert found, f"找不到 {control}"
+        block = found.group(0)
+        assert "icon-only" in block, f"{control} 没标成图标型按钮"
+        assert block.count("<svg") == 1, f"{control} 的图标不是内联 SVG"
+        assert f'title="{label}"' in block and f'aria-label="{label}"' in block, \
+            f"{control} 少了 tooltip / 无障碍标签（会变成一个看不懂的图标）"
+        # 线条风格与页面其它图标一致：换算到 16px 显示尺寸后描边都是 ~1.2px + 圆角端点
+        # （眼睛图标是 20 格 1.5px、刷新是 24 格 1.8px —— 画布不同，落到屏幕上是同一个粗细）
+        view_box = int(re.search(r'viewBox="0 0 (\d+) \d+"', block).group(1))
+        stroke = float(re.search(r'stroke-width="([\d.]+)"', block).group(1))
+        assert abs(stroke * 16 / view_box - 1.2) < 0.06, \
+            f"{control} 描边换算到 16px 后是 {stroke * 16 / view_box:.2f}px，跟眼睛图标对不上"
+        assert 'stroke-linecap="round"' in block and 'stroke-linejoin="round"' in block, \
+            f"{control} 的线条端点/拐角不是圆的"
+        assert 'stroke="currentColor"' in block, f"{control} 的图标没有跟着文字颜色走"
+        # 按钮里不许再留着原来的文字（图标 + 文字 = 又变回文字按钮）
+        for text in ("刷新任务列表", "刷新", "收起"):
+            assert f">{text}<" not in block, f"{control} 里还留着「{text}」文字"
+    # 纯动作按钮保持文字
+    for keep in (">分析<", ">登 录<", ">确认导入<"):
+        assert keep in html, f"纯动作按钮不该改成图标：{keep}"
+    # 图标型按钮的样式：方形热区（至少一个中号控件那么宽）
+    css = read("style.css")
+    assert ".btn.icon-only, .icon-btn.icon-only" in css
+    assert "width: var(--td-medium-height)" in css
+
+
 def test_B03_顶栏用户区是头像加名字加状态() -> None:
     html = read("index.html")
     css = read("style.css")
@@ -220,7 +329,7 @@ def test_B06_忙碌中由真实分析请求驱动() -> None:
 # ════════════════════════════════════════════════════════════════════════
 def test_B05_B11_只做形态校验且不碰密码() -> None:
     js = read("session.js")
-    assert "name.length < 2" in js and "name.length > 20" in js
+    assert "account.length < 2" in js and "account.length > 40" in js
     assert "password.length < 6" in js
     for banned in ("sha256", "SHA256", "hash(", "crypto", "btoa", "token", "Token",
                    "sessionStorage", "cookie", "fetch("):
@@ -263,7 +372,7 @@ def test_B10_界面不出现技术字样也不吹安全() -> None:
 # ════════════════════════════════════════════════════════════════════════
 def test_B05_未开通的入口给人话提示() -> None:
     html, js = read("index.html"), read("session.js")
-    for label in ("忘记密码", "立即注册", "个人设置"):
+    for label in ("忘记密码", "注册账号", "个人设置"):
         assert label in html, f"缺少入口：{label}"
     for control in ("link-forgot", "link-register", "link-help", "link-privacy", "um-settings"):
         assert f'id="{control}"' in html, f"缺少未开通入口：{control}"

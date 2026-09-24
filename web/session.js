@@ -1,10 +1,10 @@
 /* session.js · 登录页 + 用户区 + 在线状态（本机会话层）
  *
  * ════ 这一层是什么、不是什么（写清楚，免得被当成安全实现）════
- * 是：在本机记住"这次是谁在用"（一条本地记录），把名字与状态画到右上角，
+ * 是：在本机记住"这次是谁在用"（一条本地记录），把账号与状态画到右上角，
  *     并让四种状态跟着**真实动作**走（登录 / 提问 / 长时间没操作 / 退出）。
  * 不是：任何身份校验。密码只检查"填了没有、够不够长"，**不保存、不比对、不做任何摘要运算**；
- *       名字与状态也只用于展示与记录。口令校验、令牌、权限、操作留痕属于服务端要做的事，
+ *       账号与状态也只用于展示与记录。口令校验、令牌、权限、操作留痕属于服务端要做的事，
  *       本文件一行都没有 —— 所以界面上也不说"已安全登录"这种话。
  *
  * ════ 状态由什么驱动（不靠前端"假装忙"）════
@@ -27,7 +27,8 @@ window.Session = (() => {
   const hide = (el) => { if (el) el.hidden = true; };
   const setText = (id, value) => { const el = $(id); if (el) el.textContent = value; };
 
-  // 本机那条"这次是谁"的记录：**只存名字与入口类型**，密码连碰都不碰
+  // 本机那条"这次是谁"的记录：**只存账号与入口类型**，密码连碰都不碰
+  // （键名沿用当初的写法，老记录里的"记住账号"因此不会丢）
   const WHO_KEY = "sra.who";
   const NAME_KEY = "sra.remembered-name";
 
@@ -44,7 +45,7 @@ window.Session = (() => {
   const AWAY_MINUTES = 10;                              // 默认阈值：10 分钟没操作算"离开"
   const GUEST_LETTERS = "abcdefghjkmnpqrstuvwxyz23456789";   // 去掉容易看错的 0/o/1/l/i
   const TOAST_MS = 3400;                                // 人话提示停留多久
-  const NOT_READY = "个人设置尚未开通。当前能改的只有登录时填的名字与右上角的状态。";
+  const NOT_READY = "个人设置尚未开通。当前能改的只有登录时填的账号与右上角的状态。";
 
   const state = {
     who: null,          // {name, kind}；kind: account | guest
@@ -181,7 +182,7 @@ window.Session = (() => {
     setText("user-name", name);
     setText("um-name", who ? name : "未登录");
     setText("um-kind", who
-      ? (who.kind === "guest" ? "游客（本机随机取名）" : "账号（名字由你自己填）")
+      ? (who.kind === "guest" ? "游客（本机随机取名，不留身份）" : "账号（登录时你自己填的）")
       : "还没进来");
     renderStatus();
   }
@@ -190,7 +191,7 @@ window.Session = (() => {
     const who = state.who;
     setText("rp-user-name", who ? who.name : "未登录");
     setText("rp-user-kind", who
-      ? (who.kind === "guest" ? "游客（本机随机取名）" : "账号（名字由你自己填）")
+      ? (who.kind === "guest" ? "游客（本机随机取名，不留身份）" : "账号（登录时你自己填的）")
       : "—");
   }
 
@@ -230,19 +231,19 @@ window.Session = (() => {
     }
   }
 
-  // 只做**形态**检查：名字 2~20 个字、密码至少 6 位。
+  // 只做**形态**检查：账号 2~40 个字符、密码至少 6 位。
   // 这里不比对任何密码（本机也没存过密码可比），所以它拦的是"填错格了"，不是"密码不对"。
   function validateAccount() {
-    const name = (($("login-name") || {}).value || "").trim();
+    const account = (($("login-name") || {}).value || "").trim();
     const password = (($("login-pwd") || {}).value || "");
-    let nameMessage = "";
+    let accountMessage = "";
     let pwdMessage = "";
-    if (name.length < 2) nameMessage = "名字至少 2 个字（最多 20 个）。";
-    else if (name.length > 20) nameMessage = "名字最多 20 个字，短一点更好记。";
+    if (account.length < 2) accountMessage = "账号至少 2 个字符（最多 40 个）。";
+    else if (account.length > 40) accountMessage = "账号最多 40 个字符，短一点更好记。";
     if (password.length < 6) pwdMessage = "密码至少 6 位。";
-    setFieldError("login-name", "login-name-msg", nameMessage);
+    setFieldError("login-name", "login-name-msg", accountMessage);
     setFieldError("login-pwd", "login-pwd-msg", pwdMessage);
-    return { ok: !nameMessage && !pwdMessage, name: name };
+    return { ok: !accountMessage && !pwdMessage, name: account };
   }
 
   function enter(name, kind) {
@@ -289,8 +290,8 @@ window.Session = (() => {
     if (button) button.disabled = false;
     hide(spinner);
     enter(name, "guest");
-    toast(`已以「${name}」进入。这个名字是本机随机取的，只用于展示与记录，`
-      + "退出后再进来会换一个新的。", "ok");
+    toast(`已以「${name}」进入。这个名字是本机随机取的，只用于展示与记录；`
+      + "游客不留身份，退出后再进来会换一个新的。", "ok");
   }
 
   function switchTab(kind) {
@@ -307,19 +308,27 @@ window.Session = (() => {
       show($("guest-pane"));
     }
     setText("login-title", isAccount ? "欢迎回来 👋" : "游客模式");
-    setText("login-sub", isAccount ? "填个名字就能进，随时可以退出" : "不用填任何信息，直接进来看看");
+    setText("login-sub", isAccount ? "登录后即可开始分析" : "不用填账号密码，直接进来看看");
+  }
+
+  // 眼睛图标两态：睁眼（明文藏着，点了就显示）↔ 闭眼带斜线（明文显示中，点了藏回去）。
+  // 两个图标都是页面里现成的 <svg>，这里只切 `.is-shown` 一个类 + 无障碍标签，不拼字符串、不引图标库。
+  function setEyeState(shown) {
+    const button = $("btn-pwd-eye");
+    if (!button) return;
+    const label = shown ? "隐藏密码" : "显示密码";
+    button.classList.toggle("is-shown", shown);
+    button.setAttribute("aria-pressed", shown ? "true" : "false");
+    button.setAttribute("aria-label", label);          // 读屏念的是"当前动作"，不是"眼睛"
+    button.setAttribute("title", label);               // 鼠标悬停也看得到同一句话
   }
 
   function togglePassword() {
     const input = $("login-pwd");
-    const button = $("btn-pwd-eye");
     if (!input) return;
     const shown = input.type === "text";
     input.type = shown ? "password" : "text";
-    if (button) {
-      button.textContent = shown ? "显示" : "隐藏";
-      button.setAttribute("aria-pressed", shown ? "false" : "true");
-    }
+    setEyeState(!shown);
   }
 
   function logout() {
@@ -348,11 +357,7 @@ window.Session = (() => {
       pwd.value = "";
       pwd.type = "password";
     }
-    const eye = $("btn-pwd-eye");
-    if (eye) {
-      eye.textContent = "显示";
-      eye.setAttribute("aria-pressed", "false");
-    }
+    setEyeState(false);                     // 眼睛复位成"睁眼 = 点了显示明文"
     setFieldError("login-name", "login-name-msg", "");
     setFieldError("login-pwd", "login-pwd-msg", "");
     const loginButton = $("btn-login");
@@ -408,10 +413,10 @@ window.Session = (() => {
 
     // 尚未开通的入口：点一下给一句人话，不做"点不动的假按钮"
     const notReady = [
-      ["link-forgot", "找回密码尚未开通。本地模式下没有密码可比对，重新填一次就能进。"],
-      ["link-register", "注册尚未开通。直接填个名字登录，或用游客身份进来即可。"],
-      ["link-help", "帮助文档尚未提供，先看看页面上的示例问题。"],
-      ["link-privacy", "隐私说明尚未提供。这台机器上只保存你填的名字与本次状态，不保存密码。"],
+      ["link-forgot", "该功能尚未开通：找回密码还没做。本地模式下没有密码可比对，换个密码重新填一次就能进。"],
+      ["link-register", "该功能尚未开通：注册还没做。直接填个账号登录，或用游客身份进来即可。"],
+      ["link-help", "该功能尚未开通：帮助文档还没提供，先看看页面上的示例问题。"],
+      ["link-privacy", "该功能尚未开通：隐私说明还没提供。这台机器上只保存你填的账号与本次状态，不保存密码。"],
     ];
     notReady.forEach(([id, message]) => {
       const button = $(id);

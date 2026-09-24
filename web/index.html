@@ -16,6 +16,8 @@
 <!-- ═══ 登录页 ═══════════════════════════════════════════════════════
      打开页面先看到它；登录成功后收起来，刷新靠本机记录保持登录态，
      退出登录再回来。左边是这套系统能干什么，右边是两个入口：账号登录 / 游客登录。
+     表单按常见账号登录的样子排：账号（手机号 / 邮箱 / 用户名）+ 密码 + 记住账号 +
+     忘记密码 / 注册账号。**这只是形态**：不做哈希、不做比对、不发令牌。
      页面上的数字（交易行数 / 客户编号数 / 国家地区数）都从当前数据源读出来，
      不写死在页面里 —— 换数据源它们会跟着变。 -->
 <div class="login-gate" id="login-gate" hidden>
@@ -52,7 +54,7 @@
     <section class="card login-card">
       <div class="login-card-inner">
       <h3 class="login-title" id="login-title">欢迎回来 👋</h3>
-      <p class="login-sub" id="login-sub">填个名字就能进，随时可以退出</p>
+      <p class="login-sub" id="login-sub">登录后即可开始分析</p>
 
       <div class="login-tabs">
         <button class="login-tab is-on" id="ltab-account" type="button">账号登录</button>
@@ -61,44 +63,62 @@
 
       <form class="login-form" id="login-form" novalidate>
         <div class="field">
-          <label class="field-label" for="login-name">姓名</label>
-          <input id="login-name" type="text" maxlength="20" autocomplete="username"
-                 placeholder="2~20 个字，填个你习惯的称呼">
+          <!-- id 仍叫 login-name（本机记录 / 验收脚本都按它找），但对面看到的是「账号」 -->
+          <label class="field-label" for="login-name">账号</label>
+          <input id="login-name" type="text" maxlength="40" autocomplete="username"
+                 placeholder="手机号 / 邮箱 / 用户名">
           <p class="field-msg" id="login-name-msg" hidden></p>
         </div>
         <div class="field">
           <label class="field-label" for="login-pwd">密码</label>
           <div class="pwd-wrap">
             <input id="login-pwd" type="password" autocomplete="current-password" placeholder="至少 6 位">
-            <button class="pwd-eye" id="btn-pwd-eye" type="button" aria-pressed="false">显示</button>
+            <!-- 睁眼 = 点了就显示明文；闭眼（眼睛加斜线）= 明文已显示，点了藏回去。
+                 两个图标都在页面里，靠 .is-shown 切换 —— 不引图标库，也不靠 JS 拼字符串。 -->
+            <button class="pwd-eye" id="btn-pwd-eye" type="button"
+                    aria-pressed="false" aria-label="显示密码" title="显示密码">
+              <svg class="eye eye-open" viewBox="0 0 20 20" width="16" height="16" fill="none"
+                   stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true" focusable="false">
+                <path d="M1.8 10S4.6 4.7 10 4.7 18.2 10 18.2 10 15.4 15.3 10 15.3 1.8 10 1.8 10Z"/>
+                <circle cx="10" cy="10" r="2.6"/>
+              </svg>
+              <svg class="eye eye-off" viewBox="0 0 20 20" width="16" height="16" fill="none"
+                   stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true" focusable="false">
+                <path d="M1.8 10S4.6 4.7 10 4.7 18.2 10 18.2 10 15.4 15.3 10 15.3 1.8 10 1.8 10Z"/>
+                <circle cx="10" cy="10" r="2.6"/>
+                <path d="M3.7 3.7 16.3 16.3"/>
+              </svg>
+            </button>
           </div>
           <p class="field-msg" id="login-pwd-msg" hidden></p>
         </div>
         <div class="login-row">
-          <label class="check"><input type="checkbox" id="login-remember"> 记住我（只记名字，不记密码）</label>
+          <label class="check"><input type="checkbox" id="login-remember"> 记住账号</label>
           <button class="link-btn" id="link-forgot" type="button">忘记密码？</button>
         </div>
         <button class="btn btn-primary login-submit" id="btn-login" type="submit">
           <span class="spinner" id="login-spinner" hidden></span>
-          <span>进入系统</span>
+          <span>登 录</span>
         </button>
       </form>
 
       <div class="login-form" id="guest-pane" hidden>
-        <p class="guest-lede">不用填任何信息，本机给你随机取个名字，直接进来看看。</p>
+        <p class="guest-lede">不用填账号密码，本机给你随机取个昵称，直接进来看看。</p>
         <div class="guest-name" id="guest-name">游客xxxxx</div>
         <button class="btn btn-primary login-submit" id="btn-guest" type="button">
           <span class="spinner" id="guest-spinner" hidden></span>
           <span>以游客身份进入</span>
         </button>
-        <p class="login-hint">这个名字是本机随机取的，只用于展示与记录，退出后再进来会换一个新的。</p>
+        <p class="login-hint">游客不留身份：这个名字是本机随机取的，只用于展示与记录；退出后再进来会换一个新的，也查不到上次的痕迹。</p>
       </div>
 
       <p class="login-note">
-        本地模式：名字只用于展示与记录，密码只检查长短，本机不保存、不比对。
+        本地模式：账号只用于展示与记录，密码只检查长短，本机不保存、不比对。
       </p>
       <div class="login-foot">
-        <button class="link-btn" id="link-register" type="button">立即注册</button>
+        <button class="link-btn" id="link-register" type="button">注册账号</button>
         <span class="login-foot-sep">·</span>
         <button class="link-btn" id="link-help" type="button">帮助</button>
         <span class="login-foot-sep">·</span>
@@ -151,8 +171,8 @@
         <div class="menu-sep"></div>
         <button class="menu-item" id="menu-item-notify" title="通知：暂未提供">通知（暂未提供）</button>
       </div>
-      <!-- 用户区：头像（名字首字）+ 名字 + 状态点 + 状态文字，点一下出用户菜单。
-           名字来源是登录时填的那个；状态是本机状态（在线/忙碌中/离开/离线），
+      <!-- 用户区：头像（账号首字符）+ 账号名 + 状态点 + 状态文字，点一下出用户菜单。
+           账号名来源是登录时填的那个；状态是本机状态（在线/忙碌中/离开/离线），
            由登录、分析请求、长时间没操作、退出这几个**真实动作**驱动。 -->
       <div class="user-area">
         <button class="user-btn" id="btn-user" aria-haspopup="true" aria-expanded="false" title="账号与状态">
@@ -639,7 +659,17 @@
           <label class="field">选择任务
             <select id="task-select"><option value="">（还没有任务）</option></select>
           </label>
-          <button id="btn-reload-tasks" class="btn">刷新任务列表</button>
+          <!-- 图标型按钮：只画图标，意思放进 title / aria-label（鼠标悬停与读屏都读得到） -->
+          <button id="btn-reload-tasks" class="btn icon-only" title="刷新任务列表"
+                  aria-label="刷新任务列表">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+                 stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true" focusable="false">
+              <polyline points="23 4 23 10 17 10"/>
+              <polyline points="1 20 1 14 7 14"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+          </button>
         </div>
         <!-- 这里原来直接铺一段规格 JSON —— 用户看到的应该是**业务口径**（用哪个文件、
              哪段时间、算哪些指标），不是一串参数对象。技术实现留在代码与后端记录里。 -->
@@ -675,7 +705,18 @@
 
       <div class="card">
         <div class="card-head"><h2>⑤ 执行记录</h2></div>
-        <div class="row"><button id="btn-refresh-exec" class="btn">刷新</button></div>
+        <div class="row">
+          <button id="btn-refresh-exec" class="btn icon-only" title="刷新执行记录"
+                  aria-label="刷新执行记录">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+                 stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true" focusable="false">
+              <polyline points="23 4 23 10 17 10"/>
+              <polyline points="1 20 1 14 7 14"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+          </button>
+        </div>
         <div class="table-wrap">
           <table class="table">
             <thead><tr><th>记录号</th><th>任务</th><th>状态</th><th class="num">销售额</th><th class="num">行数</th><th>时间</th></tr></thead>
@@ -727,7 +768,13 @@
           <div class="row">
             <button id="btn-doc-summary" class="btn">生成摘要</button>
             <a id="doc-viewer-link" class="btn" href="#" target="_blank" rel="noopener">新窗口打开全文</a>
-            <button id="btn-doc-close" class="btn">收起</button>
+            <button id="btn-doc-close" class="btn icon-only" title="收起正文" aria-label="收起正文">
+              <svg viewBox="0 0 20 20" width="16" height="16" fill="none"
+                   stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true" focusable="false">
+                <path d="M5.5 12.5 10 8l4.5 4.5"/>
+              </svg>
+            </button>
             <span class="muted-sm" id="doc-viewer-state"></span>
           </div>
           <div id="doc-summary" hidden></div>
@@ -797,7 +844,7 @@
       <div class="pane" id="rp-pane-perm">
         <div class="kv"><span>当前用户</span><b id="rp-user-name">未登录</b></div>
         <div class="kv"><span>身份来源</span><b id="rp-user-kind">—</b></div>
-        <p class="note">本地模式：名字只用于展示与记录，退出登录即清。</p>
+        <p class="note">本地模式：账号只用于展示与记录，退出登录即清。</p>
       </div>
 
       <div class="pane" id="rp-pane-security" hidden>

@@ -204,18 +204,64 @@ check(el("user-name").textContent === "未登录", "顶栏名字：未登录");
 check(loginCallbackLog.length === 0, "主界面初始化被挂住（登录前不读后端数据）");
 
 // ════════════════════════════════════════════════════════════════════════
-step("B-05 只做形态校验：名字太短 / 密码太短 → 标红 + 就地提示");
+step("B-01 表单是「账号」形态（不是填姓名），未开通的入口点了有话说");
+// ════════════════════════════════════════════════════════════════════════
+check(html.includes(">账号<") && html.includes('placeholder="手机号 / 邮箱 / 用户名"'),
+  "字段是「账号」+ 手机号 / 邮箱 / 用户名 的提示语");
+check(html.includes("记住账号") && html.includes("记住我") === false, "「记住我（只记名字）」已换成「记住账号」");
+check(html.includes("登 录") && html.includes("进入系统") === false, "主按钮是「登 录」");
+check(html.includes("忘记密码") && html.includes("注册账号"), "忘记了密码 / 注册账号两个入口都在");
+check(html.includes("姓名") === false && source.includes("姓名") === false, "页面上不再有「姓名」这个说法");
+check(html.includes("不留身份") && source.includes("不留身份"), "游客那栏说清「不留身份」");
+fire(el("link-register"), "click");
+check(el("toast").hidden === false && el("toast").textContent.includes("尚未开通"),
+  "点「注册账号」给一句人话（不是点不动的死按钮）", `「${el("toast").textContent}」`);
+
+// ════════════════════════════════════════════════════════════════════════
+step("B-01 密码框的眼睛图标：睁眼 ↔ 闭眼两态，标签跟着状态走");
+// ════════════════════════════════════════════════════════════════════════
+const eyeBtn = () => el("btn-pwd-eye");
+check(html.includes(">显示<") === false && html.includes(">隐藏<") === false,
+  "按钮里没有「显示 / 隐藏」两个字");
+check(html.includes('class="eye eye-open"') && html.includes('class="eye eye-off"'),
+  "两个图标都是页面里现成的内联 SVG");
+check(html.includes('aria-label="显示密码"') && html.includes('title="显示密码"'),
+  "初始态的无障碍标签与提示语都在（「显示密码」）");
+check(eyeBtn().classList.has("is-shown") === false && eyeBtn().getAttribute("aria-label") === "显示密码",
+  "初始态：睁眼、标签「显示密码」", `label=「${eyeBtn().getAttribute("aria-label")}」`);
+check(el("login-pwd").type === "password", "初始态：密码是掩码的");
+fire(eyeBtn(), "click");
+check(el("login-pwd").type === "text" && eyeBtn().classList.has("is-shown"),
+  "点一下：明文显示，切到闭眼（is-shown）");
+check(eyeBtn().getAttribute("aria-label") === "隐藏密码" && eyeBtn().getAttribute("title") === "隐藏密码",
+  "标签同步成「隐藏密码」（读屏与悬停都读得到当前动作）",
+  `label=「${eyeBtn().getAttribute("aria-label")}」`);
+check(eyeBtn().getAttribute("aria-pressed") === "true", "aria-pressed 跟着变 true");
+fire(eyeBtn(), "click");
+check(el("login-pwd").type === "password" && eyeBtn().classList.has("is-shown") === false
+  && eyeBtn().getAttribute("aria-label") === "显示密码",
+  "再点一下：回到掩码 + 睁眼（图标跟着状态走，不是固定一个眼睛）");
+
+// ════════════════════════════════════════════════════════════════════════
+step("B-05 只做形态校验：账号太短 / 太长 / 密码太短 → 标红 + 就地提示");
 // ════════════════════════════════════════════════════════════════════════
 el("login-name").value = "唐";
 el("login-pwd").value = "123";
 fire(el("login-form"), "submit");
 await flush();
 check(el("login-name-msg").hidden === false && el("login-name-msg").textContent.length > 0,
-  "名字太短：就地提示", `「${el("login-name-msg").textContent}」`);
+  "账号太短：就地提示", `「${el("login-name-msg").textContent}」`);
 check(el("login-pwd-msg").hidden === false, "密码太短：就地提示", `「${el("login-pwd-msg").textContent}」`);
 check(el("login-name").classList.has("is-bad"), "出错的输入框标红（is-bad）");
 check(el("login-gate").hidden === false, "校验不过不许放行");
 check(store.has("sra.who") === false, "校验不过不写本机记录");
+// 上限也照新口径走：40 个字符能过，41 个不行
+el("login-name").value = "a".repeat(41);
+el("login-pwd").value = "123456";
+fire(el("login-form"), "submit");
+await flush();
+check(el("login-name-msg").hidden === false && el("login-name").classList.has("is-bad"),
+  "账号 41 个字符：拦下并提示", `「${el("login-name-msg").textContent}」`);
 
 // ════════════════════════════════════════════════════════════════════════
 step("B-02 账号登录：填「唐宇」进主界面，顶栏显示名字");
@@ -295,11 +341,18 @@ check(el("toast").hidden === true, "人话提示几秒后自己收走");
 // ════════════════════════════════════════════════════════════════════════
 step("B-03 / B-04 游客登录：本机随机名，退出后重进换一个");
 // ════════════════════════════════════════════════════════════════════════
+el("login-pwd").value = "123456";
+fire(eyeBtn(), "click");                  // 退出前先把眼睛切到"明文显示"
+check(eyeBtn().classList.has("is-shown"), "退出前：眼睛处于明文态（好验复位）");
 fire(el("um-logout"), "click");
 check(el("login-gate").hidden === false && Session.status() === "offline",
   "退出登录：回登录页 + 状态离线");
 check(store.has("sra.who") === false, "本机记录被清掉");
 check(el("user-name").textContent === "未登录", "顶栏回到未登录");
+check(eyeBtn().classList.has("is-shown") === false && eyeBtn().getAttribute("aria-label") === "显示密码"
+  && el("login-pwd").type === "password" && el("login-pwd").value === "",
+  "退出登录后：密码框清空 + 眼睛复位成睁眼",
+  `type=${el("login-pwd").type} label=「${eyeBtn().getAttribute("aria-label")}」`);
 fire(el("um-status-online"), "click");    // 退出后再点菜单项也不该把状态拉回在线
 check(Session.status() === "offline", "退出后点状态菜单也不会「又上线」");
 fire(el("ltab-guest"), "click");
