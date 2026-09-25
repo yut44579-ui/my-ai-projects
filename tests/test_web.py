@@ -688,3 +688,62 @@ def test_用hidden收放的元素不会被display压住() -> None:
     assert not problems, f"这些元素用 hidden 收不住（自带 display 的 class 没兜底）：{problems}"
     # 已经踩过的那个必须留着兜底
     assert ".spinner[hidden] { display: none; }" in css
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑯ 排序状态机 + 时间范围（用户 2026-09-25 报的两个问题）
+#
+# 这一组只钉**前端那半**（静态层）：排序状态存在哪、四条规则各自的代码落点、
+# 文字提示在不在。真正的行为证据由 `scripts/sort_range_cdp.mjs` 打真浏览器量
+# （点表头 → 切指标 → 翻页，看后端返回的顺序有没有被覆盖）。
+#
+# 为什么必须钉死"按日不许改成指标降序"：那是本次最容易搞反的一条 ——
+# 用户抱怨"127 排在 147 前面"，看着像排序 bug，其实是**时间序列本来就该按日期读**。
+# 换成按订单数降序能让他当场满意，但按日这张表的阅读语义就毁了（评审冻结规格第 3 条）。
+# ════════════════════════════════════════════════════════════════════════
+def test_排序状态机_切指标不许覆盖人工排序():
+    js = read("app.js")
+    # 状态只有一处：panel.sort_source（default = 还没人工排过 / user = 用户点过表头）
+    assert 'sort_source: "default"' in js, "没有排序来源状态"
+    assert 'panel.sort_source = "user"' in js, "点表头没有把状态置为 user"
+    assert 'panel.sort_source = "default"' in js, "缺少回到 default 的路径（切维度 / 重置）"
+    # Rule 2：只有 default 态才让排序跟着指标走 —— user 态必须原样保留
+    assert 'if (panel.sort_source !== "user")' in js, "切指标时会覆盖用户的人工排序"
+    # Rule 3/4：切维度与点表头都要重新向后端要数据（不是本地重排）
+    assert "dimensionSelect.addEventListener" in js and "metricSelect.addEventListener" in js
+    assert "panel.query.sort = column.key" in js
+    # Rule 5：翻页不许碰排序 —— 否则第一页按订单数、第二页按销售额，分页就废了
+    prev_at = js.index("prev.addEventListener")
+    paging = js[prev_at:js.index("if (spec.sales) {", prev_at)]      # 只取翻页那两个监听器
+    assert "prev.addEventListener" in paging and "next.addEventListener" in paging
+    assert "sort" not in paging, "翻页路径里混进了排序逻辑"
+    assert "dimensionSelect" not in paging and "metricSelect" not in paging, \
+        "翻页路径里改了维度/指标"
+
+
+def test_当前排序除了表头高亮还要有一句白话():
+    """评审实测：只高亮表头，用户根本没注意到"现在按什么排"。三层提示缺一不可。"""
+    js, css = read("app.js"), read("style.css")
+    assert "当前排序：" in js, "没有「当前排序」文字行"
+    assert "sort-line" in js and ".sort-line" in css, "文字行没有样式落点"
+    assert "sortLineText" in js, "排序文案没有统一出处"
+    assert ".table th.sorted-asc" in css and ".table th.sorted-desc" in css, "表头高亮丢了"
+
+
+def test_时间范围显示数据覆盖而不是数据源登记时间():
+    """用户报的"填 2026 年却弹出 2010 年"根因：页面上挂着数据源的**登记时间**，
+    被他当成了数据时间。业务主界面只许显示数据覆盖区间。"""
+    js = strip_comments(read("app.js"))
+    assert "数据覆盖：" in js, "没有「数据覆盖」文案"
+    assert "dataset.date_range" in js, "覆盖范围不是从数据覆盖区间取的"
+    assert "更新于" not in js, "业务表上还挂着数据源的登记时间"
+    # 只钉**业务表**这一处（数据管理页的数据源清单显示登记时间是合理的，留着）
+    assert "payload.dataset.updated_at" not in js, "业务表还在读登记时间字段"
+
+
+def test_时间范围越界要即时提示并可一键用数据范围():
+    js = read("app.js")
+    assert "超出数据范围" in js, "越界时没有提示"
+    assert "使用数据范围" in js, "没有「使用数据范围」快捷入口"
+    assert "refreshRangeHint" in js, "提示没有随输入即时刷新"
+    assert "input.min" in js and "input.max" in js, "日期框没有钉上数据覆盖边界"

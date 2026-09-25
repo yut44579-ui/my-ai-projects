@@ -2159,6 +2159,21 @@
     return String(value);
   }
 
+  // 「当前排序：XXX ↓」里的 XXX：**从后端给的列标签取**（前端不维护第二份列名表）。
+  // 维度列额外带上当前维度 —— 光写「期间 ↑」看不出是按日还是按国家排的。
+  function sortLineText(payload, dimensionLabel) {
+    const columns = payload.columns || [];
+    const hit = columns.find((column) => column.key === payload.sort);
+    // 兜底"所选列"：后端允许按"没有对应显示列"的键排（比如客户表的 rows），
+    // 页面点不到这种键，但接口能传 —— 这时宁可说"所选列"，也不把后端的字段名画到屏幕上
+    let label = hit ? (hit.label || hit.key) : "所选列";
+    if (payload.sort === "dimension_value" && dimensionLabel) {
+      label = `${label}（${dimensionLabel}）`;
+    }
+    const arrow = payload.order === "asc" ? "↑" : "↓";
+    return `当前排序：${label} ${arrow}`;
+  }
+
   function button(label, className) {
     const el = document.createElement("button");
     el.type = "button";
@@ -2195,6 +2210,10 @@
     const panel = {
       spec,
       query: { page: 1, page_size: 50, sort: "", order: "", search: "" },
+      // 排序来源状态机：default = 还没人工排过（排序交给后端按维度/指标给默认值），
+      // user = 用户点过表头（这时**任何**自动动作都不许覆盖他的排序，切指标也不行）。
+      // 只有三种情况会从 user 掉回 default：换维度、重置、以及首次加载。
+      sort_source: "default",
       payload: null,
       elements: {},
       loaded: false,
@@ -2256,6 +2275,29 @@
     toolbar.appendChild(exportCsv);
     root.appendChild(toolbar);
 
+    // ── 时间范围提示条（越界时**立刻**出现，不等查询）────────────────────
+    // 用户报的现象：时间填到 2026 年，页面却给 2010 年的数据，看着像"对不上"。
+    // 真相是数据只覆盖 2010-12-01 ~ 2011-12-09 —— 那就得在用户敲完的那一刻说出来，
+    // 而不是等他点了查询、看着 0 条自己猜。后端仍然如实返回 0 条（不替他改条件）。
+    const rangeHint = document.createElement("div");
+    rangeHint.className = "banner warn range-hint";
+    rangeHint.id = `${spec.rootId}-range-hint`;
+    rangeHint.hidden = true;
+    const rangeHintText = document.createElement("span");
+    const useRangeButton = button("使用数据范围", "btn btn-sm");
+    rangeHint.appendChild(rangeHintText);
+    rangeHint.appendChild(useRangeButton);
+    root.appendChild(rangeHint);
+
+    // ── 「当前排序」文字行 ────────────────────────────────────────────
+    // 光靠表头高亮不够（用户实测根本没注意到），这里再把"现在按什么排"写成一句白话；
+    // 连同表头上的 ▲▼ 与未排序列的"无标记"，一共三层提示。
+    // 内容**只来自后端回传的 sort / order**，前端不自己判断排的是什么。
+    const sortLine = document.createElement("div");
+    sortLine.className = "sort-line";
+    sortLine.id = `${spec.rootId}-sort`;
+    root.appendChild(sortLine);
+
     // ── 表体 ──────────────────────────────────────────────────────────
     const wrap = document.createElement("div");
     wrap.className = "table-wrap";
@@ -2295,7 +2337,41 @@
 
     panel.elements = { startInput, endInput, searchInput, dimensionSelect, metricSelect,
                        pageSizeSelect, statusLine, headRow, body, empty, prev, next,
-                       pageInfo, summary, footer };
+                       pageInfo, summary, footer, sortLine, rangeHint, rangeHintText,
+                       useRangeButton };
+
+    // ── 数据覆盖范围 + 越界即时提示 ─────────────────────────────────────
+    // 覆盖范围取自后端 dataset.date_range，**不是** updated_at ——
+    // 后者是数据源的登记时间，业务用户看到「更新于 2026-09-22」只会以为数据是今年的。
+    const bounds = { start: "", end: "" };
+
+    function applyBounds(payload) {
+      const range = payload && payload.dataset ? payload.dataset.date_range : null;
+      bounds.start = range && range.start ? String(range.start) : "";
+      bounds.end = range && range.end ? String(range.end) : "";
+      // 日期框也钉上边界：能把 2030 年打进去，用户就会以为 2030 年的数据查得到
+      [startInput, endInput].forEach((input) => {
+        if (bounds.start) input.min = bounds.start; else input.removeAttribute("min");
+        if (bounds.end) input.max = bounds.end; else input.removeAttribute("max");
+      });
+    }
+
+    function refreshRangeHint(rowCount) {
+      if (!bounds.start || !bounds.end) { rangeHint.hidden = true; return; }
+      const outside = (value) => Boolean(
+        value && ((bounds.start && value < bounds.start) || (bounds.end && value > bounds.end))
+      );
+      if (outside(startInput.value) || outside(endInput.value)) {
+        rangeHintText.textContent = `超出数据范围：当前数据仅覆盖 ${bounds.start} ~ ${bounds.end}。`;
+        rangeHint.hidden = false;
+      } else if (rowCount === 0) {
+        rangeHintText.textContent =
+          `本次条件下没有记录。数据完整覆盖 ${bounds.start} ~ ${bounds.end}。`;
+        rangeHint.hidden = false;
+      } else {
+        rangeHint.hidden = true;
+      }
+    }
 
     // ── 渲染 ──────────────────────────────────────────────────────────
     panel.render = (payload) => {
@@ -2323,6 +2399,7 @@
             panel.query.sort = column.key;
             panel.query.order = same && panel.query.order === "desc" ? "asc" : "desc";
             panel.query.page = 1;
+            panel.sort_source = "user";      // 用户手动排过 → 从此不许被自动动作覆盖
             panel.load();
           });
         }
@@ -2360,10 +2437,25 @@
       (payload.notes || []).forEach((note) => notes.push(note));
       footer.textContent = notes.join(" ");
 
+      applyBounds(payload);
+      refreshRangeHint(rows.length);
+
+      // 「当前排序」那句白话：只翻译后端回传的 sort / order，不做任何判断
+      const dimensionSelectEl = panel.elements.dimensionSelect;
+      const dimensionLabel = dimensionSelectEl && spec.sales
+        ? dimensionSelectEl.options[dimensionSelectEl.selectedIndex].textContent
+        : "";
+      sortLine.textContent = payload.sort ? sortLineText(payload, dimensionLabel) : "";
+
       const noteBox = $(spec.noteId);
       if (noteBox) {
+        const coverage = payload.dataset && payload.dataset.date_range
+          ? `${payload.dataset.date_range.start} ~ ${payload.dataset.date_range.end}`
+          : "";
+        // 只显示"这份数据覆盖到哪一天"。原先那句"更新于 X"是数据源的**登记时间**，
+        // 用户拿它当数据时间，才会去查 2026 年（用户报的"时间对不上"就是这么来的）。
         noteBox.textContent = payload.dataset
-          ? `${payload.dataset.name} · 更新于 ${fmtTime(payload.dataset.updated_at)}`
+          ? `${payload.dataset.name}${coverage ? ` · 数据覆盖：${coverage}` : ""}`
           : "";
       }
       statusLine.textContent = "";
@@ -2441,15 +2533,29 @@
       event.preventDefault();
       queryButton.click();
     });
+    // 时间框里一敲就判：越界立刻提示（不用等点了查询才知道查的是空区间）
+    [startInput, endInput].forEach((input) => {
+      input.addEventListener("input", () => refreshRangeHint());
+      input.addEventListener("change", () => refreshRangeHint());
+    });
+    useRangeButton.addEventListener("click", () => {
+      if (!bounds.start || !bounds.end) return;
+      startInput.value = bounds.start;
+      endInput.value = bounds.end;
+      panel.query.page = 1;
+      panel.load();          // 点了就要有效果：填完范围顺手按完整范围查一次
+    });
     resetButton.addEventListener("click", () => {
       startInput.value = "";
       endInput.value = "";
       searchInput.value = "";
       panel.query = { page: 1, page_size: panel.query.page_size, sort: "", order: "", search: "" };
+      panel.sort_source = "default";        // 重置 = 回到"没人工排过"的状态
       if (spec.sales) {
         dimensionSelect.value = "day";
         metricSelect.value = "sales_amount";
       }
+      rangeHint.hidden = true;
       panel.load();
     });
     pageSizeSelect.addEventListener("change", () => {
@@ -2468,16 +2574,26 @@
       panel.load();
     });
     if (spec.sales) {
-      // 换维度 / 指标 → 重新向后端要数据（行内容与排序规则都会变）
+      // 换维度 → 清掉人工排序，回到新维度的默认排序
+      // （"按订单数排"是"按日"这张表里的语义，搬到"按国家"那张表上没有意义，
+      //   留着旧排序只会让人看不懂顺序）
       dimensionSelect.addEventListener("change", () => {
+        panel.sort_source = "default";
         panel.query.sort = "";
         panel.query.order = "";
         panel.query.page = 1;
         panel.load();
       });
+      // 换指标 → 分两种情况（这是用户报"顺序没对上"的正解）：
+      //   · 还没人工排过（default）→ 排序交给后端按新指标给默认值
+      //     （按国家/按商品 = 新指标降序；**按日仍是日期升序** —— 时间序列的阅读顺序，
+      //       不许因为顾客换了指标就把它改成按数值排）
+      //   · 已经人工排过（user）→ **原样保留**，切指标不许把他的排序悄悄改掉
       metricSelect.addEventListener("change", () => {
-        panel.query.sort = "";
-        panel.query.order = "";
+        if (panel.sort_source !== "user") {
+          panel.query.sort = "";
+          panel.query.order = "";
+        }
         panel.query.page = 1;
         panel.load();
       });

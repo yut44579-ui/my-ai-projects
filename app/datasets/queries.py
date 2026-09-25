@@ -196,23 +196,45 @@ def _cached(key: tuple[str, str, str], build: Callable[[], Any]) -> Any:
 # ════════════════════════════════════════════════════════════════════════
 # 查询参数的规范化与校验
 # ════════════════════════════════════════════════════════════════════════
+def asked_window(
+    dataset: dict[str, Any], start: str | None, end: str | None
+) -> tuple[_dt.date, _dt.date]:
+    """用户**要的那个**闭区间（含首尾全天）；没给就用数据源覆盖范围。
+
+    与 `resolve_window` 只差一点：**绝不把越界的端点改写成数据边界**。
+
+    为什么要想清楚这件事：统计窗口必须收紧到数据边界（桶完整性、"只统计了哪几天"的
+    说明都挂在它上面），但**回显给页面的区间必须是用户填的那个** ——
+    用户填 2011-12-01 ~ 2026-09-10，回显却成了 2011-12-09，看起来就像我们偷偷改了他的
+    查询条件（用户 2026-09-25 报的正是"时间范围对不上"）。谁问什么就答什么，
+    数据没覆盖到的地方由 notes 如实说明，不由代码替他改。
+    """
+    data_start = _dt.date.fromisoformat(dataset["date_range"]["start"])
+    data_end = _dt.date.fromisoformat(dataset["date_range"]["end"])
+    if start is None and end is None:
+        return data_start, data_end
+    try:
+        return engine_metrics.normalize_day_range(start or data_start, end or data_end)
+    except (ValueError, TypeError) as exc:
+        raise QueryError("invalid_range", f"时间区间不合法：{exc}") from exc
+
+
 def resolve_window(
     dataset: dict[str, Any], start: str | None, end: str | None
 ) -> tuple[_dt.date, _dt.date, list[str]]:
-    """把 start/end 规范化成闭区间（含首尾全天），并给出**如实**的说明。
+    """统计窗口：把 start/end 收紧到数据覆盖范围内，并给出**如实**的说明。
 
     没给区间就用数据集自身的覆盖范围（不是"今天"，数据集是历史数据）。
     给了区间但整个落在数据之外 → **不缩成数据边界**（那答的是另一个问题），
     原样返回 + 一条"这个区间里没有记录"的说明（与问答链路同一条约定）。
+    部分越界 → 收紧到数据边界，并把收紧这件事写进 notes（收紧的是**统计口径**，
+    回显给用户的区间仍然是 `asked_window` 的结果）。
     """
     data_start = _dt.date.fromisoformat(dataset["date_range"]["start"])
     data_end = _dt.date.fromisoformat(dataset["date_range"]["end"])
     if start is None and end is None:
         return data_start, data_end, [f"未指定区间，按数据源覆盖范围 {data_start} ~ {data_end} 统计。"]
-    try:
-        low, high = engine_metrics.normalize_day_range(start or data_start, end or data_end)
-    except (ValueError, TypeError) as exc:
-        raise QueryError("invalid_range", f"时间区间不合法：{exc}") from exc
+    low, high = asked_window(dataset, start, end)
     notes: list[str] = []
     if high < data_start or low > data_end:
         notes.append(f"所问区间（{low} ~ {high}）不在数据源范围内（{data_start} ~ {data_end}），因此没有记录。")
@@ -600,6 +622,7 @@ def fetch_table(
         raise QueryError("unknown_table", f"没有这张表：{table!r}（可选：{list(TABLES)}）")
 
     dataset = registry.require_analysis_dataset(dataset_id or registry.BUILTIN_DATASET_ID)
+    asked_low, asked_high = asked_window(dataset, start, end)
     low, high, notes = resolve_window(dataset, start, end)
     key = (dataset["dataset_id"], low.isoformat(), high.isoformat())
 
@@ -654,8 +677,12 @@ def fetch_table(
         "dataset": registry.dataset_summary(dataset),
         "query": {
             "dataset_id": dataset["dataset_id"],
-            "start": low.isoformat(),
-            "end": high.isoformat(),
+            # 回显**用户要的**区间（asked_window），不是收紧后的统计窗口 ——
+            # 页面上的时间框填了什么，这里就如实回什么（越界部分由 notes 说明）。
+            "start": asked_low.isoformat(),
+            "end": asked_high.isoformat(),
+            "window_start": low.isoformat(),      # 实际统计窗口（收紧后），审计用
+            "window_end": high.isoformat(),
             "search": _clean_search(search),
             "sort": sort_key,
             "order": sort_order,
@@ -710,6 +737,7 @@ __all__ = [
     "SALES_METRIC_LABELS",
     "TABLES",
     "TABLE_LABELS",
+    "asked_window",
     "fetch_table",
     "reset_cache",
     "resolve_window",

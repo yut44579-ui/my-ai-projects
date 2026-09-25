@@ -384,6 +384,8 @@ button { font-family: inherit; }
 /* ok = 一次动作做成了（批准 / 停用 / 删除 / 恢复），跟 error 同一条状态条，只是颜色不同 */
 .banner.ok { border-color: var(--success); color: var(--td-success-color-text); background: var(--td-success-bg); }
 .banner.loading { color: var(--text-2); }
+/* warn = 提醒（时间范围越界 / 没有记录）：不是错误，但用户必须看见 */
+.banner.warn { border-color: var(--td-warning-color); color: var(--td-warning-color-text); background: var(--td-warning-bg); }
 .banner[hidden] { display: none; }
 
 .spinner {
@@ -775,6 +777,11 @@ button { font-family: inherit; }
 .pager-summary { margin-left: auto; }
 
 /* 可排序表头：点一下是**向后端要新排序**（不是本地排序） */
+/* 「当前排序：XXX ↓」——表头高亮之外的**第二层**提示。
+   评审实测：只高亮表头，用户压根没意识到"现在按什么排"，于是按别的列读数、以为数组错了。
+   所以这行字用正文色（text-1）而不是注释色，不能混在一堆小字里。 */
+.sort-line { color: var(--text-1); font-size: 12px; margin: 0 0 var(--gap); }
+.range-hint { justify-content: space-between; }
 .table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 .table th.sortable:hover { color: var(--text-1); }
 .table th.sorted-asc::after { content: " ▲"; font-size: 9px; }

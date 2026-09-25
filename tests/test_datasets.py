@@ -780,3 +780,143 @@ def test_导出不写审计字段():
     text = content.decode("utf-8-sig")
     for banned in ("sha256", "file_hash", "hash", "file_id", "stored_path", "dataset_id"):
         assert banned not in text.lower(), banned
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑯ 排序语义 + 时间范围（用户 2026-09-25 报的两个问题）
+#
+# 用户原话：「指标按销售额 或者订单的其他某个限制词时 他的顺序也没有对上 会有 127 的订单数
+# 排在 147 的前面」+「时间范围是 2026 年的某月某天到某个时间点，但会弹出 2010 的时间是对不上的」。
+#
+# ★ 评审冻结规格里最容易搞反的一条（照它做，别自行发挥）：
+#   「按日」是**时间序列**，默认就该按日期升序 —— 不许为了让"订单数大的排前面"而把按日改成
+#   指标降序，那会牺牲时间序列本身的阅读语义。真正的毛病是"当前按什么排用户看不出来"（前端
+#   补了三层提示）与"人工排序被切指标悄悄覆盖"（前端加了 sort_source 状态机）。
+#   下面 A 组专门把"按日/按周 = 维度升序"钉死，防止以后有人又改回去。
+# ════════════════════════════════════════════════════════════════════════
+ALL_METRICS = ["sales_amount", "order_count", "customer_count", "avg_order_amount"]
+
+
+@pytest.mark.parametrize("dimension", ["day", "week"])
+@pytest.mark.parametrize("metric", ALL_METRICS)
+def test_A_时间序列维度默认按维度升序_不随指标变成数值降序(dimension, metric):
+    """★ 回归护栏：不传 sort 时，按日/按周**永远**是维度升序（时间序列语义）。"""
+    body = _get("sales", start=MONTH[0], end=MONTH[1], dimension=dimension, metric=metric,
+                page_size=100)
+    assert body["sort"] == "dimension_value" and body["order"] == "asc"
+    stamps = [item["dimension_value"] for item in body["items"]]
+    assert stamps == sorted(stamps), f"{dimension} 的第一列不是升序：{stamps[:5]}"
+
+
+@pytest.mark.parametrize("metric", ALL_METRICS)
+def test_B_按国家默认按当前指标降序(metric):
+    body = _get("sales", start=MONTH[0], end=MONTH[1], dimension="country", metric=metric,
+                page_size=100)
+    assert body["sort"] == metric and body["order"] == "desc"
+    values = [item[metric] for item in body["items"]]
+    assert values == sorted(values, reverse=True)
+
+
+@pytest.mark.parametrize("metric", ALL_METRICS)
+def test_B2_销售表按国家与独立参考逐项一致(metric):
+    """排序变了不代表数变了：按国家的三列数字仍要与独立参考逐项对上。"""
+    body = _get("sales", start=MONTH[0], end=MONTH[1], dimension="country", metric=metric,
+                page_size=100)
+    valid = _ref_valid(_ref_raw(*MONTH))
+    grouped = valid.groupby("Country", dropna=False)
+    if metric == "avg_order_amount":
+        reference = grouped["_amount"].sum() / grouped["InvoiceNo"].nunique()
+    else:
+        reference = {
+            "sales_amount": grouped["_amount"].sum(),
+            "order_count": grouped["InvoiceNo"].nunique(),
+            "customer_count": grouped["CustomerID"].nunique(),
+        }[metric]
+    got = {item["dimension_value"]: item[metric] for item in body["items"]}
+    assert len(got) == len(reference)
+    for country, expected in reference.items():
+        assert got[str(country)] == pytest.approx(float(expected), abs=1e-6)
+
+
+def test_B3_客户表与产品表首次加载默认按销售额降序():
+    """商品维度没有"按商品"的销售表（维度只有日/周/国家）—— 商品排行在「产品分析」表，
+    客户排行在「客户分析」表，两张表首次加载都按销售额降序。"""
+    for table in ("customers", "products"):
+        body = _get(table, start=MONTH[0], end=MONTH[1], page_size=50)
+        assert body["sort"] == "sales_amount" and body["order"] == "desc", table
+        values = [item["sales_amount"] for item in body["items"]]
+        assert values == sorted(values, reverse=True), table
+
+
+# ── F：响应契约 —— 回传的 sort / order 必须与**实际数据顺序**一致 ─────────
+@pytest.mark.parametrize("order", ["asc", "desc"])
+@pytest.mark.parametrize("sort", ["sales_amount", "order_count", "customer_count"])
+def test_F_销售表回传的排序方向与实际数据顺序一致(sort, order):
+    body = _get("sales", start=MONTH[0], end=MONTH[1], dimension="day", metric="sales_amount",
+                sort=sort, order=order, page_size=100)
+    assert body["sort"] == sort and body["order"] == order
+    values = [item[sort] for item in body["items"]]
+    assert values == sorted(values, reverse=(order == "desc")), f"{sort} {order} 与实际顺序不一致"
+
+
+def test_F2_客户表与产品表回传的排序方向与实际数据顺序一致():
+    for table in ("customers", "products"):
+        body = _get(table, start=MONTH[0], end=MONTH[1], sort="sales_amount", order="desc",
+                    page_size=50)
+        assert body["sort"] == "sales_amount" and body["order"] == "desc"
+        values = [item["sales_amount"] for item in body["items"]]
+        assert values == sorted(values, reverse=True), table
+
+
+def test_F3_维度列的实际顺序与回传的升降序一致():
+    for dimension in ("day", "week"):
+        body = _get("sales", start=MONTH[0], end=MONTH[1], dimension=dimension,
+                    sort="dimension_value", order="desc", page_size=100)
+        assert body["order"] == "desc"
+        stamps = [item["dimension_value"] for item in body["items"]]
+        assert stamps == sorted(stamps, reverse=True)
+
+
+# ── G：时间范围（不许自动截断、不许假装查的是数据范围）──────────────────
+def test_G1_整个区间落在数据之外时如实返回0条():
+    body = _get("sales", start="2026-09-01", end="2026-09-10", dimension="day", page_size=20)
+    assert body["total"] == 0 and body["items"] == []
+    # 回显的是**用户填的那个区间**（不是被悄悄改写过的数据边界）
+    assert body["query"]["start"] == "2026-09-01" and body["query"]["end"] == "2026-09-10"
+    assert any("没有记录" in note for note in body["notes"])
+
+
+def test_G2_部分重叠按闭区间真实返回且不回显成截断后的终点():
+    """2011-12-01 ~ 2026-09-10：数据只有 2011-12-01 ~ 2011-12-09 那一段，
+    返回的就该是那一段的真实行，而不是 0 行、也不是"区间被改写成 2011-12-09"。"""
+    overlap = _get("sales", start="2011-12-01", end="2026-09-10", dimension="day", page_size=100)
+    inside = _get("sales", start="2011-12-01", end="2011-12-09", dimension="day", page_size=100)
+    assert overlap["total"] == inside["total"] > 0
+    assert overlap["items"] == inside["items"]
+    assert overlap["query"]["end"] == "2026-09-10", "回显把用户填的终点截断成了数据边界"
+    # 统计窗口收紧到数据边界这件事是**写明白的**（收的是口径，不是用户的输入）
+    assert overlap["query"]["window_end"] == "2011-12-09"
+    assert any("止算" in note for note in overlap["notes"])
+
+
+def test_G3_数据覆盖的首尾两天都属于有效范围():
+    first = _get("sales", start="2010-12-01", end="2010-12-01", dimension="day", page_size=10)
+    last = _get("sales", start="2011-12-09", end="2011-12-09", dimension="day", page_size=10)
+    assert first["total"] == 1 and first["items"][0]["dimension_value"] == "2010-12-01"
+    assert last["total"] == 1 and last["items"][0]["dimension_value"] == "2011-12-09"
+    # 原始数据表同样认这两天（那是"数据源里到底有没有"的直接证据）
+    assert _get("raw", start="2010-12-01", end="2010-12-01", page_size=1)["total"] > 0
+    assert _get("raw", start="2011-12-09", end="2011-12-09", page_size=1)["total"] > 0
+
+
+def test_G4_前端拿到的覆盖范围是数据区间而不是登记时间():
+    body = _get("sales", start=MONTH[0], end=MONTH[1], page_size=5)
+    assert body["dataset"]["date_range"] == {"start": "2010-12-01", "end": "2011-12-09"}
+    # 登记时间仍然在（数据管理页要用），但它**不该**是业务表拿来当"数据覆盖"的那个字段
+    assert body["dataset"]["updated_at"] != body["dataset"]["date_range"]["end"]
+
+
+def test_G5_不传时间范围时按数据覆盖范围统计():
+    body = _get("sales", dimension="day", page_size=500)
+    assert body["query"]["start"] == "2010-12-01" and body["query"]["end"] == "2011-12-09"
+    assert any("覆盖范围" in note for note in body["notes"])
