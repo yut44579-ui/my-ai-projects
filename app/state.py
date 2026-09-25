@@ -427,6 +427,16 @@ def set_account_status(username: str, status: str, reviewed_by: str, reviewed_at
     return repositories.accounts().set_status(username, status, reviewed_by, reviewed_at)
 
 
+def remove_account(username: str) -> dict | None:
+    """彻底删掉一个账号（记录从账号文件里消失），返回被删掉的那条。
+
+    ⚠️ 与 `set_account_status(..., DISABLED)` 不是一回事：停用是"还在表里、能恢复"，
+    删除是"没了"。所以调用方（`app/accounts.py::delete_account`）必须先过
+    "别把最后一个管理员删掉"那道闸门 —— 存储层不管业务判断。
+    """
+    return repositories.accounts().remove(username)
+
+
 def list_accounts() -> list[dict]:
     """全部账号（落盘顺序：新的在前）。**只给管理动作与守卫用**，出参由 accounts.public 裁剪。"""
     return repositories.accounts().all()

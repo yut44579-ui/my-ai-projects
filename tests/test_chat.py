@@ -900,6 +900,12 @@ def test_AC09_新端点与既有端点并存():
         "/api/auth/login",
         "/api/auth/accounts/exists",
         "/api/auth/captcha",
+        # 管理员审批那次新增的 3 条：退出登录 / 账号列表 / 审批 / 删除。
+        # 同样只在 app/api_auth.py 里加，仍是 /api/auth 前缀 —— 既有端点语义一个字没动。
+        "/api/auth/logout",
+        "/api/auth/accounts",
+        "/api/auth/accounts/{username}/review",
+        "/api/auth/accounts/{username}",
     }
     assert auth_paths <= paths
 

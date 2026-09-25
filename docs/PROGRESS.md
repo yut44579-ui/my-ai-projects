@@ -27,3 +27,17 @@
 ```
 用户提需求 → Hermes 出方案 → ChatGPT 评审 → Claude CLI 写代码 → Hermes 独立门禁验收 → git commit
 ```
+
+## 2026-09-25 · STEP-C 账号审批 + 游客限制（TASK-STEP-C / D21）
+
+| 项 | 结果 |
+|---|---|
+| 真服务重启后账号仍在 | `scripts/stepc_accounts_e2e.py` **34/34**（kill 掉真 uvicorn 再拉起，两个账号照旧能登） |
+| 游客真的被拦住（真浏览器） | `scripts/stepc_guest_cdp.mjs` **55/55**（点受限入口前后 `window.fetch` 次数 10 → 10） |
+| 游客被拦住（服务端） | 管理三条端点：游客 401 / 普通账号 403（不是靠前端不显示按钮） |
+| 前端受限行为 | `scripts/session_check.mjs` **253/253**（`Session.guard()` 逐个动作要 false） |
+| 单测 | 新增 `tests/test_auth_admin.py`（19 条）、`tests/test_web_guest.py`（10 条） |
+
+产物：`account` 记录多了 `status / role / reviewed_at / reviewed_by`；
+`DELETE /api/auth/accounts/{u}`；`web/session.js` 的 `guard()/mark()/applyGuards()`；
+`index.html` 的 `#guest-bar` / `#guard-modal` / `#set-accounts-card`。

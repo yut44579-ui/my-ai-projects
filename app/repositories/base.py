@@ -204,6 +204,17 @@ class AccountRepository(ABC):
                    reviewed_at: str) -> dict | None:
         """改账号状态并记下审批人与时间（**状态没变就不写盘**，幂等）。"""
 
+    @abstractmethod
+    def remove(self, username: str) -> dict | None:
+        """彻底删掉一个账号，返回被删掉的那条（不存在返回 None）。
+
+        ⚠️ 与 `set_status(..., disabled)` 的区别，别混用：
+            · disabled 是**停用**：账号还在表里，管理员随时能恢复，登录时说"已被停用"；
+            · remove 是**删除**：记录从文件里消失，账号名随即可以被重新注册。
+        所以"别把最后一个管理员删掉"这条保护由 `app/accounts.py` 负责
+        —— 那是业务判断，不是存储层该管的事。
+        """
+
 
 class DatasetRepository(ABC):
     """数据集登记表（`state/datasets.json`）：STEP A 引入的**数据源身份**。

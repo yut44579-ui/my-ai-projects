@@ -428,6 +428,29 @@ def review(username: str, action: str, actor: str) -> dict:
     return public(updated or record)
 
 
+def delete_account(username: str) -> dict:
+    """管理员**彻底删掉**一个账号，返回被删掉的那条（出参已过白名单）。
+
+    与 `review(..., disable)` 的区别写在这里，别混：
+        · 停用 → 记录还在，随时能恢复，登录时说"该账号已被停用"；
+        · 删除 → 记录消失，**这个账号名随即可以被重新注册**（这是个不可逆动作）。
+
+    保护规矩（和"不能拒绝/停用管理员"同一条思路：别把能批账号的人弄没了）：
+        · 管理员账号只有在**还有别的可用管理员**时才让删
+          —— 否则系统会退化成"谁都不能批账号"，而第一个账号又是自动管理员，
+            那条"第一个注册的自动成为管理员"的救命规则只在**一个账号都没有**时才会触发，
+            真删空了就得删账号文件才能恢复。宁可不许删，也不让人走到那一步。
+        · 删自己也不行：删完这条会话对应的账号就没了（要退出登录重新注册一个）。
+    """
+    name = normalize_username(username)
+    record = state.get_account(name)
+    if record is None:
+        raise AccountError("account_not_found", "找不到这个账号。")
+    if record.get("role") == ROLE_ADMIN and admin_count() <= 1:
+        raise AccountError("last_admin", "这是唯一的管理员账号，删掉就没人能批账号了。")
+    removed = state.remove_account(record.get("username") or name)
+    return public(removed or record)
+
 
 def login(username: str, password: str) -> dict:
     """登录校验；成功了才刷新"上次登录时间"，返回**可出给前端**的账号信息。
@@ -514,6 +537,7 @@ __all__ = [
     "USERNAME_MIN",
     "account_count",
     "clear_failures",
+    "delete_account",
     "derive",
     "exists",
     "lock_remaining",

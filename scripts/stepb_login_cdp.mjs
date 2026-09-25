@@ -479,7 +479,7 @@ try {
     "验证码不对不放行（还在登录页）");
 
   // ── ③ 真注册一个账号（注册已经是真功能，不再是"尚未开通"提示）──────────
-  console.log("\n=== ③ 真注册：链接切栏 → 失焦查重 → 两次不一致 → 回车提交 → 直接进来 ===");
+  console.log("\n=== ③ 真注册：链接切栏 → 失焦查重 → 两次不一致 → 回车提交 → 第一个账号直接进来 ===");
   await evalJs(`document.getElementById("link-register").click()`);
   await sleep(250);
   const regPane = await evalJs(`(() => {
@@ -574,7 +574,8 @@ try {
     };
   })()`);
   check(afterRegister.gateHidden && afterRegister.locked === false,
-    "在密码框里按**回车**就提交了，注册成功并**直接进系统**（不用再登一次）");
+    "在密码框里按**回车**就提交了；这是本机第一个账号 → 自动是管理员、直接进系统"
+    + "（之后的账号是「等待批准」，见 scripts/stepc_guest_cdp.mjs）");
   check(afterRegister.userName === "唐宇", "顶栏显示的是**显示名**「唐宇」", `「${afterRegister.userName}」`);
   check(afterRegister.avatar === "唐", "中文显示名 → 中文首字做头像（不是拉丁首字母）",
     `「${afterRegister.avatar}」`);

@@ -116,7 +116,12 @@ def test_注册成功并返回账号信息且不含任何敏感字段():
     assert account["last_login_at"] is None, "刚注册还没登录过"
     assert account["created_at"], "建号时间要记下来（审计）"
     # 白名单：多出来的字段一个都不许有
-    assert set(account) == {"username", "display_name", "created_at", "last_login_at"}
+    # ★ 本版加了账号状态与角色 —— 白名单随之多了 status / role / reviewed_at / reviewed_by
+    #   （"第一个账号自动是管理员、之后的账号等批准"这条规则要能从响应里看出来）。
+    assert set(account) == set(accounts.PUBLIC_FIELDS)
+    assert account["status"] == accounts.STATUS_ACTIVE, "第一个账号直接可用（否则没人能批账号）"
+    assert account["role"] == accounts.ROLE_ADMIN, "第一个注册的账号自动成为管理员"
+    assert account["reviewed_by"], "自动成为管理员这件事要留下出处（审计）"
 
 
 def test_显示名留空就用账号名():
@@ -234,10 +239,15 @@ def test_密码绝不明文落盘(isolated_state):
     assert PLAIN not in raw, "账号文件里出现了明文密码"
     assert PLAIN_LATIN not in raw, "账号文件里出现了明文密码的一部分"
     record = json.loads(raw)["accounts"][0]
-    # 记录的字段**逐个锁死**（多一个字段就要有人来解释它是干什么的）
+    # 记录的字段**逐个锁死**（多一个字段就要有人来解释它是干什么的）。
+    # 本版新增的四个都跟"审批"有关：status（能不能登录）/ role（能不能批账号）/
+    # reviewed_at + reviewed_by（谁在什么时候批的，审计要能追溯）。
     assert set(record) == {"username", "display_name", "created_at", "last_login_at",
+                           "status", "role", "reviewed_at", "reviewed_by",
                            "pwd_algo", "pwd_salt", "pwd_hash", "pwd_iterations"}, \
         f"账号记录的字段变了：{sorted(record)}"
+    assert record["status"] == accounts.STATUS_ACTIVE and record["role"] == accounts.ROLE_ADMIN, \
+        "第一个账号 = 管理员 + 可用（记录里也要是这两个值）"
     assert record["pwd_algo"] == "pbkdf2_sha256"
     assert record["pwd_iterations"] == accounts.PWD_ITERATIONS
     assert len(record["pwd_salt"]) == accounts.PWD_SALT_BYTES * 2, "盐应当是 16 字节（32 位十六进制）"
@@ -268,11 +278,18 @@ def test_校验值比对函数对与错都对():
 
 
 def test_公开视图只有白名单字段():
+    """白名单是**白名单**：记录里有敏感字段，出参里一个都不许有。
+
+    判据不写死成一份手抄的清单，而是跟 `accounts.PUBLIC_FIELDS` 对齐 ——
+    手抄一份的结果就是"清单改了、这里没跟着改"，测试还照样绿。
+    """
     record = {"username": "甲", "display_name": "甲", "created_at": "t", "last_login_at": None,
+              "status": "active", "role": "user", "reviewed_at": None, "reviewed_by": None,
               "pwd_algo": "pbkdf2_sha256", "pwd_salt": "aa", "pwd_hash": "bb", "pwd_iterations": 1}
-    assert accounts.public(record) == {
-        "username": "甲", "display_name": "甲", "created_at": "t", "last_login_at": None,
-    }
+    view = accounts.public(record)
+    assert set(view) == set(accounts.PUBLIC_FIELDS)
+    for secret in ("pwd_algo", "pwd_salt", "pwd_hash", "pwd_iterations"):
+        assert secret not in view, f"公开视图里漏出了 {secret}"
 
 
 def test_账号文件之外的路径不会漏出敏感字段(isolated_state):
@@ -506,8 +523,14 @@ def test_登录成功把连续失败清零():
 
 
 def test_冷却按账号记_不影响别的账号():
-    _register()
-    _register(username="另一个账号")
+    """一个账号被锁，不该连累另一个账号 —— 冷却记的是**账号名**，不是"这台机器"。
+
+    本版起"第二个注册的账号是待批准"（只有第一个账号自动是管理员）——
+    所以这里先把它批了，否则它连"密码正确"都走不到，验不了冷却这件事。
+    """
+    _register()                                    # 第一个 → 管理员、可用
+    _register(username="另一个账号")                # 第二个 → 待批准
+    accounts.review("另一个账号", accounts.REVIEW_APPROVE, actor=ACCOUNT)   # 管理员批一下
     for _ in range(accounts.MAX_ATTEMPTS):
         _login(password="wrong-password")
     assert accounts.lock_remaining(ACCOUNT) > 0

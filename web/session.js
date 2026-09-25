@@ -6,8 +6,17 @@
  *     （登录 / 提问 / 长时间没操作 / 退出）。
  * 不做：**任何密码运算**。本文件里没有摘要、没有加密、没有比对 —— 密码从输入框直接进请求体，
  *       算与比都在后端（`app/accounts.py`）。所以本机记录、页面文本、控制台里都不会有密码。
- * 也不做：令牌 / 服务端会话 / 角色权限 / 多用户隔离（本地单机级别，那些留待后续）。
+ * 也不做：令牌 / 多用户数据隔离（本地单机级别，那些留待后续）。
  *       于是这里也不说"已安全登录"这种话 —— 它只是"这台机器记得你刚对过密码"。
+ *
+ * ════ 角色与游客（本文件新增的两件事）════
+ * ① **角色**：只有一条规则 —— 这台机器上第一个注册的账号是管理员。管理员登录后
+ *    「系统设置」里会多出「账号管理」（待批准列表 + 已批准列表），别人看不到。
+ *    角色是**后端说了算**的（登录响应里带着 role），前端只负责照着显示。
+ * ② **游客**：不进账号表、没有会话编号，所以后端那几条管理端点天然拒绝它（401）——
+ *    这里再做一道**前端拦截**，让用户在点下去的那一刻就看到人话，而不是等一个 401。
+ *    受限清单写在 RESTRICTED 里（导入 / 导出 / 改任务 / 账号管理 / 删除），
+ *    **只有这些地方**会出现 ⚠ 记号与弹窗；提问、看表格、看周报一概不受限。
  *
  * ════ 状态由什么驱动（不靠前端"假装忙"）════
  *   登录成功（或刷新时读回本机记录） → 在线
@@ -29,15 +38,29 @@ window.Session = (() => {
   const hide = (el) => { if (el) el.hidden = true; };
   const setText = (id, value) => { const el = $(id); if (el) el.textContent = value; };
 
-  // 本机那条"这次是谁"的记录：**只存账号、显示名与入口类型**，密码连碰都不碰
-  // （键名沿用当初的写法，老记录里的"记住账号"因此不会丢）
+  // 本机那条"这次是谁"的记录：**只存账号、显示名、入口类型、角色与会话编号**，
+  // 密码连碰都不碰（键名沿用当初的写法，老记录里的"记住账号"因此不会丢）。
+  // 会话编号不是令牌：它只用来回答"这个管理动作是谁按的"，服务重启即失效（见 app/accounts.py）。
   const WHO_KEY = "sra.who";
   const NAME_KEY = "sra.remembered-name";
+
+  // ── 游客**用不了**的东西（清单只写在这里一处，页面别处不许再列一遍）──────────
+  // 每一项：给用户看的功能名 + 点下去时弹窗里补的那半句。
+  // 没列在这里的（提问、看表格、看周报、翻历史、看帮助…）游客都能用。
+  const RESTRICTED = {
+    import: { label: "导入数据（更换数据源）", why: "导入会把数据源换掉，需要用自己的账号来做。" },
+    export: { label: "导出报表", why: "导出会把报表文件存到你电脑上，需要先登录。" },
+    task: { label: "保存或修改任务", why: "任务是要长期留着的，需要先登录才能建和改。" },
+    accounts: { label: "账号管理", why: "批准、停用、删除账号只有管理员能做。" },
+    delete: { label: "删除操作", why: "删除不可恢复，需要先登录。" },
+  };
+  const GUEST_BAR_TEXT = "游客模式 · 部分功能受限";
+  const GUARD_TITLE = "需要您先登录才能使用完整服务";
 
   // 三栏：账号登录 / 注册 / 游客登录。标题与副标题跟栏目走 —— 切栏时一起换。
   const TABS = {
     account: { title: "欢迎回来 👋", sub: "登录后即可开始分析" },
-    register: { title: "建一个账号", sub: "填三下就好，注册完直接用新账号进来" },
+    register: { title: "建一个账号", sub: "填三下就好，注册后等管理员批准" },
     guest: { title: "游客模式", sub: "不用填账号密码，直接进来看看" },
   };
   const PANES = { account: "login-form", register: "register-form", guest: "guest-pane" };
@@ -103,21 +126,28 @@ window.Session = (() => {
       const parsed = JSON.parse(raw);
       if (!parsed || !parsed.name) return null;
       const name = String(parsed.name);
+      const kind = parsed.kind === "guest" ? "guest" : "account";
       return {
         name: name,
-        kind: parsed.kind === "guest" ? "guest" : "account",
+        kind: kind,
         displayName: String(parsed.display_name || name),   // 老记录没有这一项：退回账号名
+        // 老记录（这一版之前存的）没有角色：当作普通账号 —— 宁可不给管理入口，
+        // 也不要凭一条旧记录就让人看到"账号管理"。真正的权限在后端（会回 401/403）。
+        role: kind === "guest" ? "" : (parsed.role === "admin" ? "admin" : "user"),
+        sessionId: kind === "guest" ? "" : String(parsed.session_id || ""),
       };
     } catch (err) {
       return null;                       // 记录坏了就当没登录，不把页面搞挂
     }
   }
 
-  // 只存"这次是谁"：账号、显示名、入口类型。**不存密码、不存令牌**（也没有令牌可存）。
+  // 只存"这次是谁"：账号、显示名、入口类型、角色、会话编号。
+  // **不存密码、不存令牌**（也没有令牌可存）—— 会话编号服务重启即失效。
   function writeWho(who) {
     try {
       localStorage.setItem(WHO_KEY, JSON.stringify({
         name: who.name, kind: who.kind, display_name: who.displayName,
+        role: who.role || "", session_id: who.sessionId || "",
       }));
     } catch (err) { /* 本机不让写：这次登录仍然可用，只是刷新后要重登 */ }
   }
@@ -556,8 +586,15 @@ window.Session = (() => {
     }
   }
 
-  function enter(name, kind, displayName) {
-    state.who = { name: name, kind: kind, displayName: displayName || name };
+  // 进来（账号登录成功 / 注册第一个账号 / 游客）。
+  // `extra` 带上后端给的角色与会话编号 —— **角色以后端为准**，前端不自己算。
+  function enter(name, kind, displayName, extra) {
+    const data = extra || {};
+    state.who = {
+      name: name, kind: kind, displayName: displayName || name,
+      role: kind === "guest" ? "" : (data.role === "admin" ? "admin" : "user"),
+      sessionId: kind === "guest" ? "" : String(data.sessionId || ""),
+    };
     writeWho(state.who);
     hide($("login-gate"));
     if (document.body) document.body.classList.remove("is-locked");
@@ -565,9 +602,112 @@ window.Session = (() => {
     setStatus("online", "login");
     renderUserArea();
     renderPaneUser();
+    renderGuestMode();
+    // 身份变了：受限入口上的 ⚠ 记号跟着重画（游客 → 登录后记号要全部消失）
+    applyGuards();
+    if (typeof document !== "undefined" && document.dispatchEvent) {
+      document.dispatchEvent(new CustomEvent("sra:identity", { detail: identity() }));
+    }
     const pending = state.pending;
     state.pending = null;
     if (pending) pending();
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 游客：提示条 + 受限拦截 + ⚠ 记号
+  // ══════════════════════════════════════════════════════════════════════
+  function isGuest() {
+    return Boolean(state.who) && state.who.kind === "guest";
+  }
+
+  function isAdmin() {
+    return Boolean(state.who) && state.who.kind === "account" && state.who.role === "admin";
+  }
+
+  function identity() {
+    const who = state.who;
+    return {
+      name: who ? who.name : "",
+      kind: who ? who.kind : "",
+      role: who ? (who.role || "") : "",
+      displayName: who ? (who.displayName || who.name) : "",
+      guest: isGuest(),
+      admin: isAdmin(),
+      loggedIn: Boolean(who),
+      sessionId: who ? (who.sessionId || "") : "",
+    };
+  }
+
+  // 顶部那条轻量提示：只在游客身份下出现，一条，不是满屏遮罩。
+  function renderGuestMode() {
+    const bar = $("guest-bar");
+    if (bar) bar.hidden = !isGuest();
+    setText("guest-bar-text", GUEST_BAR_TEXT);
+  }
+
+  // ⚠ 记号只画在 `[data-guard]` 元素上 —— 页面里没标的地方一个记号都没有。
+  // 账号登录之后记号全部消失（受限是**游客**的限制，不是"所有人"的限制）。
+  function paintGuard(el) {
+    const action = el.getAttribute("data-guard");
+    if (!action || !RESTRICTED[action]) return;
+    const needed = isGuest();
+    el.classList.toggle("is-guarded", needed);
+    const old = el.querySelector(".guard-ico");
+    if (needed && !old) {
+      const icon = document.createElement("span");
+      icon.className = "guard-ico";
+      icon.textContent = "⚠";
+      icon.title = "游客模式：这项功能要登录后才能用";
+      icon.setAttribute("aria-hidden", "true");
+      el.appendChild(icon);
+    } else if (!needed && old) {
+      old.remove();
+    }
+  }
+
+  function applyGuards() {
+    if (typeof document === "undefined" || !document.querySelectorAll) return;
+    const nodes = document.querySelectorAll("[data-guard]");
+    Array.prototype.forEach.call(nodes, paintGuard);
+  }
+
+  // 给**动态生成的**按钮挂上受限标记（app.js 造按钮时调它，跟页面上的静态按钮同一套）。
+  function mark(el, action) {
+    if (!el || !el.setAttribute) return el;
+    el.setAttribute("data-guard", action);
+    paintGuard(el);
+    return el;
+  }
+
+  // ★ 拦截点：受限动作在执行**之前**问这里一句。
+  //   返回 true = 照常执行；返回 false = 已经弹过窗，调用方必须 return（**动作不发生**）。
+  function guard(action) {
+    const item = RESTRICTED[action];
+    if (!item) return true;                 // 不在清单里 = 不受限，任何人可用
+    if (!isGuest()) return true;            // 账号登录（含管理员）不受这些限制
+    openGuardModal(item);
+    return false;
+  }
+
+  function openGuardModal(item) {
+    setText("guard-title", GUARD_TITLE);
+    setText("guard-text", `「${item.label}」${item.why}`);
+    show($("guard-modal"));
+    const button = $("guard-login");
+    if (button && button.focus) button.focus();
+  }
+
+  function closeGuardModal() {
+    hide($("guard-modal"));
+  }
+
+  // 「去登录」：退掉游客身份、回到登录页的账号那一栏（游客不留身份，本来也没什么可保留）。
+  function leaveGuestForLogin() {
+    closeGuardModal();
+    logout("guest");
+    switchTab("account");
+    const name = $("login-name");
+    if (name && name.focus) name.focus();
   }
 
   // 登录：账号与密码**原样交给后端**核对（前端不比、不算、不存）。
@@ -614,11 +754,17 @@ window.Session = (() => {
     rememberName(remember && remember.checked ? checked.name : "");
     if (button) button.disabled = false;
     hide(spinner);
-    enter(account && account.username ? account.username : checked.name, "account",
-      (account && account.display_name) || checked.name);
+    const who = (account && account.username) || checked.name;
+    enter(who, "account", (account && account.display_name) || who,
+      { role: account && account.role, sessionId: account && account.session_id });
+    toast(isAdmin()
+      ? `已用管理员账号「${state.who.displayName}」进来。「系统设置 → 账号管理」里可以批准新账号。`
+      : `已用「${state.who.displayName}」进来。`, "ok");
   }
 
-  // 注册：成功后**直接用新账号进来**（不再让人回去重填一次登录表单）。
+  // 注册：★ **成功后不再直接进系统** —— 按后端给的状态分两种结果：
+  //   · 这台机器上的第一个账号 → 自动是管理员、直接可用 → 照常进来（否则系统没人能批账号）；
+  //   · 其它账号 → 状态是「等待批准」→ 就地告诉用户等批准，**不进系统、不写本机登录记录**。
   // 重复账号（409）就地标在账号框下面 —— 那句话就是后端给的，前端不改写。
   async function submitRegister(event) {
     if (event && event.preventDefault) event.preventDefault();
@@ -659,10 +805,47 @@ window.Session = (() => {
     }
     if (button) button.disabled = false;
     hide(spinner);
+    setStatus("offline", "register");
     const who = (account && account.username) || checked.name;
-    enter(who, "account", (account && account.display_name) || who);
-    toast(`账号「${(account && account.display_name) || who}」已经建好，并用它进来了。`
-      + "下次进来要输对密码才行 —— 密码只在这台机器上保存成不可还原的校验值。", "ok");
+    const active = account && account.status === "active";
+    // 验证码是一次性的，注册这条路走完了就换一张（不管成没成，旧的那张已经交出去了）
+    loadCaptcha("register");
+    if (active) {
+      // 第一个账号（管理员）：注册完就能用，照常进来
+      enter(who, "account", (account && account.display_name) || who,
+        { role: account && account.role, sessionId: account && account.session_id });
+      toast("这台机器上的第一个账号 —— 你已经是管理员了，现在就能用。"
+        + "别人注册的账号要由你批准才能登录（在「系统设置 → 账号管理」里）。", "ok");
+      return;
+    }
+    // 等待批准：不进来，只把结果说清楚（三句话：接下来会怎样、谁能批、现在能干什么）
+    showRegisterPending((account && account.display_name) || who);
+  }
+
+  // 注册完「等待批准」就地提示：注册表单收起来，换成一张结果卡片。
+  // 为什么不是弹个 toast：toast 三秒就没了，而"接下来会发生什么、现在能做什么"
+  // 是要用户看明白的事（而且**不给**他一个"已经进来了"的错觉）。
+  function showRegisterPending(displayName) {
+    hide($("register-form"));
+    setText("reg-pending-name", displayName);
+    // 账号已经建好了：注册表单清干净（密码不该在屏幕上多留），验证码换一张
+    // （旧的那张随这次提交已经作废）。等批准的人回来时看到的是一张空表。
+    ["reg-name", "reg-display", "reg-pwd", "reg-pwd2", "reg-captcha"].forEach((id) => {
+      const input = $(id);
+      if (input) input.value = "";
+      setFieldError(id, `${id}-msg`, "");
+    });
+    const strength = $("reg-strength");
+    if (strength) hide(strength);
+    state.lastCheckedName = "";
+    loadCaptcha("register");
+    show($("register-pending"));
+    const button = $("btn-reg-pending-back");
+    if (button && button.focus) button.focus();
+  }
+
+  function hideRegisterPending() {
+    hide($("register-pending"));
   }
 
   async function submitGuest(event) {
@@ -693,6 +876,9 @@ window.Session = (() => {
       const pane = $(paneId);
       if (key === wanted) show(pane); else hide(pane);
     });
+    // 注册那张"等待批准"的结果卡：切栏时一律收起来（回到填表状态）。
+    // 不收的话，切走再回来看到的还是上一次的结论，人会以为刚填的也提交了。
+    hideRegisterPending();
     setText("login-title", TABS[wanted].title);
     setText("login-sub", TABS[wanted].sub);
   }
@@ -717,17 +903,33 @@ window.Session = (() => {
     setEyeState(!shown);
   }
 
-  function logout() {
+  // 退出（`reason` = "guest" 时是游客点「去登录」触发的：不说"退出登录"，
+  // 因为游客本来就没登录过，说错了用户会以为自己刚才登录过）。
+  function logout(reason) {
+    const wasGuest = isGuest() || reason === "guest";
+    const sessionId = state.who ? state.who.sessionId : "";
     clearWho();
     state.who = null;
+    closeGuardModal();
+    closeUserMenu();
     setStatus("offline", "logout");
     resetForm();
     if (document.body) document.body.classList.add("is-locked");
     show($("login-gate"));
     renderUserArea();
     renderPaneUser();
+    renderGuestMode();
+    applyGuards();                       // 记号只在游客态出现；退出后一个都不该留
     refreshGuestName();
-    toast("已退出登录，本机那条登录记录也清掉了。想再进来，重新登一次就行。");
+    if (typeof document !== "undefined" && document.dispatchEvent) {
+      document.dispatchEvent(new CustomEvent("sra:identity", { detail: identity() }));
+    }
+    // 服务端那条本机会话也清掉（清不到不算失败：服务重启过本来就没了）。
+    // 只对有会话编号的账号做 —— 游客没有会话，不必发这个请求。
+    if (sessionId && typeof API !== "undefined" && API.authLogout) {
+      API.authLogout(sessionId).catch(() => {});
+    }
+    if (!wasGuest) toast("已退出登录，本机那条登录记录也清掉了。想再进来，重新登一次就行。");
   }
 
   function closeUserMenu() {
@@ -935,6 +1137,34 @@ window.Session = (() => {
     });
   }
 
+  // 弹窗与游客提示条上的按钮（「去登录」两处都通向同一条路：leaveGuestForLogin）。
+  function bindGuardModal() {
+    const login = $("guard-login");
+    if (login) login.addEventListener("click", leaveGuestForLogin);
+    const cancel = $("guard-cancel");
+    if (cancel) cancel.addEventListener("click", closeGuardModal);
+    const backdrop = $("guard-backdrop");
+    if (backdrop) backdrop.addEventListener("click", closeGuardModal);
+    const barLink = $("guest-bar-login");
+    if (barLink) barLink.addEventListener("click", leaveGuestForLogin);
+    const back = $("btn-reg-pending-back");
+    if (back) back.addEventListener("click", () => {
+      switchTab("account");
+      const input = $("login-name");
+      if (input && input.focus) input.focus();
+    });
+    // Esc 关弹窗（跟帮助抽屉同一个习惯）
+    document.addEventListener("keydown", (event) => {
+      const modal = $("guard-modal");
+      if (event && event.key === "Escape" && modal && !modal.hidden) closeGuardModal();
+    });
+    // 弹窗里点一下不该把点击漏到底下的页面上（避免"关了窗顺手又点了个按钮"）
+    const card = $("guard-card");
+    if (card) card.addEventListener("click", (event) => {
+      if (event && event.stopPropagation) event.stopPropagation();
+    });
+  }
+
   function bindUserMenu() {
     const button = $("btn-user");
     const menu = $("user-menu");
@@ -1000,6 +1230,7 @@ window.Session = (() => {
     bindGate();
     bindUserMenu();
     bindActivity();
+    bindGuardModal();
 
     const who = readWho();
     if (who) {
@@ -1015,6 +1246,8 @@ window.Session = (() => {
     }
     renderUserArea();
     renderPaneUser();
+    renderGuestMode();
+    applyGuards();                              // 刷新回来仍是游客 → 受限处的 ⚠ 记号照旧画上
     resetForm();
     refreshGuestName();
 
@@ -1049,6 +1282,19 @@ window.Session = (() => {
     trackRequest,
     name: () => (state.who ? state.who.name : ""),
     displayName: () => (state.who ? (state.who.displayName || state.who.name) : ""),
+
+    // ── 身份与受限（app.js 用这几个；页面逻辑不自己判断"我是不是游客"）────────
+    identity,
+    isGuest,
+    isAdmin,
+    sessionId: () => (state.who ? (state.who.sessionId || "") : ""),
+    // ★ 受限动作的**唯一**拦截点：返回 false 时调用方必须立刻 return，动作不许发生
+    guard,
+    // 动态造出来的按钮挂受限标记（页面上的静态按钮写在 index.html 的 data-guard 里）
+    mark,
+    applyGuards,
+    restrictions: () => JSON.parse(JSON.stringify(RESTRICTED)),
+
     // 排查与验收用（不参与界面渲染）
     status: () => state.status,
     loggedIn: () => !!state.who,

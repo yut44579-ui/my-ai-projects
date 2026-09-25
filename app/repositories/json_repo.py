@@ -281,3 +281,17 @@ class JsonAccountRepository(_JsonRepositoryBase, AccountRepository):
         return self._collection.update_first(
             lambda record: str(record.get("username") or "").strip().casefold() == wanted, mutate
         )
+
+    def remove(self, username: str) -> dict | None:
+        """彻底删掉一个账号（记录从文件里消失），返回被删掉的那条。
+
+        匹配口径与 `get` / `set_status` 完全一致（大小写不敏感、去掉首尾空白）——
+        三个方法认的是同一个"这个账号名指的是哪条记录"，不能各认各的。
+        "最后一个管理员不许删"那条保护**不在这里**（业务判断归 app/accounts.py）。
+        """
+        wanted = (username or "").strip().casefold()
+        if not wanted:
+            return None                                  # 空名字不匹配任何记录（也避免误删第一条）
+        return self._collection.remove_first(
+            lambda record: str(record.get("username") or "").strip().casefold() == wanted
+        )

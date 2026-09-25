@@ -240,3 +240,19 @@ class JsonCollection:
         with LOCK:
             existing = read_records(self.path(), self._key)
             write_records(self.path(), self._key, list(records) + existing)
+
+    def remove_first(self, predicate: Callable[[dict], bool]) -> dict | None:
+        """删掉第一条匹配的记录，返回被删掉的那条（一条都没匹配上返回 None，不写盘）。
+
+        只删**一条**：账号名是唯一的，多删一条就是把别人的账号删了 ——
+        调用方（账号仓库）正是按这个前提用的。
+        """
+        with LOCK:
+            records = read_records(self.path(), self._key)
+            for index, record in enumerate(records):
+                if not predicate(record):
+                    continue
+                removed = records.pop(index)
+                write_records(self.path(), self._key, records)
+                return removed
+        return None

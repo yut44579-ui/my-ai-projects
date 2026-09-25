@@ -460,13 +460,19 @@ def test_B14_登录页有验证码且能点击换图() -> None:
 
 def test_B08_退出即清本机会话() -> None:
     js = read("session.js")
-    body = re.search(r"function logout\(\)\s*\{(.*?)\n  \}", js, re.S)
+    body = re.search(r"function logout\([^)]*\)\s*\{(.*?)\n  \}", js, re.S)
     assert body, "找不到 logout"
     inner = body.group(1)
     assert "clearWho()" in inner, "退出没有清本机记录"
     assert 'setStatus("offline"' in inner, "退出后状态不是离线"
     assert 'show($("login-gate"))' in inner, "退出后没有回到登录页"
     assert "resetForm()" in inner, "退出后没有把表单复位（密码框要清空）"
+    # 本版新增的两条（都要在退出这条路上）：
+    #   ① 服务端那条本机会话也清掉（清不到不算失败，见 accounts.close_session）
+    #   ② 游客的受限记号要跟着摘掉（游客态才有 ⚠，退出后一个都不该留）
+    assert "authLogout" in inner, "退出没有把服务端那条本机会话清掉"
+    assert "applyGuards()" in inner, "退出后没把受限入口上的 ⚠ 记号摘掉"
+    assert "closeGuardModal()" in inner, "退出时没有把受限弹窗收起来"
     boot = re.search(r"function boot\(\)\s*\{(.*?)\n  \}", js, re.S).group(1)
     assert "readWho()" in boot and 'setStatus("online"' in boot, "刷新恢复没接上"
 

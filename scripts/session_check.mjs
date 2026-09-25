@@ -65,9 +65,21 @@ function makeElement(id) {
     handlers: {},
     children: [],
     appendChild(child) { this.children.push(child); return child; },
+    remove() {           // 受限记号会被摘掉（游客 → 登录之后），假的 DOM 也得支持
+      for (const parent of elements.values()) {
+        const at = parent.children.indexOf(this);
+        if (at >= 0) parent.children.splice(at, 1);
+      }
+    },
     setAttribute(key, value) { this[key] = value; },
     getAttribute(key) { return this[key]; },
     addEventListener(type, fn) { (this.handlers[type] = this.handlers[type] || []).push(fn); },
+    // 极简 querySelector：只支持本页真正用到的那两种（类名，且只看直接子节点）
+    querySelector(selector) {
+      if (!selector.startsWith(".")) return null;
+      const wanted = selector.slice(1);
+      return this.children.find((child) => (child.className || "") === wanted) || null;
+    },
   };
   // innerHTML 的 setter：真 DOM 里 `innerHTML = ""` 会清空子节点，这里也要一样 ——
   // 否则"每次打开帮助都重渲染一遍清单"会越堆越多，检查出来的条数是假的。
@@ -104,6 +116,19 @@ const documentStub = {
   getElementById: (id) => elements.get(id) || null,
   addEventListener(type, fn) {
     (documentHandlers[type] = documentHandlers[type] || []).push(fn);
+  },
+  // `[data-guard]` 的节点从 index.html 里**数出来**（不另抄一份清单）：
+  // 页面里带 data-guard="…" 的按钮，就是"受限入口"的权威名单。
+  querySelectorAll(selector) {
+    if (selector !== "[data-guard]") return [];
+    const found = [];
+    for (const match of html.matchAll(/<[^>]*id="([^"]+)"[^>]*data-guard="([^"]+)"/g)) {
+      const node = elements.get(match[1]);
+      if (!node) continue;
+      node.setAttribute("data-guard", match[2]);
+      if (!found.includes(node)) found.push(node);
+    }
+    return found;
   },
 };
 
@@ -186,9 +211,11 @@ const capsPayload = {
 };
 // 后端账号端点的**形状**照抄真实响应（就是那几个字段）。这里不测"密码对不对"——
 // 那是后端的事（由 tests/test_auth.py 拿真服务验）；这里测的是"前端拿到响应之后怎么走"：
-// 注册成功要直接进来、401 要就地提示并清空密码框、409 要把话说在账号框下面。
+// 注册成功要**等管理员批准**（不再直接进系统）、401 要就地提示并清空密码框、
+// 409 要把话说在账号框下面。
 const accountsStub = { "唐宇": "123456", "tangyu": "s3cret-1" };
 const registeredLog = [];
+const adminName = "唐宇";        // 这台机器上的第一个账号 → 管理员（真后端就是这么定的）
 // 验证码：跟真后端一个脾气 —— 一次性的、会过期、错了有话说。
 // 这里**固定**一个答案（真后端是随机图），因为这份检查验的是"前端拿到各种响应之后怎么走"。
 const CAPTCHA_CODE = "AB23";
@@ -239,7 +266,14 @@ const APIStub = {
     if (!hit || accountsStub[hit] !== password) {
       return Promise.reject(apiError(401, "bad_credentials", "账号或密码不对。"));
     }
-    return Promise.resolve({ account: { username: hit, display_name: hit, created_at: "", last_login_at: null } });
+    // 登录响应带回 role 与 session_id（角色**后端说了算**，前端只照着用）
+    return Promise.resolve({
+      account: {
+        username: hit, display_name: hit, created_at: "", last_login_at: null,
+        status: "active", role: adminName === hit ? "admin" : "user",
+        session_id: `sid-${hit}`,
+      },
+    });
   },
   authRegister: ({ username, password, display_name, captcha_id, captcha_text }) => {
     const captchaProblem = checkCaptchaStub({ captcha_id, captcha_text });
@@ -249,10 +283,16 @@ const APIStub = {
     }
     accountsStub[username] = password;
     registeredLog.push(username);
+    // 注册后**不直接进系统**：这台机器上已经有账号了 → 新账号是「等待批准」
+    // （"第一个账号自动是管理员"那条由下面的 firstAccountRegistration 分支单独演一遍）
     return Promise.resolve({
-      account: { username, display_name: display_name || username, created_at: "", last_login_at: null },
+      account: {
+        username, display_name: display_name || username, created_at: "", last_login_at: null,
+        status: "pending", role: "user",
+      },
     });
   },
+  authLogout: () => Promise.resolve({ closed: true }),
 };
 
 const context = vm.createContext({
@@ -584,7 +624,7 @@ check(el("fact-customers").textContent === "4,372", "客户编号数", `「${el(
 check(el("login-facts-note").textContent.includes("2010-12-01"), "数据范围也写出来");
 
 // ════════════════════════════════════════════════════════════════════════
-step("注册：真表单 → 查重 → 成功即进来（中文显示名 → 中文首字头像）");
+step("注册：真表单 → 查重 → 成功**等管理员批准**（不再直接进系统）");
 // ════════════════════════════════════════════════════════════════════════
 fire(el("um-logout"), "click");
 check(el("login-gate").hidden === false, "先退出，回到登录页");
@@ -618,22 +658,52 @@ check(el("reg-strength").hidden === false && el("reg-strength-text").textContent
   "边打边给强度提示", `「${el("reg-strength-text").textContent}」`);
 check(el("reg-strength").className.includes("lv-"), "强度条按等级换长度");
 
-// ③ 改一致 → 注册成功 → **直接进来**
+// ③ 改一致 → 注册成功 → ★ **不进来**，就地告诉用户"等管理员批准"
 el("reg-pwd2").value = "abc12345";
 fire(el("reg-pwd2"), "input");
 fillCaptcha("register");                   // 注册也要验证码（与登录一致）
 check(el("reg-pwd2-msg").hidden === true, "改一致后那条红字自己消失");
 fire(el("register-form"), "submit");
 await flush();
-check(el("login-gate").hidden === true && Session.loggedIn() === true, "注册成功直接进系统（不用再登一次）");
-check(el("user-name").textContent === "唐小宇（销售）", "顶栏显示的是**显示名**",
-  `「${el("user-name").textContent}」`);
-check(el("avatar").textContent === "唐", "中文显示名 → 中文首字做头像", `「${el("avatar").textContent}」`);
-check(Session.name() === "唐小宇" && Session.displayName() === "唐小宇（销售）", "账号名与显示名分开记");
-check(el("toast").textContent.includes("已经建好"), "注册成功后给一句人话", `「${el("toast").textContent}」`);
-const storedReg = JSON.parse(store.get("sra.who"));
-check(storedReg.display_name === "唐小宇（销售）" && ("password" in storedReg) === false,
-  "本机记录里有显示名、没有密码");
+check(el("login-gate").hidden === false && Session.loggedIn() === false,
+  "注册成功**不直接进系统**（等管理员批准）", `loggedIn=${Session.loggedIn()}`);
+check(el("register-pending").hidden === false, "就地显示「注册成功，等待管理员批准」");
+check(html.includes("注册成功，等待管理员批准"), "结果卡上的话就是这句");
+check(el("reg-pending-name").textContent === "唐小宇（销售）", "结果卡上写清是哪个账号",
+  `「${el("reg-pending-name").textContent}」`);
+check(store.has("sra.who") === false, "等批准时不写本机登录记录（刷新回来还是登录页）");
+check(el("register-form").hidden === true, "注册表单收起来（避免看着像还能再提交一次）");
+
+// ③b 唯一的例外：这台机器上**第一个**账号 —— 注册完直接是管理员、直接可用。
+//     否则就没人能按下"批准"，系统当场死锁（真后端同一条规则，见 app/accounts.py）。
+const realRegister = APIStub.authRegister;
+APIStub.authRegister = (payload) => Promise.resolve({
+  account: {
+    username: payload.username, display_name: payload.display_name || payload.username,
+    created_at: "", last_login_at: null, status: "active", role: "admin", session_id: "sid-first",
+  },
+});
+check(el("reg-pwd").value === "" && el("reg-pwd2").value === "",
+  "等批准时注册表单已清空（密码不在屏幕上多留）");
+fire(el("btn-reg-pending-back"), "click");
+check(el("register-pending").hidden === true && el("login-form").hidden === false,
+  "点「返回登录」→ 结果卡收起、回到登录栏");
+fire(el("ltab-register"), "click");
+el("reg-name").value = "老板";
+el("reg-pwd").value = "abc12345";
+el("reg-pwd2").value = "abc12345";
+fillCaptcha("register");
+fire(el("register-form"), "submit");
+await flush();
+check(Session.loggedIn() === true && Session.isAdmin() === true,
+  "第一个账号：注册完直接可用，而且是管理员");
+check(el("user-name").textContent === "老板", "顶栏显示的是**显示名**", `「${el("user-name").textContent}」`);
+check(el("avatar").textContent === "老", "中文显示名 → 中文首字做头像", `「${el("avatar").textContent}」`);
+const storedAdmin = JSON.parse(store.get("sra.who"));
+check(storedAdmin.display_name === "老板" && storedAdmin.role === "admin"
+  && ("password" in storedAdmin) === false && ("pwd_hash" in storedAdmin) === false,
+  "本机记录里有显示名与角色、**没有密码**");
+APIStub.authRegister = realRegister;
 
 // ④ 账号失焦查重：两种提示都要对
 fire(el("um-logout"), "click");
@@ -730,5 +800,95 @@ const storageValues = [...store.values()].join(" ");
 check(/123456|password|passwd|hash|token/i.test(storageValues) === false,
   "本机存的记录里没有密码 / 令牌这类东西");
 
+
+// ════════════════════════════════════════════════════════════════════════
+step("游客：能用什么、不能用什么（⚠ 只出现在受限处 + 拦截真的发生）");
+// ════════════════════════════════════════════════════════════════════════
+// 这一段是"游客真的被拦住"的**行为证据**：Session.guard("…") 是 app.js 里每一条
+// 受限动作的第一行，它返回 false 时调用方立刻 return —— 请求不发、文件不下载。
+// 这里逐个动作要一句 false，并确认"允许清单"里的动作不受影响。
+fire(el("um-logout"), "click");
+fire(el("ltab-guest"), "click");
+fire(el("btn-guest"), "click");
+await flush();
+check(Session.isGuest() === true && Session.isAdmin() === false, "现在是游客身份");
+
+// ① 顶部那条轻量提示：有，而且只是**一条**
+check(el("guest-bar").hidden === false, "顶部出现「游客模式」提示条");
+check(el("guest-bar-text").textContent.includes("游客模式")
+  && el("guest-bar-text").textContent.includes("部分功能受限"),
+  "提示条上说的话", `「${el("guest-bar-text").textContent}」`);
+
+// ② 受限清单：五项一个不少，且**每一项都被真的拦住**
+const restrictions = Session.restrictions();
+for (const action of ["import", "export", "task", "accounts", "delete"]) {
+  check(Boolean(restrictions[action]),
+    `受限清单里有「${restrictions[action] ? restrictions[action].label : action}」`);
+  el("guard-modal").hidden = true;
+  const allowed = Session.guard(action);
+  check(allowed === false, `游客点「${restrictions[action].label}」→ 拦住（guard 返回 false）`);
+  check(el("guard-modal").hidden === false, "  ↑ 并且弹了窗");
+  check(el("guard-title").textContent.includes("需要您先登录才能使用完整服务"),
+    "  ↑ 弹窗那句就是这个", `「${el("guard-title").textContent}」`);
+  check(el("guard-text").textContent.includes(restrictions[action].label),
+    "  ↑ 弹窗说清是哪一项受限", `「${el("guard-text").textContent}」`);
+}
+check(html.includes('id="guard-login" type="button">去登录<'), "弹窗上有「去登录」按钮");
+
+// ③ 不在清单里的动作：游客照样能用（提问 / 看表格 / 看周报 —— 都是只读浏览）
+for (const action of ["chat", "read_table", "report_view", "history", "help"]) {
+  check(Session.guard(action) === true, `「${action}」不受限（游客能用）`);
+}
+
+// ④ ⚠ 记号：**只**长在受限入口上
+const guardedIds = ["menu-item-import", "btn-ds-inspect", "btn-ds-import", "btn-upload",
+                    "btn-doc-upload", "btn-create-task", "btn-run-task", "btn-download",
+                    "btn-accounts-locked"];
+let marked = 0;
+for (const id of guardedIds) {
+  const icon = el(id).querySelector(".guard-ico");
+  check(Boolean(icon) && icon.textContent === "⚠", `受限入口 ${id} 上有 ⚠`);
+  if (icon) marked += 1;
+}
+for (const id of ["nav-overview", "nl-ask", "btn-menu", "btn-user", "nav-weekly", "link-help"]) {
+  check(el(id).querySelector(".guard-ico") === null, `没受限的 ${id} 上**没有** ⚠（不许满屏）`);
+}
+check(marked === guardedIds.length, `⚠ 一共只出现在 ${marked} 个受限入口上`);
+
+// ⑤ 「去登录」：退出游客 → 回登录页的账号栏
+fire(el("guard-login"), "click");
+check(el("guard-modal").hidden === true, "点「去登录」→ 弹窗收起");
+check(Session.loggedIn() === false && el("login-gate").hidden === false, "回到了登录页");
+check(el("ltab-account").classList.has("is-on") && el("login-form").hidden === false,
+  "落在「账号登录」那一栏（不是注册 / 游客）");
+check(el("guest-bar").hidden === true, "游客提示条跟着收走");
+
+// ⑥ 账号登录之后：记号全部摘掉、受限动作全部放行
+el("login-name").value = "唐宇";
+el("login-pwd").value = "123456";
+fillCaptcha("account");
+fire(el("login-form"), "submit");
+await flush();
+check(Session.loggedIn() === true && Session.isGuest() === false, "账号登录成功");
+check(el("guest-bar").hidden === true, "账号身份下不显示游客提示条");
+for (const action of ["import", "export", "task", "accounts"]) {
+  el("guard-modal").hidden = true;
+  check(Session.guard(action) === true, `账号身份下「${restrictions[action].label}」不再受限`);
+  check(el("guard-modal").hidden === true, "  ↑ 也没弹窗");
+}
+for (const id of guardedIds) {
+  check(el(id).querySelector(".guard-ico") === null, `账号身份下 ${id} 上的 ⚠ 已摘掉`);
+}
+check(Session.isAdmin() === true, "唐宇是管理员（stub 里这台机器上第一个账号就是他）");
+check(Session.sessionId() === "sid-唐宇",
+  "本机会话编号来自登录响应（管理动作用它回答「是谁按的」）", `「${Session.sessionId()}」`);
+// 这台机器上的第一个账号（管理员）登录 → 身份里带上了 admin
+fire(el("um-logout"), "click");
+el("login-name").value = "唐宇";
+el("login-pwd").value = "123456";
+fillCaptcha("account");
+fire(el("login-form"), "submit");
+await flush();
+check(Session.loggedIn() === true, "重新登录成功");
 console.log(`\n共 ${total} 项检查：通过 ${total - failed}，未通过 ${failed}`);
 process.exit(failed === 0 ? 0 : 1);

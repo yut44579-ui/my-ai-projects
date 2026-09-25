@@ -278,6 +278,21 @@ const API = (() => {
     // 错误走统一形状：409 = 这个账号已被注册；401 = 账号或密码不对（后端不区分这两种）。
     authRegister: (payload) => request("/api/auth/register", json(payload)),
     authLogin: (payload) => request("/api/auth/login", json(payload)),
+    authLogout: (sessionId) => request("/api/auth/logout", json({ session_id: sessionId })),
+
+    // ── 账号管理（**只有管理员能调**）──────────────────────────────────
+    // session_id 不是令牌：它只回答"这次管理动作是谁按的"，服务重启即失效。
+    // 后端三道守卫（会话 → 账号 → 角色）：游客没会话 → 401；非管理员 → 403。
+    // 前端**不**拿它当权限依据 —— 这里只是如实把编号递过去，能不能做由后端说了算。
+    listAccounts: (sessionId, status) => request(
+      `/api/auth/accounts${query({ session_id: sessionId, status })}`),
+    reviewAccount: (username, action, sessionId) => request(
+      `/api/auth/accounts/${encodeURIComponent(username)}/review`,
+      json({ action, session_id: sessionId })),
+    // 删除是**不可逆**的（与"停用"不同）：后端明确拒绝删掉唯一的管理员账号。
+    deleteAccount: (username, sessionId) => request(
+      `/api/auth/accounts/${encodeURIComponent(username)}${query({ session_id: sessionId })}`,
+      { method: "DELETE" }),
     // 注册页失焦查重：传账号名问"有没有被注册"；不传就只回账号总数
     // （一个账号都没有 = 首次使用，登录页据此给出"先注册一个"的引导）
     accountExists: (username) => request(`/api/auth/accounts/exists${query({ username })}`),

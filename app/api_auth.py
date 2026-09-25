@@ -10,6 +10,7 @@
     GET  /api/auth/accounts/exists         注册页失焦查重 / 首次使用引导
     GET  /api/auth/accounts                账号列表（**管理员**）：待批准的排在最前
     POST /api/auth/accounts/{u}/review     审批账号（**管理员**）：批准 / 拒绝 / 停用 / 恢复
+    DELETE /api/auth/accounts/{u}          删除账号（**管理员**）：整条记录消失，不可逆
 
 【验证码是**必填**的（统一口径，不留后门）】
 注册与登录都要求带 `captcha_id` + `captcha_text`，缺了直接 400 + 人话。
@@ -54,7 +55,8 @@ _STATUS_BY_CODE = {
     # 管理动作的守卫
     "session_invalid": 401,         # 会话失效（服务重启过 / 本来就没登录）→ 重新登录
     "not_admin": 403,               # 登录了，但不是管理员
-    "last_admin": 400,              # 不能让最后一个管理员下台
+    "last_admin": 400,              # 不能让最后一个管理员下台（拒绝 / 停用 / 删除都走这条）
+    "cannot_delete_self": 400,      # 删除的账号正是当前登录的这个（见 delete_account）
     "account_not_found": 404,
     "review_action_invalid": 400,
     "review_no_change": 400,
@@ -262,6 +264,33 @@ def review_account(username: str, payload: ReviewRequest) -> dict[str, Any]:
     except accounts.AccountError as exc:
         raise _as_http(exc) from exc
     return {"account": account, "status_text": accounts.STATUS_TEXT}
+
+
+@router.delete("/accounts/{username}", summary="删除账号（管理员）：整条记录从账号表里消失")
+def delete_account(
+    username: str,
+    session_id: str | None = Query(default=None, description="管理员的会话编号（登录时拿到的）"),
+) -> dict[str, Any]:
+    """**彻底删掉**一个账号（已批准列表里的「删除」）。
+
+    · 只有管理员能调（会话 → 账号 → 角色）
+    · 这是**不可逆**动作：记录从账号文件里消失，账号名随即可以被重新注册
+      （与「停用」不同 —— 停用还留着重启的机会，见 `app/accounts.py::review`）
+    · 唯一的管理员账号不许删：删掉就没人能批账号了（系统会退化成"得手改账号文件"）
+    """
+    try:
+        admin = accounts.require_admin(session_id)
+    except accounts.AccountError as exc:
+        raise _as_http(exc) from exc
+    actor = admin.get("username") or ""
+    if accounts.normalize_username(username).casefold() == str(actor).casefold():
+        raise AuthApiError(400, "cannot_delete_self",
+                           "不能删掉自己当前登录的这个账号。要删它，先用别的管理员账号登录。")
+    try:
+        account = accounts.delete_account(username)
+    except accounts.AccountError as exc:
+        raise _as_http(exc) from exc
+    return {"deleted": True, "account": account}
 
 
 @router.get("/accounts/exists", summary="账号是否已被注册（注册页查重 / 首次使用引导）")

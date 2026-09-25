@@ -96,6 +96,9 @@
   --td-brand-bg: rgba(69, 130, 230, .14);
 
   /* ════════ 应用语义别名（页面各处只用这几个名字，不直接写上面的色阶）════════ */
+  /* 弹窗用到的两个色值（压暗层 / 卡片投影）：色值只在这里出现一次，别处只用名字 */
+  --overlay: rgba(8, 12, 20, .55);
+  --shadow-modal: 0 18px 48px rgba(0, 0, 0, .38);
   --bg-page: var(--td-gray-color-14);
   --bg-section: var(--td-gray-color-13);      /* 顶栏 / 侧栏 / 右栏 */
   --bg-card: var(--td-gray-color-12);         /* 卡片 */
@@ -378,6 +381,8 @@ button { font-family: inherit; }
   border: 1px solid var(--border); background: var(--bg-card); margin-bottom: var(--gap);
 }
 .banner.error { border-color: var(--td-error-color); color: var(--td-error-color-text); background: var(--td-error-bg); }
+/* ok = 一次动作做成了（批准 / 停用 / 删除 / 恢复），跟 error 同一条状态条，只是颜色不同 */
+.banner.ok { border-color: var(--success); color: var(--td-success-color-text); background: var(--td-success-bg); }
 .banner.loading { color: var(--text-2); }
 .banner[hidden] { display: none; }
 
@@ -1064,6 +1069,52 @@ body.is-locked .app { display: none; }
 }
 .toast[hidden] { display: none; }
 .toast.ok { border-color: var(--success); color: var(--td-success-color-text); }
+
+/* ════════════════ 游客：提示条 / ⚠ 记号 / 受限弹窗 ════════════════ */
+/* 一条**轻量**提示，不是满屏遮罩：高 30px 左右的细条，铺在工作区最上面，
+   不挡任何操作、不压住任何按钮。只在游客身份下出现（账号登录时不显示）。 */
+.guest-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; margin-bottom: 10px;
+  font-size: 12px; line-height: 1.6;
+  background: var(--td-warning-bg); border: 1px solid var(--warning);
+  border-radius: var(--td-radius-medium); color: var(--td-warning-color-text);
+}
+.guest-bar[hidden] { display: none; }
+.guest-bar-ico { font-size: 13px; }
+.guest-bar-text { flex: 1; min-width: 0; }
+.guest-bar-link { color: inherit; text-decoration: underline; }
+
+/* ⚠ 记号：**只**长在 [data-guard] 元素上（游客态、且该功能确实受限时）。
+   别处的按钮上没有这个记号 —— 记号是"这里有一处限制"的指示，铺满整页就等于没指示。 */
+.guard-ico { margin-left: 5px; font-size: 11px; color: var(--warning); }
+.is-guarded { opacity: .92; }
+
+/* 受限弹窗：只在被拦下的那一刻出现一次，不挡页面别的地方（可以点背景关掉）。 */
+.guard-modal { position: fixed; inset: 0; z-index: 120; display: flex;
+  align-items: center; justify-content: center; }
+.guard-modal[hidden] { display: none; }
+.guard-backdrop { position: absolute; inset: 0; background: var(--overlay); }
+.guard-card {
+  position: relative; width: min(400px, calc(100vw - 32px));
+  padding: 22px 22px 18px; text-align: center;
+  background: var(--bg-card); border: 1px solid var(--border-strong);
+  border-radius: var(--td-radius-large); box-shadow: var(--shadow-modal);
+}
+.guard-big-ico { font-size: 26px; line-height: 1; color: var(--warning); }
+.guard-title { margin: 10px 0 6px; font-size: 15px; color: var(--text-1); }
+.guard-text { margin: 0 0 16px; font-size: 12px; line-height: 1.75; color: var(--text-2); }
+.guard-actions { display: flex; gap: 10px; justify-content: center; }
+
+/* 注册结果卡（等管理员批准）：把注册表单换成一段**说清楚**的结果。 */
+.login-pending { text-align: center; }
+.pending-ico { font-size: 26px; line-height: 1; color: var(--success); }
+.pending-title { margin: 10px 0 6px; font-size: 15px; color: var(--text-1); }
+.pending-name { margin: 0 0 12px; font-size: 13px; color: var(--text-2); }
+.login-pending .btn { margin-top: 12px; }
+
+/* 账号管理那张表里的操作列：几个小按钮横排，不换行到看不清 */
+.row-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
 @media (max-width: 900px) {
   /* 窄屏：上下堆叠（左区变顶部条），**不许横向滚动** */

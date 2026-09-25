@@ -87,6 +87,22 @@
 
   function clear(node) { while (node && node.firstChild) node.removeChild(node.firstChild); }
 
+  // ── 游客受限：**唯一**的拦截写法，别在别处自己判断"是不是游客"──────────────
+  // 用法：受限动作的第一行写 `if (!allow("export")) return;`
+  //   · 账号登录（含管理员）→ 恒为 true，什么也不发生；
+  //   · 游客 → 弹「需要您先登录才能使用完整服务」并返回 false，**动作就此打住**
+  //     （请求不发、文件不下载）。判断与弹窗都在 session.js 里，一处定义。
+  function allow(action) {
+    return (typeof Session !== "undefined" && Session.guard)
+      ? Session.guard(action) : true;              // 没有会话层时（理论上不会）不拦人
+  }
+
+  // 给动态造出来的按钮挂 ⚠ 记号（静态按钮写在 index.html 的 data-guard 上）
+  function guardMark(el, action) {
+    if (typeof Session !== "undefined" && Session.mark) Session.mark(el, action);
+    return el;
+  }
+
   function cell(row, value, className) {
     const td = document.createElement("td");
     if (className) td.className = className;
@@ -350,6 +366,9 @@
   }
 
   function renderSettings() {
+    // 账号管理那张卡**先画**：它不依赖 health（就算运行状态没读回来，
+    // "谁能看账号管理"也该照实显示），所以放在下面那个 early return 之前。
+    renderAccountAdmin();
     const health = state.health;
     const body = $("set-health-body");
     if (!health || !body) return;
@@ -401,6 +420,159 @@
     } else {
       hide($("set-problems-wrap"));
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 账号管理（系统设置页里那张卡，**只有管理员看得到**）
+  // ══════════════════════════════════════════════════════════════════════
+  // 说清三件事：
+  //   ① 谁是管理员：这台机器上**第一个注册的账号**（后端定的，前端只照着显示）；
+  //   ② 在哪审批：管理员登录后，「系统设置」页里出现「账号管理」——
+  //      待批准列表（批准 / 拒绝）+ 已批准列表（停用 / 恢复 / 删除）；
+  //   ③ 别人看到什么：游客与非管理员看到的是「需要管理员身份」那块（带 ⚠），
+  //      **看不到**任何账号名与审批按钮（账号列表是**后端**拦住的：没有会话回 401、
+  //      不是管理员回 403 —— 前端的隐藏只是不让用户白点一下）。
+  const ACCOUNT_STATUS_TEXT = { pending: "等待批准", active: "正常", rejected: "未通过审批", disabled: "已停用" };
+
+  function renderAccountAdmin() {
+    const card = $("set-accounts-card");
+    const locked = $("set-accounts-locked");
+    const lockedButton = $("btn-accounts-locked");
+    const admin = typeof Session !== "undefined" && Session.isAdmin
+      ? Session.isAdmin() : false;
+    const guest = typeof Session !== "undefined" && Session.isGuest
+      ? Session.isGuest() : false;
+    if (card) card.hidden = !admin;
+    if (locked) locked.hidden = admin;
+    // 只有游客看到那个「账号管理」按钮（点了会弹"需要您先登录"）；
+    // 已登录但不是管理员的人，按钮没有意义（他自己批不了），干脆不显示。
+    if (lockedButton) lockedButton.hidden = !guest;
+    const hint = $("set-accounts-locked-hint");
+    if (hint) {
+      hint.textContent = guest
+        ? "批准新账号、停用或删除账号只有管理员能做，游客身份下这项功能用不了。"
+        : "批准新账号、停用或删除账号只有管理员能做。";
+    }
+    if (admin) loadAccounts();
+  }
+
+  // 系统设置页里的固定按钮（一次性绑好，不跟着重渲染重复绑）。
+  // 「账号管理」那个按钮是**给游客看的**：它带 ⚠，点一下就走统一的那条judge ——
+  // 拦下来就弹「需要您先登录」（不弹窗等于"有个记号但点不动"，那是最糟的一种）
+  function bindSettings() {
+    const locked = $("btn-accounts-locked");
+    if (locked) locked.addEventListener("click", () => allow("accounts"));
+  }
+
+  // 拉一次账号表（**只有管理员会走到这里**；后端会再验一遍会话与角色）
+  async function loadAccounts() {
+    const note = $("set-accounts-note");
+    const sessionId = (typeof Session !== "undefined" && Session.sessionId)
+      ? Session.sessionId() : "";
+    if (note) note.textContent = "正在读取账号…";
+    let data = null;
+    try {
+      data = await API.listAccounts(sessionId);
+    } catch (err) {
+      // 会话失效（服务重启过）等：把后端原话显示出来，不自己编一句
+      if (note) note.textContent = `读不到账号列表：${err.message}`;
+      return;
+    }
+    const items = (data && data.accounts) || [];
+    const pending = items.filter((item) => item.status === "pending");
+    const others = items.filter((item) => item.status !== "pending");
+
+    setText("set-pending-count", String(pending.length));
+    const pendingBody = $("set-pending-body");
+    if (pendingBody) {
+      clear(pendingBody);
+      pending.forEach((item) => {
+        const row = document.createElement("tr");
+        cell(row, item.display_name || item.username);
+        cell(row, fmtTime(item.created_at));
+        const actions = document.createElement("td");
+        actions.className = "row-actions";
+        actions.appendChild(accountAction("批准", "approve", item, "btn btn-sm btn-primary"));
+        actions.appendChild(accountAction("拒绝", "reject", item, "btn btn-sm"));
+        row.appendChild(actions);
+        pendingBody.appendChild(row);
+      });
+    }
+    toggleEmpty("set-pending-empty", pending.length > 0);
+
+    const approvedBody = $("set-approved-body");
+    if (approvedBody) {
+      clear(approvedBody);
+      others.forEach((item) => {
+        const row = document.createElement("tr");
+        cell(row, item.display_name || item.username);
+        badge(row, item.status === "active" ? "success" : "warn",
+          ACCOUNT_STATUS_TEXT[item.status] || text(item.status));
+        cell(row, fmtTime(item.last_login_at));
+        const actions = document.createElement("td");
+        actions.className = "row-actions";
+        // 管理员账号：不能停用也不能删除（后端会拒），按钮直接不给 —— 别让人白点
+        if (item.role === "admin") {
+          const mark = document.createElement("span");
+          mark.className = "muted-sm";
+          mark.textContent = "管理员账号不可停用 / 删除";
+          actions.appendChild(mark);
+        } else {
+          actions.appendChild(accountAction(
+            item.status === "active" ? "停用" : "恢复",
+            item.status === "active" ? "disable" : "enable",
+            item, "btn btn-sm", item.status === "active"));
+          actions.appendChild(accountAction("删除", "delete", item, "btn btn-sm"));
+        }
+        row.appendChild(actions);
+        approvedBody.appendChild(row);
+      });
+    }
+    toggleEmpty("set-approved-empty", others.length > 0);
+
+    if (note) {
+      note.textContent = pending.length
+        ? `有 ${pending.length} 个账号在等你批准。批准之后对方才能用自己的账号登录。`
+        : "暂时没有等待批准的账号。新注册的账号会出现在上面。";
+    }
+  }
+
+  // 一个审批动作按钮。`confirmText` 给了就先问一句（删除是不可逆的，必须问）。
+  function accountAction(label, action, item, className, confirmText) {
+    const button = document.createElement("button");
+    button.className = className || "btn btn-sm";
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", async () => {
+      if (confirmText && !window.confirm(confirmText)) return;
+      const name = item.username;
+      const sessionId = (typeof Session !== "undefined" && Session.sessionId)
+        ? Session.sessionId() : "";
+      button.disabled = true;
+      try {
+        if (action === "delete") {
+          await API.deleteAccount(name, sessionId);
+          toastLine(`账号「${name}」已删除。`);
+        } else {
+          const answer = await API.reviewAccount(name, action, sessionId);
+          const status = (answer && answer.account && answer.account.status) || "";
+          toastLine(`账号「${name}」现在是「${ACCOUNT_STATUS_TEXT[status] || status}」。`);
+        }
+        await loadAccounts();
+      } catch (err) {
+        // 后端拒绝的原话（比如"唯一的管理员账号"）直接给用户看，不翻译
+        window.alert(err.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    return button;
+  }
+
+  // 管理动作的结果：一句话提示，走页面上那条**全局**状态条（任何页面都看得到，
+  // 不像字段级 status 那样挂在某个具体页面的元素上）。
+  function toastLine(message) {
+    banner("ok", escapeHtml(message));
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -880,6 +1052,7 @@
       save.type = "button";
       save.textContent = "下载报告";
       save.title = "默认下载 Word；要 Excel 或 Markdown 就在报告面板上换";
+      guardMark(save, "export");
       save.addEventListener("click", () => downloadConversationReport(item.conversation_id, save));
       row.appendChild(save);
 
@@ -889,6 +1062,7 @@
   }
 
   async function downloadConversationReport(conversationId, button) {
+    if (!allow("export")) return;                 // 游客：弹窗后就地打住，不发下载
     const original = button ? button.textContent : "";
     if (button) { button.disabled = true; button.textContent = "准备中…"; }
     try {
@@ -1380,10 +1554,12 @@
     button.type = "button";
     button.textContent = "下载报告";
     button.disabled = !conversationId;
+    guardMark(button, "export");
     const hint = document.createElement("p");
     hint.className = "muted-sm report-hint";
 
     button.addEventListener("click", () => {
+      if (!allow("export")) return;               // 游客：连跳转都不发生
       const item = chosen();
       // 下载走**后端现渲染**的真实文件（同一份报告 → 三种格式的数字一致）；
       // 文件名由后端给，前端只是把名字提前显示出来
@@ -1556,17 +1732,20 @@
       });
       menu.addEventListener("click", (event) => event.stopPropagation());
     }
-    const goWithMenu = (id, action) => {
+    // `guard` 传了的话，这一项就是**受限入口**：先过 allow()，不通过就连页面都不跳
+    // （只弹窗不拦，等于"告诉他不行，然后还是把他送过去了"）。
+    const goWithMenu = (id, action, guard) => {
       const item = $(id);
       if (!item) return;
       item.addEventListener("click", () => {
+        if (guard && !allow(guard)) { closeMenu(); return; }
         closeMenu();
         action();
       });
     };
     goWithMenu("menu-item-history", () => { goto("overview"); scrollToChatHistory(); });
     goWithMenu("menu-item-raw", () => goto("raw"));
-    goWithMenu("menu-item-import", () => goto("data"));
+    goWithMenu("menu-item-import", () => goto("data"), "import");
     goWithMenu("menu-item-report", () => {
       goto("overview");
       const input = $("hero-nl-input") || $("nl-input");
@@ -1650,6 +1829,7 @@
     });
 
     $("btn-create-task").addEventListener("click", async () => {
+      if (!allow("task")) return;               // 游客：弹窗后就地打住（按钮状态一点不动）
       const metrics = [...document.querySelectorAll("#task-metrics input:checked")].map((el) => el.value);
       const payload = {
         name: $("task-name").value.trim(),
@@ -1691,6 +1871,7 @@
 
     $("btn-run-task").addEventListener("click", async () => {
       if (!state.selectedTask) return;
+      if (!allow("task")) return;                 // 游客：不执行、不留执行记录、按钮状态不动
       const button = $("btn-run-task");
       button.disabled = true;
       status("run-state", "正在执行（真实计算 + 渲染 xlsx，可能要几分钟）…", "loading");
@@ -1714,6 +1895,7 @@
     $("btn-download").addEventListener("click", () => {
       if (!state.lastRun || !state.lastRun.download_url) return;
       // 下载地址一律用**后端返回的 download_url**（相对 URL 拼当前源），前端不自己拼路径
+      if (!allow("export")) return;             // 游客：不跳转、不落文件
       window.location.href = API.downloadUrl(state.lastRun.download_url);
     });
 
@@ -2050,6 +2232,9 @@
     const resetButton = button("重置");
     const exportXlsx = button("导出 Excel");
     const exportCsv = button("导出 CSV");
+    // 导出是受限入口：游客下这两个按钮带 ⚠，点了弹「需要您先登录」
+    guardMark(exportXlsx, "export");
+    guardMark(exportCsv, "export");
     const statusLine = document.createElement("span");
     statusLine.className = "muted-sm";
     statusLine.id = `${spec.rootId}-status`;
@@ -2219,6 +2404,7 @@
     };
 
     panel.exportTo = async (format) => {
+      if (!allow("export")) return;               // 游客：请求根本不发出去
       const params = {
         search: panel.query.search,
         start: panel.elements.startInput.value,
@@ -2441,6 +2627,7 @@
   }
 
   async function inspectDatasetFile() {
+    if (!allow("import")) return;                 // 游客：文件连上传都不上传
     const input = $("ds-file-input");
     if (!input || !input.files || !input.files.length) {
       status("ds-import-state", "请先选择一个 .xlsx / .xlsm / .csv 文件。", "error");
@@ -2540,6 +2727,7 @@
   }
 
   async function importDataset() {
+    if (!allow("import")) return;                 // 游客：不登记成数据源
     const inspect = state.inspect;
     if (!inspect) {
       status("ds-import-state", "请先「上传并检查」一个文件。", "error");
@@ -2632,6 +2820,7 @@
     bindReportShortcut();
     bindTablePanels();
     bindDatasetImport();
+    bindSettings();
     renderInertControls();
     await renderMetricOptions();
     hide($("upload-result-wrap"));
@@ -2661,6 +2850,14 @@
         errorBanner(err);
         status("upload-state", `初始化失败：${err.message}`, "error");
       });
+    });
+
+    // 身份一变（登录 / 退出 / 换账号 / 进游客），跟身份有关的那几块要跟着重画：
+    //   ① 系统设置里的「账号管理」卡片（管理员看得到、别人看不到）
+    //   ② 受限入口上的 ⚠ 记号（记号由 session.js 统一画，这里不再插一手）
+    // 事件由 session.js 在 enter / logout 时发出 —— 两处不用互相 import。
+    document.addEventListener("sra:identity", () => {
+      renderAccountAdmin();
     });
   });
 })();

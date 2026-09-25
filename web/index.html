@@ -20,8 +20,10 @@
 
      账号是真的：注册会把账号写进这台机器的账号表，密码由后端存成不可还原的校验值，
      登录时由后端核对 —— 密码原文不落盘、不比对、不进页面。这是**单机自用**级别：
-     没有角色权限、没有多用户数据隔离、不发令牌（那些留待后续）。
-     游客仍然是"本机随机取个名字"，不进账号表，退出后名字会变。
+     没有多用户数据隔离、不发令牌（那些留待后续）。
+     角色只有一条规则：**第一个注册的账号是管理员**，能批准后来的人；
+     不是管理员的人登录后看不到「账号管理」。游客是"本机随机取个名字"，不进账号表，
+     退出后名字会变 —— 游客能提问、看表格、看周报，导入/导出/改任务/账号管理会被拦下（带 ⚠ 记号）。
 
      页面上的数字（交易行数 / 客户编号数 / 国家地区数）都从当前数据源读出来，
      不写死在页面里 —— 换数据源它们会跟着变。 -->
@@ -130,8 +132,10 @@
         </button>
       </form>
 
-      <!-- 注册表单：账号 / 显示名（可不填）/ 密码 / 再填一次密码 → 注册成功**直接用新账号进来**，
-           不用再登一次。账号框失焦会去问一次"这个名字有没有被注册"，就地给「✓ 可用」或「已被注册」。
+      <!-- 注册表单：账号 / 显示名（可不填）/ 密码 / 再填一次密码 / 验证码。
+           ★ 注册成功**不再直接进系统**：新账号是「等待批准」，页面就地告诉用户"等管理员批准"。
+           唯一的例外是这台机器上的第一个账号 —— 它自动是管理员，注册完立即可用。
+           账号框失焦会去问一次"这个名字有没有被注册"，就地给「✓ 可用」或「已被注册」。
            密码强度提示只是提醒（弱/中/强，不拦人）；两次不一致就地人话提示。 -->
       <form class="login-form" id="register-form" novalidate hidden>
         <div class="field">
@@ -174,19 +178,34 @@
         </div>
         <button class="btn btn-primary login-submit" id="btn-register" type="submit">
           <span class="spinner" id="register-spinner" hidden></span>
-          <span>注册并进入</span>
+          <span>注 册</span>
         </button>
-        <p class="login-hint">注册完直接用这个账号进来，不用再登一次。密码只保存在这台机器上。</p>
+        <!-- 注册的结果是**等批准**，不是直接进来（第一个账号除外：它自己就是管理员）。
+             这句要短：登录页只说"接下来会发生什么"，"为什么要批、谁是管理员"收进帮助。 -->
+        <p class="login-hint">注册后要等管理员批准才能登录。</p>
       </form>
+
+      <!-- 注册结果：**等待批准**（不是"已经进来了"）。
+           注册表单收起来换成这一张，说清三件事：谁会批、批完怎么登、现在还能干什么。 -->
+      <div class="login-form login-pending" id="register-pending" hidden>
+        <div class="pending-ico" aria-hidden="true">✓</div>
+        <h4 class="pending-title">注册成功，等待管理员批准</h4>
+        <p class="pending-name" id="reg-pending-name"></p>
+        <p class="login-hint">管理员在「系统设置 → 账号管理」里点一下「批准」，你就能用这个账号登录了。
+          这台机器上第一个注册的账号就是管理员。</p>
+        <p class="login-hint">等批准的时候，可以先点「游客登录」进来看看。</p>
+        <button class="btn" id="btn-reg-pending-back" type="button">返回登录</button>
+      </div>
 
       <div class="login-form" id="guest-pane" hidden>
         <p class="guest-lede">不用填账号密码，本机给你随机取个昵称，直接进来看看。</p>
+        <p class="guest-lede">能提问、能看表格与周报；导入数据、导出报表、改任务需要登录。</p>
         <div class="guest-name" id="guest-name">游客xxxxx</div>
         <button class="btn btn-primary login-submit" id="btn-guest" type="button">
           <span class="spinner" id="guest-spinner" hidden></span>
           <span>以游客身份进入</span>
         </button>
-        <p class="login-hint">游客不留身份：这个名字是本机随机取的，只用于展示与记录；退出后再进来会换一个新的，也查不到上次的痕迹。</p>
+        <p class="login-hint">游客不留身份：名字是本机随机取的，退出后再进来会换一个。</p>
       </div>
 
       <!-- 登录页**不写**解释实现细节的长句（用户要的是 QQ 那种：几行填完就登）。
@@ -205,6 +224,25 @@
 </div>
 
 <div class="toast" id="toast" hidden></div>
+
+<!-- ═══ 「需要先登录」弹窗 ══════════════════════════════════════════════
+     游客点到受限功能（导入数据 / 导出报表 / 保存或改任务 / 账号管理 / 删除）时出现。
+     为什么是弹窗而不是页面上一直挂着的横幅：**只在被拦下的那一刻**说一次，
+     用户点「去登录」直接退出游客、回到登录页的账号那一栏。
+     它与「游客提示条」是两条不同的提示：提示条说"现在是什么模式"（一直很轻），
+     弹窗说"刚才那个动作为什么没做成"（一次一发，不挡别的地方）。 -->
+<div class="guard-modal" id="guard-modal" hidden>
+  <div class="guard-backdrop" id="guard-backdrop"></div>
+  <div class="guard-card" id="guard-card" role="dialog" aria-modal="true" aria-labelledby="guard-title">
+    <div class="guard-big-ico" aria-hidden="true">⚠</div>
+    <h3 class="guard-title" id="guard-title">需要您先登录才能使用完整服务</h3>
+    <p class="guard-text" id="guard-text">登录之后就能用这项功能。</p>
+    <div class="guard-actions">
+      <button class="btn btn-primary" id="guard-login" type="button">去登录</button>
+      <button class="btn" id="guard-cancel" type="button">先不用</button>
+    </div>
+  </div>
+</div>
 
 <!-- ═══ 帮助 / 隐私 抽屉 ═══════════════════════════════════════════════
      登录页底部的「帮助」「隐私」点开就是这个抽屉（右侧滑出，不跳页、不弹窗居中）。
@@ -297,6 +335,40 @@
               口径不变但数据变了，结果自然会变 —— 页面上方一直写着当前用的是哪一份数据。</dd>
           </div>
         </dl>
+
+        <!-- ── 六、账号（登录页上那些"解释性长句"收在这里）─────────────────
+             登录页只留"填账号、填密码、注册、游客"这几步（用户要的是 QQ 那种简洁形态）；
+             需要解释的事 —— 账号存哪、为什么要等批准、谁是管理员、忘记密码怎么办 ——
+             全部收进这一节。所以这里的措辞要**经得起看**，不能含糊。 -->
+        <h3 class="info-h">六、账号与管理员审批</h3>
+        <ul class="info-list">
+          <li><b>第一个账号自动是管理员</b>：这台机器上**第一个**注册的账号，直接就是管理员、
+            注册完就能登录。为什么这么定：如果没人能"批准"，后面来的人就永远进不来。</li>
+          <li><b>之后的账号要等批准</b>：再注册的账号是「等待批准」状态，登录时会明确告诉你
+            「账号正在等待管理员批准」。管理员在「系统设置 → 账号管理」里点一下「批准」就能登录了；
+            不批准（拒绝）的话，登录时说的是「该账号未通过审批」。</li>
+          <li><b>谁能管账号</b>：只有管理员。管理员登录后，「系统设置」里会出现「账号管理」：
+            待批准列表（可以批准 / 拒绝）、已批准列表（可以停用 / 删除）。</li>
+          <li><b>两种"不能登录"分得清</b>：等待批准、未通过审批、密码不对，是<b>三句不同的话</b> ——
+            不会把"还在等批准"说成"账号或密码不对"让人白试密码。</li>
+          <li><b>管理员账号不会被锁在外面</b>：不能拒绝、停用或删除这台机器上唯一的管理员账号 ——
+            否则就没人能再批账号了。</li>
+        </ul>
+
+        <h3 class="info-h">七、忘记密码怎么办</h3>
+        <p class="info-p">密码只保存成<b>不可还原的校验值</b>，本机没有原文，
+          也没有邮件服务 —— 所以<b>无法用邮件找回</b>，谁也还原不出你原来那串密码。
+          能做的两条路：<b>①</b> 注册新账号（换一个账号名，注册后照样要管理员批准）；
+          <b>②</b> 先用游客身份进来看看。如果你是管理员又忘了密码，那就只能删掉这台机器上的账号文件、
+          重新走一遍"第一个账号"的流程了 —— 这一步会把账号全清掉，做之前先想清楚。</p>
+
+        <h3 class="info-h">八、游客能用什么、不能用什么</h3>
+        <ul class="info-list">
+          <li><b>能用</b>：提问、看表格、看周报 —— 这些是只读的浏览。</li>
+          <li><b>不能用</b>：导入数据（换数据源）、导出报表、保存或修改任务、账号管理、删除操作。</li>
+          <li><b>怎么看出来</b>：用不了的地方会带一个 ⚠ 记号；点它就会提示「需要您先登录才能使用完整服务」，
+            并给一个「去登录」的按钮。没受限的地方不显示这个记号。</li>
+        </ul>
       </section>
 
       <!-- ── 隐私 ─────────────────────────────────────────────────── -->
@@ -315,7 +387,9 @@
         <p class="info-p">只保存<b>加密摘要</b>，不保存密码原文 —— 摘要不可还原，
           就算有人把这台电脑上的账号文件整个拷走，也读不出你的密码。
           登录时是拿你输入的密码重新算一遍再比对，而不是把原文取出来对。
-          这也是为什么<b>忘记密码找不回原文</b>：本机没有、也不该有原文。</p>
+          这也是为什么<b>忘记密码找不回原文</b>：本机没有、也不该有原文，
+          而且本机没有邮件服务 —— <b>无法用邮件找回</b>。
+          真忘了只有两条路：<b>注册新账号</b>，或者先用<b>游客</b>身份进来。</p>
 
         <h3 class="info-h">三、会不会把数据发到外面去</h3>
         <p class="info-p"><b>会，但只发一小部分，这里如实说清楚：</b></p>
@@ -336,8 +410,10 @@
           <li><b>彻底清除</b>：删掉这台电脑上存数据的那个目录，账号、提问记录、上传的文件、
             报表产出一次性全没了 —— 本机没有别的副本，删完不可恢复。</li>
         </ul>
-        <p class="info-p">没有做的事也说明白：没有角色权限区分、没有多用户数据隔离、
-          没有云端同步 —— 这是单机自用模式，登录只用于"认出是你"，不用于限制你能看什么。</p>
+        <p class="info-p">没有做的事也说明白：没有多用户数据隔离（任务、数据源不分属某个账号，
+          这台机器上的账号看到的是同一份数据）、没有云端同步 —— 这是单机自用模式。
+          角色只有一条：管理员能批准新账号；游客身份下会限制导入、导出、改任务与账号管理，
+          登录之后这些都能用。</p>
       </section>
     </div>
   </aside>
@@ -377,7 +453,7 @@
       <div class="menu" id="topbar-menu" hidden>
         <button class="menu-item" id="menu-item-history">历史提问</button>
         <button class="menu-item" id="menu-item-raw">原始数据</button>
-        <button class="menu-item" id="menu-item-import">导入数据</button>
+        <button class="menu-item" id="menu-item-import" data-guard="import">导入数据</button>
         <button class="menu-item" id="menu-item-report">生成销售报告</button>
         <button class="menu-item" id="menu-item-settings">系统设置</button>
         <!-- 登录后也要能看帮助与隐私说明（登录页底部那两个入口进了主界面就点不到了）：
@@ -442,6 +518,15 @@
 
   <!-- ═══ 中央工作区 ══════════════════════════════════════════════════ -->
   <main class="workspace" id="workspace">
+
+    <!-- 游客提示条：**一条轻量提示**，不是满屏遮罩、不挡任何操作。
+         只在游客身份下出现（账号登录时不显示），文案与「哪些功能受限」的清单
+         在 web/session.js 里，两处同一个出处 —— 页面不自己再写一份。 -->
+    <div class="guest-bar" id="guest-bar" hidden>
+      <span class="guest-bar-ico" aria-hidden="true">⚠</span>
+      <span class="guest-bar-text" id="guest-bar-text">游客模式 · 部分功能受限</span>
+      <button class="link-btn guest-bar-link" id="guest-bar-login" type="button">去登录</button>
+    </div>
 
     <!-- 全局状态条：loading / error 两种全局态在这里体现 -->
     <div class="banner" id="banner" hidden></div>
@@ -787,7 +872,7 @@
         </div>
         <div class="row">
           <input id="ds-file-input" type="file" accept=".xlsx,.xlsm,.csv">
-          <button id="btn-ds-inspect" class="btn btn-primary">上传并检查</button>
+          <button id="btn-ds-inspect" class="btn btn-primary" data-guard="import">上传并检查</button>
           <span class="muted-sm" id="ds-import-state">选择 .xlsx / .xlsm / .csv 后点「上传并检查」，先看清内容再决定导入。</span>
         </div>
 
@@ -809,7 +894,7 @@
             <div class="map-grid" id="ds-mapping"></div>
           </div>
           <div class="row">
-            <button id="btn-ds-import" class="btn btn-primary">确认导入</button>
+            <button id="btn-ds-import" class="btn btn-primary" data-guard="import">确认导入</button>
             <span class="muted-sm" id="ds-import-note"></span>
           </div>
         </div>
@@ -825,7 +910,7 @@
           <div class="card-head"><h2>① 上传数据</h2></div>
         <div class="row">
           <input id="file-input" type="file" accept=".xlsx,.xls">
-          <button id="btn-upload" class="btn btn-primary">上传</button>
+          <button id="btn-upload" class="btn btn-primary" data-guard="import">上传</button>
           <span class="muted-sm" id="upload-state">选择真实 Excel 文件（.xlsx / .xls）后点上传。</span>
         </div>
         <div class="table-wrap" id="upload-result-wrap" hidden>
@@ -863,7 +948,7 @@
           <div class="metrics" id="task-metrics"></div>
         </div>
         <div class="row">
-          <button id="btn-create-task" class="btn btn-primary" disabled>建任务</button>
+          <button id="btn-create-task" class="btn btn-primary" data-guard="task" disabled>建任务</button>
           <span class="muted-sm" id="create-task-state"></span>
         </div>
         <p class="note" id="create-precondition"></p>
@@ -902,8 +987,8 @@
       <div class="card">
         <div class="card-head"><h2>④ 执行结果</h2></div>
         <div class="row">
-          <button id="btn-run-task" class="btn btn-primary" disabled>执行这个任务</button>
-          <button id="btn-download" class="btn" disabled>下载产出 xlsx</button>
+          <button id="btn-run-task" class="btn btn-primary" data-guard="task" disabled>执行这个任务</button>
+          <button id="btn-download" class="btn" data-guard="export" disabled>下载产出 xlsx</button>
           <span class="muted-sm" id="run-state"></span>
         </div>
         <div class="table-wrap" id="run-result-wrap" hidden>
@@ -958,7 +1043,7 @@
         <div class="card-head"><h2>文档资料（Word / PDF）</h2><span class="muted-sm">真实文本提取</span></div>
         <div class="row">
           <input id="doc-input" type="file" accept=".docx,.pdf">
-          <button id="btn-doc-upload" class="btn btn-primary">上传并提取</button>
+          <button id="btn-doc-upload" class="btn btn-primary" data-guard="import">上传并提取</button>
           <span class="muted-sm" id="doc-upload-state">选择 .docx / .pdf 后点「上传并提取」。</span>
         </div>
         <div class="table-wrap" id="doc-result-wrap" hidden>
@@ -1021,6 +1106,50 @@
           <table class="table"><tbody id="set-storage-body"></tbody></table>
         </div>
       </div>
+      <!-- ── 账号管理（**只有管理员看得到**）───────────────────────────────
+           谁看得到：登录的账号角色是管理员 —— 也就是**这台机器上第一个注册的账号**
+           （第一个注册的自动成为管理员，否则没人能按下"批准"，系统当场死锁）。
+           游客与非管理员看到的是下面那块「受限说明」（带 ⚠），点一下弹窗说要去登录。
+           两个块由 web/app.js 按 Session 的身份二选一显示，页面上永远只出现其中一块。 -->
+      <div class="card" id="set-accounts-card" hidden>
+        <div class="card-head">
+          <h2>账号管理</h2>
+          <span class="muted-sm">批准之后，对方才能用自己的账号登录</span>
+        </div>
+        <div class="field-label">等待批准 <b id="set-pending-count">0</b> 个</div>
+        <div class="table-wrap">
+          <table class="table"><thead><tr><th>账号</th><th>申请时间</th><th>操作</th></tr></thead>
+            <tbody id="set-pending-body"></tbody></table>
+        </div>
+        <div class="empty" id="set-pending-empty">
+          <div class="empty-title">没有等待批准的账号</div>
+          <div class="empty-hint">有人注册之后，会出现在这里等你批准。</div>
+        </div>
+        <div class="field-label">已批准的账号</div>
+        <div class="table-wrap">
+          <table class="table"><thead><tr><th>账号</th><th>状态</th><th>最后登录</th><th>操作</th></tr></thead>
+            <tbody id="set-approved-body"></tbody></table>
+        </div>
+        <div class="empty" id="set-approved-empty">
+          <div class="empty-title">还没有已批准的账号</div>
+          <div class="empty-hint">批准一个账号之后，它会出现在这里。</div>
+        </div>
+        <p class="note" id="set-accounts-note"></p>
+      </div>
+
+      <!-- 非管理员 / 游客在这一页的位置看到的东西：明确说"这里有一项你现在用不了"，
+           并带上 ⚠（与别处受限入口同一个记号）。游客点它会弹「需要您先登录」。 -->
+      <div class="card" id="set-accounts-locked" hidden>
+        <div class="card-head"><h2>账号管理</h2></div>
+        <div class="empty">
+          <div class="empty-ico">⚠</div>
+          <div class="empty-title">需要管理员身份</div>
+          <div class="empty-hint" id="set-accounts-locked-hint">批准新账号、停用或删除账号，只有管理员能做。</div>
+        </div>
+        <button class="btn" id="btn-accounts-locked" type="button" data-guard="accounts">账号管理</button>
+        <p class="note">这台机器上第一个注册的账号就是管理员。</p>
+      </div>
+
       <div class="card">
         <div class="card-head"><h2>企业化能力（尚未开通）</h2></div>
         <div class="switch-row"><span>用户与权限</span><button class="switch" id="sec-rbac" disabled>尚未开通</button></div>
@@ -1060,7 +1189,7 @@
       <div class="pane" id="rp-pane-perm">
         <div class="kv"><span>当前用户</span><b id="rp-user-name">未登录</b></div>
         <div class="kv"><span>身份来源</span><b id="rp-user-kind">—</b></div>
-        <p class="note">本地模式：账号只用于展示与记录，退出登录即清。</p>
+        <p class="note">本地模式：账号存在这台机器上；角色的作用只有一个 —— 管理员能批准新账号。</p>
       </div>
 
       <div class="pane" id="rp-pane-security" hidden>

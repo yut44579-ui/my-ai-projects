@@ -218,14 +218,36 @@ def test_H05_帮助里的数字都是读出来的不是写死的():
     assert "暂时读不到" in js
 
 
-def test_H05_登录页底部那句提示是诚实的():
-    """底部那句要如实：只存加密摘要、不存原文；忘记密码找不回；可注册或用游客。"""
-    note = visible_text(re.search(r'<p class="login-note">.*?</p>', read("index.html"), re.S).group(0))
-    assert "加密摘要" in note and "原文" in note, "没说清密码只存摘要不存原文"
-    assert "无法用邮件找回" in note, "没如实说清忘记密码的后果"
-    assert "注册新账号" in note and "游客" in note, "没给出能走的两条路"
+def test_H05_关于密码与账号的那几句提示是诚实的():
+    """登录页**不再**挂长说明（用户 2026-09-25：要 QQ 那种简洁形态）。
+
+    但"密码到底怎么存、忘记了怎么办"这几句必须还在、还得是真话 ——
+    它们搬到了「帮助 / 隐私」抽屉里（同一只抽屉，登录页与主界面都能打开）。
+    所以这条测试盯的是**抽屉里的原文**，不是某个特定元素位置：
+    讲清只存加密摘要、忘记密码无法用邮件找回、并给出能走的两条路。
+    """
+    html = read("index.html")
+    # ① 登录页本身要短：那段解释实现细节的长句不许再挂在登录卡片上
+    login_card = re.search(r'<section class="card login-card">.*?</section>', html, re.S).group(0)
+    for long_note in ("不可还原的校验值", "加密摘要", "本地模式"):
+        assert long_note not in visible_text(login_card), \
+            f"登录卡片上还有需要解释的长句（该收进帮助）：{long_note}"
+    assert "帮助" in login_card and "隐私" in login_card, "登录页少了去帮助 / 隐私的入口"
+
+    # ② 真话一句都不能少 —— 在「隐私」那一栏里
+    privacy = visible_text(re.search(r'<section class="info-pane" id="info-pane-privacy"[^>]*>.*?</section>',
+                                     html, re.S).group(0))
+    assert "加密摘要" in privacy and "原文" in privacy, "没说清密码只存摘要不存原文"
+    assert "无法用邮件找回" in privacy, "没如实说清忘记密码的后果"
+    assert "注册新账号" in privacy and "游客" in privacy, "没给出能走的两条路"
     for fake in ("发送邮件", "重置邮件", "邮件已发送", "验证码已发送", "找回密码链接"):
-        assert fake not in note, f"底部提示在承诺做不到的事：{fake}"
+        assert fake not in privacy, f"隐私说明在承诺做不到的事：{fake}"
+
+    # ③ 帮助那一栏也要有同一件事的说明（"忘记密码"这一节）
+    help_pane = visible_text(re.search(r'<section class="info-pane" id="info-pane-help"[^>]*>.*?</section>',
+                                       html, re.S).group(0))
+    assert "无法用邮件找回" in help_pane and "注册新账号" in help_pane, "帮助里没写忘记密码怎么办"
+    assert "管理员" in help_pane, "帮助里没说账号要管理员批准"
 
 
 # ════════════════════════════════════════════════════════════════════════
