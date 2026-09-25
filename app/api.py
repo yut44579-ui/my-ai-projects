@@ -68,7 +68,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import api_chat, api_datasets, api_documents, prewarm, state
+from app import api_auth, api_chat, api_datasets, api_documents, prewarm, state
 from app.engine import executor, loader, renderer
 from app.engine import metrics as engine_metrics
 from app.spec.models import (
@@ -1538,6 +1538,15 @@ app.include_router(api_chat.router)
 # 既有端点（含冻结的 /api/upload）一个字没改：数据源登记、业务表的分页/排序/筛选、
 # 导出（xlsx/csv）整个装在 app/api_datasets.py 里。位置同样必须在 mount("/") **之前**。
 app.include_router(api_datasets.router)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 本地账号（注册 / 登录）—— 走**新路径** `/api/auth/*`
+# ════════════════════════════════════════════════════════════════════════
+# 同样一个字没改既有端点：注册、登录校验、注册页查重整个装在 app/api_auth.py 里，
+# 密码只以"不可还原的校验值"落 state/accounts.json（实现与边界见 app/accounts.py）。
+# 位置同样必须在 mount("/") **之前**。
+app.include_router(api_auth.router)
 
 
 # ════════════════════════════════════════════════════════════════════════

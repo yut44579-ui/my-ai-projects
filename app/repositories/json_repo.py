@@ -15,6 +15,7 @@ from typing import Callable
 
 from app.repositories import json_store
 from app.repositories.base import (
+    AccountRepository,
     ConversationRepository,
     DatasetRepository,
     DocumentRepository,
@@ -214,3 +215,69 @@ class JsonDatasetRepository(_JsonRepositoryBase, DatasetRepository):
 
     def count(self) -> int:
         return self._collection.count()
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑦ 本地账号（注册/登录：账号名 + 密码的校验值）
+# ════════════════════════════════════════════════════════════════════════
+class JsonAccountRepository(_JsonRepositoryBase, AccountRepository):
+    """账号表：**键是账号名**（不是 uuid），所以 `get` 按名字找，且大小写不敏感。
+
+    这里只做"按名字找一条"这件事 —— 摘要与比对在 app/accounts.py，
+    本文件从头到尾**没有出现"密码"这个词的一次运算**（也不该出现）。
+    """
+
+    def __init__(self, path_getter: Callable[[], Path] | None = None) -> None:
+        super().__init__(JsonCollection(path_getter or json_store.accounts_file, "accounts"))
+
+    def add(self, record: dict) -> dict:
+        return self._collection.insert_front(record)
+
+    def get(self, username: str) -> dict | None:
+        # casefold() 而不是 lower()：中文/德语的 ß 这类字符也能正确折叠
+        wanted = (username or "").strip().casefold()
+        if not wanted:
+            return None
+        return self._collection.find(
+            lambda record: str(record.get("username") or "").strip().casefold() == wanted
+        )
+
+    def all(self) -> list[dict]:
+        return self._collection.all()
+
+    def count(self) -> int:
+        return self._collection.count()
+
+    def set_status(self, username: str, status: str, reviewed_by: str,
+                   reviewed_at: str) -> dict | None:
+        """改状态 + 记审批痕迹。账号名匹配与 `get` 同一口径（大小写不敏感）。"""
+        wanted = (username or "").strip().casefold()
+
+        def mutate(record: dict) -> bool:
+            if record.get("status") == status:
+                return False                        # 没变就不写盘（幂等，也不刷 mtime）
+            record["status"] = status
+            record["reviewed_by"] = reviewed_by
+            record["reviewed_at"] = reviewed_at
+            return True
+
+        return self._collection.update_first(
+            lambda record: str(record.get("username") or "").strip().casefold() == wanted, mutate)
+
+    def set_last_login(self, username: str, logged_in_at: str) -> dict | None:
+        """刷新最后一次登录时间。
+
+        账号名匹配与 `get` 同一口径（大小写不敏感），但**匹配到的那条记录**才改，
+        改的是记录里原本的写法 —— 不把用户当初填的账号名改写掉。
+        """
+        wanted = (username or "").strip().casefold()
+
+        def mutate(record: dict) -> bool:
+            if record.get("last_login_at") == logged_in_at:
+                return False                        # 没变就不写盘（幂等，也不刷 mtime）
+            record["last_login_at"] = logged_in_at
+            return True
+
+        return self._collection.update_first(
+            lambda record: str(record.get("username") or "").strip().casefold() == wanted, mutate
+        )

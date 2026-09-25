@@ -7,6 +7,9 @@
     ③ **任务**（TASK-002D）：固化下来的"报表任务" —— task_id / 冻结的 Spec / 绑定的数据哈希 / 状态
     ④ **文档记录**（TASK-003）：上传的 Word/PDF 提取到了什么 —— doc_id / 字符数 / 块数 /
        大纲 / warnings / 摘要。与①②③是**独立管道**：文档不参与算数，只做提取与摘要
+    ⑤ **本地账号**（本地账号系统）：注册进来的账号名 + **密码的校验值**（pwd_salt/pwd_hash/
+       pwd_iterations）+ 建号时间 + 上次登录时间。明文密码**从不落盘**；
+       校验与摘要算法在 `app/accounts.py`，本文件只负责存 —— 它拿不到明文，也不该拿到
 
 为什么执行记录要记这些：D11「Report Spec 为核心」明确要求
 "执行记录必须绑定：spec 版本 / 数据快照 / 模板版本 / **代码版本** / execution_id / **校验结果**"。
@@ -386,6 +389,47 @@ def list_datasets(limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
 
 def count_datasets() -> int:
     return repositories.datasets().count()
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑦ 本地账号（注册 / 登录）
+# ════════════════════════════════════════════════════════════════════════
+def record_account(account: dict) -> dict:
+    """落盘一个账号并返回它。
+
+    与 record_dataset / record_conversation 同一条约定：**记录的形状由产生它的那一层决定**
+    （这里由 `app/accounts.py` 决定 —— pwd_algo / pwd_salt / pwd_hash / pwd_iterations
+    是它的字段），state.py 只负责存，不自己拼一个"看起来差不多"的账号。
+    """
+    return repositories.accounts().add(account)
+
+
+def get_account(username: str) -> dict | None:
+    """按账号名取（不存在返回 None，由调用方决定回 401/409）；账号名大小写不敏感。"""
+    return repositories.accounts().get(username)
+
+
+def count_accounts() -> int:
+    """账号总数（首次使用引导：一个都没有时登录页要提示"先注册一个"）。"""
+    return repositories.accounts().count()
+
+
+def touch_account_login(username: str, logged_in_at: str) -> dict | None:
+    """刷新某个账号的"上次登录时间"（账号不存在返回 None）。"""
+    return repositories.accounts().set_last_login(username, logged_in_at)
+
+
+def set_account_status(username: str, status: str, reviewed_by: str, reviewed_at: str) -> dict | None:
+    """改账号状态（批准 / 拒绝 / 停用 / 恢复），并记下"谁在什么时候批的"（审计）。
+
+    只改这三个字段，其余原样 —— 合法的 status 取值由 `app/accounts.py` 定义。
+    """
+    return repositories.accounts().set_status(username, status, reviewed_by, reviewed_at)
+
+
+def list_accounts() -> list[dict]:
+    """全部账号（落盘顺序：新的在前）。**只给管理动作与守卫用**，出参由 accounts.public 裁剪。"""
+    return repositories.accounts().all()
 
 
 # ════════════════════════════════════════════════════════════════════════

@@ -158,6 +158,53 @@ class ConversationRepository(ABC):
         """对话记录总数。"""
 
 
+class AccountRepository(ABC):
+    """本地账号（`state/accounts.json`）：注册进来的账号 + 密码的**校验值**。
+
+    为什么单独一个接口（而不是塞进别的仓库）：
+        账号的键是**账号名本身**（不是 uuid 主键），查的是"这个账号在不在、密码对不对"；
+        产出它的那一层是 `app/accounts.py`（校验规则 + 摘要算法都在那里），
+        本层只认下面这几个动作，**不认识"密码"两个字的含义** ——
+        `pwd_salt` / `pwd_hash` 在它眼里就是两个普通字符串。
+
+    ⚠️ 摘要与比对**不在这里**：本层不做任何校验（与上面几个接口同一条边界），
+       所以它拿不到明文密码，也不该拿到。
+    """
+
+    @abstractmethod
+    def add(self, record: dict) -> dict:
+        """登记一个账号（插到最前）；返回落盘的那条。"""
+
+    @abstractmethod
+    def get(self, username: str) -> dict | None:
+        """按账号名取；不存在返回 None。
+
+        **账号名大小写不敏感**（"Tangyu" 与 "tangyu" 视为同一个账号）：
+        否则 `Tangyu` 与 `tangyu` 会变成两个账号，用户自己都分不清登的是哪个。
+        """
+
+    @abstractmethod
+    def count(self) -> int:
+        """账号总数（首次使用引导用：一个账号都没有时要提示"先注册一个"）。"""
+
+    @abstractmethod
+    def all(self) -> list[dict]:
+        """全部账号（新的在前）。
+
+        ⚠️ 出参是**落盘的原始记录**（里面有盐与校验值）—— 它只给 `app/accounts.py` 用，
+        那里有 `public()` 白名单负责裁剪。任何 HTTP 响应都不许直接用它。
+        """
+
+    @abstractmethod
+    def set_last_login(self, username: str, logged_in_at: str) -> dict | None:
+        """刷新该账号的 `last_login_at`（**值没变就不写盘**，与 set_status 同一约定）。"""
+
+    @abstractmethod
+    def set_status(self, username: str, status: str, reviewed_by: str,
+                   reviewed_at: str) -> dict | None:
+        """改账号状态并记下审批人与时间（**状态没变就不写盘**，幂等）。"""
+
+
 class DatasetRepository(ABC):
     """数据集登记表（`state/datasets.json`）：STEP A 引入的**数据源身份**。
 
@@ -199,6 +246,7 @@ REPOSITORY_INTERFACES: tuple[type, ...] = (
     DocumentRepository,
     ConversationRepository,
     DatasetRepository,
+    AccountRepository,
 )
 
 __all__ = [
@@ -208,6 +256,7 @@ __all__ = [
     "DocumentRepository",
     "ConversationRepository",
     "DatasetRepository",
+    "AccountRepository",
     "REPOSITORY_INTERFACES",
     "Callable",
 ]

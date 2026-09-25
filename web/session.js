@@ -1,11 +1,13 @@
-/* session.js · 登录页 + 用户区 + 在线状态（本机会话层）
+/* session.js · 登录 / 注册 / 用户区 / 在线状态（本机会话层）
  *
- * ════ 这一层是什么、不是什么（写清楚，免得被当成安全实现）════
- * 是：在本机记住"这次是谁在用"（一条本地记录），把账号与状态画到右上角，
- *     并让四种状态跟着**真实动作**走（登录 / 提问 / 长时间没操作 / 退出）。
- * 不是：任何身份校验。密码只检查"填了没有、够不够长"，**不保存、不比对、不做任何摘要运算**；
- *       账号与状态也只用于展示与记录。口令校验、令牌、权限、操作留痕属于服务端要做的事，
- *       本文件一行都没有 —— 所以界面上也不说"已安全登录"这种话。
+ * ════ 这一层做什么、不做什么（写清楚边界）════
+ * 做：画登录页、注册页与右上角的用户区；把账号与密码**递给后端**核对（注册、登录各一次请求）；
+ *     记住"这次是谁"（一条本机记录，退出即清）；让四种状态跟着**真实动作**走
+ *     （登录 / 提问 / 长时间没操作 / 退出）。
+ * 不做：**任何密码运算**。本文件里没有摘要、没有加密、没有比对 —— 密码从输入框直接进请求体，
+ *       算与比都在后端（`app/accounts.py`）。所以本机记录、页面文本、控制台里都不会有密码。
+ * 也不做：令牌 / 服务端会话 / 角色权限 / 多用户隔离（本地单机级别，那些留待后续）。
+ *       于是这里也不说"已安全登录"这种话 —— 它只是"这台机器记得你刚对过密码"。
  *
  * ════ 状态由什么驱动（不靠前端"假装忙"）════
  *   登录成功（或刷新时读回本机记录） → 在线
@@ -27,10 +29,36 @@ window.Session = (() => {
   const hide = (el) => { if (el) el.hidden = true; };
   const setText = (id, value) => { const el = $(id); if (el) el.textContent = value; };
 
-  // 本机那条"这次是谁"的记录：**只存账号与入口类型**，密码连碰都不碰
+  // 本机那条"这次是谁"的记录：**只存账号、显示名与入口类型**，密码连碰都不碰
   // （键名沿用当初的写法，老记录里的"记住账号"因此不会丢）
   const WHO_KEY = "sra.who";
   const NAME_KEY = "sra.remembered-name";
+
+  // 三栏：账号登录 / 注册 / 游客登录。标题与副标题跟栏目走 —— 切栏时一起换。
+  const TABS = {
+    account: { title: "欢迎回来 👋", sub: "登录后即可开始分析" },
+    register: { title: "建一个账号", sub: "填三下就好，注册完直接用新账号进来" },
+    guest: { title: "游客模式", sub: "不用填账号密码，直接进来看看" },
+  };
+  const PANES = { account: "login-form", register: "register-form", guest: "guest-pane" };
+
+  // 两个表单各有**自己的一张**验证码（各换各的，互不影响）：
+  // value 是这张图的编号，提交时连同用户填的字符一起发出去。
+  const CAPTCHA_SLOTS = {
+    account: { input: "login-captcha", img: "login-captcha-img",
+               msg: "login-captcha-msg", button: "login-captcha-btn" },
+    register: { input: "reg-captcha", img: "reg-captcha-img",
+                msg: "reg-captcha-msg", button: "reg-captcha-btn" },
+  };
+
+  // 帮助 / 隐私：同一只抽屉，按 kind 换标题与内容
+  const INFO_PANES = {
+    help: { pane: "info-pane-help", title: "帮助" },
+    privacy: { pane: "info-pane-privacy", title: "隐私说明" },
+  };
+
+  // 账号字符口径：与后端同一套（中文 / 字母 / 数字 / 下划线 / 点 / 中划线）
+  const USERNAME_OK = /^[A-Za-z0-9_.\-一-鿿]+$/
 
   const STATUS_ORDER = ["online", "busy", "away", "offline"];
   const STATUS_TEXT = { online: "在线", busy: "忙碌中", away: "离开", offline: "离线" };
@@ -48,7 +76,9 @@ window.Session = (() => {
   const NOT_READY = "个人设置尚未开通。当前能改的只有登录时填的账号与右上角的状态。";
 
   const state = {
-    who: null,          // {name, kind}；kind: account | guest
+    who: null,          // {name, kind, displayName}；kind: account | guest；name = 账号名
+    lastCheckedName: "",  // 已经问过后端"有没有被注册"的那个账号名（避免同一个名字反复问）
+    captchas: { account: "", register: "" },   // 当前两张验证码图的编号（每个表单一张）
     status: "offline",
     manual: false,      // 用户手动选过状态（先听用户的，等下次自动事件再接管）
     lastActive: 0,
@@ -72,15 +102,23 @@ window.Session = (() => {
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (!parsed || !parsed.name) return null;
-      return { name: String(parsed.name), kind: parsed.kind === "guest" ? "guest" : "account" };
+      const name = String(parsed.name);
+      return {
+        name: name,
+        kind: parsed.kind === "guest" ? "guest" : "account",
+        displayName: String(parsed.display_name || name),   // 老记录没有这一项：退回账号名
+      };
     } catch (err) {
       return null;                       // 记录坏了就当没登录，不把页面搞挂
     }
   }
 
+  // 只存"这次是谁"：账号、显示名、入口类型。**不存密码、不存令牌**（也没有令牌可存）。
   function writeWho(who) {
     try {
-      localStorage.setItem(WHO_KEY, JSON.stringify({ name: who.name, kind: who.kind }));
+      localStorage.setItem(WHO_KEY, JSON.stringify({
+        name: who.name, kind: who.kind, display_name: who.displayName,
+      }));
     } catch (err) { /* 本机不让写：这次登录仍然可用，只是刷新后要重登 */ }
   }
 
@@ -144,6 +182,155 @@ window.Session = (() => {
     if (now - state.lastActive >= awayMs()) setStatus("away", "idle");
   }
 
+  // ══════════════════════════════════════════════════════════════════════
+  // 图形验证码（两张：登录一张、注册一张）
+  // ══════════════════════════════════════════════════════════════════════
+  // 图是**后端现画的一张图**，前端只负责把它显示出来、把用户填的字符原样递回去。
+  // 前端不生成、不判断验证码对不对（"对不对"由后端说了算，前端只管把人话显示出来）。
+  async function loadCaptcha(which) {
+    const slot = CAPTCHA_SLOTS[which];
+    if (!slot || typeof API === "undefined" || !API.captcha) return;
+    try {
+      const data = await API.captcha();
+      state.captchas[which] = (data && data.captcha_id) || "";
+      const img = $(slot.img);
+      if (img) {
+        // 当**图片**用（data: 图），不是当 HTML 插进页面 —— 图里的字符是画上去的，不是页面文字
+        img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent((data && data.image_svg) || "")}`;
+      }
+      const input = $(slot.input);
+      if (input) input.value = "";           // 换图 = 旧的那 4 个字符作废，清掉免得用户以为还算数
+      // 注意：这里**不碰提示文字** —— 换图往往是"因为刚出错"才换的，
+      // 顺手把提示清掉会让用户看不到那句人话（"验证码不对"一闪就没）。
+      // 该清的地方（用户主动点图、表单复位）自己清。
+    } catch (err) {
+      state.captchas[which] = "";
+      setFieldError(slot.input, slot.msg, "验证码图片没取到，点一下右边的图再试一次。");
+    }
+  }
+
+  function captchaPayload(which) {
+    const slot = CAPTCHA_SLOTS[which];
+    return {
+      captcha_id: state.captchas[which],
+      captcha_text: (($(slot.input) || {}).value || "").trim(),
+    };
+  }
+
+  // 验证码这条路上后端会回三种人话，前端**照它说的做**：
+  //   填错   → 就地提示 + 换一张（旧的那张已经没用了）
+  //   过期   → 提示"已帮你换一张" + 换一张
+  //   太多次 → 提示要等多久（这是"先等等"，不是"你错了"）
+  function handleCaptchaError(which, err) {
+    const slot = CAPTCHA_SLOTS[which];
+    const code = (err && err.code) || "";
+    if (code === "captcha_wrong") {
+      setFieldError(slot.input, slot.msg, "验证码不对，请重新输入。");
+      loadCaptcha(which);
+      return true;
+    }
+    if (code === "captcha_expired") {
+      setFieldError(slot.input, slot.msg, "验证码已过期，已帮你换一张。");
+      loadCaptcha(which);
+      return true;
+    }
+    if (code === "captcha_missing") {
+      setFieldError(slot.input, slot.msg, "请填一下图上的 4 个字符。");
+      return true;
+    }
+    if (code === "too_many_attempts") {
+      setFieldError(slot.input, slot.msg,
+        (err && err.message) || "尝试次数过多，请稍后再试。");
+      loadCaptcha(which);
+      return true;
+    }
+    return false;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 帮助 / 隐私（同一只右侧抽屉）
+  // ══════════════════════════════════════════════════════════════════════
+  // 内容分两半：
+  //   · **写死的那半**是口径与规则（口径不会因为换数据源而变）—— 但每一句都对着真系统核过；
+  //   · **读出来的那半**是当前数据的事实（数据源名 / 范围 / 行数 / 客户数 / 国家数 / 币种 /
+  //     不能问的维度 / 报告能导成什么格式）—— 换数据源会跟着变，所以每次打开都重新读一次。
+  // 读不到就**显示"暂时读不到"** —— 不摆一个看起来像真数字的东西蒙混过去。
+  const NOT_AVAILABLE = "暂时读不到（服务还没就绪时会这样）";
+
+  async function loadHelpFacts() {
+    setText("help-source", "读取中…");
+    if (typeof API === "undefined" || !API.chatCapabilities) return;
+    let caps = null;
+    let health = null;
+    try {
+      caps = await API.chatCapabilities();
+    } catch (err) { /* 读不到就按"读不到"显示，下面统一处理 */ }
+    try {
+      health = await API.health();
+    } catch (err) { /* 同上 */ }
+
+    const profile = (caps || {}).data_profile || {};
+    // 数据源名与顶栏**同一处来源**（健康检查里的快照路径），不另起一份"当前数据源"的定义
+    const snapshot = (health || {}).data_snapshot || {};
+    const sourceName = snapshot.path ? String(snapshot.path).split(/[\\/]/).pop() : "";
+    setText("help-source", sourceName || NOT_AVAILABLE);
+    setText("help-range", (profile.first_day && profile.last_day)
+      ? `${profile.first_day} ~ ${profile.last_day}`
+      : NOT_AVAILABLE);
+    setText("help-rows", fmtCount(profile.rows) || NOT_AVAILABLE);
+    setText("help-customers", fmtCount(profile.customer_count) || NOT_AVAILABLE);
+    setText("help-countries", fmtCount(profile.country_count) || NOT_AVAILABLE);
+    setText("help-currency", (profile.currency && profile.currency.name)
+      ? `人民币「${profile.currency.name}」`
+      : NOT_AVAILABLE);
+    setText("help-last-day", profile.last_day || NOT_AVAILABLE);
+
+    // "数据里没有什么"照后端给的清单渲染 —— 后端说不能问什么，这里就写什么（同源，不手抄）
+    const holder = $("help-unsupported");
+    const dimensions = ((caps || {}).unsupported || {}).dimensions || [];
+    if (holder) {
+      holder.innerHTML = "";
+      if (!dimensions.length) {
+        const item = document.createElement("li");
+        item.textContent = NOT_AVAILABLE;
+        holder.appendChild(item);
+      }
+      dimensions.forEach((text) => {
+        const item = document.createElement("li");
+        item.textContent = text;
+        holder.appendChild(item);
+      });
+    }
+    // 报告能导成什么格式：也读后端的清单（不自己写死扩展名）
+    const formats = (((caps || {}).report || {}).export_formats || [])
+      .map((item) => item && item.label).filter(Boolean);
+    setText("help-report-formats", formats.length ? formats.join(" / ") : NOT_AVAILABLE);
+  }
+
+  function openInfo(kind) {
+    const wanted = INFO_PANES[kind] ? kind : "help";
+    Object.entries(INFO_PANES).forEach(([key, info]) => {
+      const pane = $(info.pane);
+      if (key === wanted) show(pane); else hide(pane);
+    });
+    setText("info-title", INFO_PANES[wanted].title);
+    const drawer = $("info-drawer");
+    show(drawer);
+    if (drawer) drawer.setAttribute("data-kind", wanted);
+    const close = $("btn-info-close");
+    if (close && close.focus) close.focus();
+    if (wanted === "help") loadHelpFacts();
+  }
+
+  function closeInfo() {
+    hide($("info-drawer"));
+  }
+
+  function infoOpen() {
+    const drawer = $("info-drawer");
+    return Boolean(drawer) && drawer.hidden === false;
+  }
+
   // 分析请求的**真实生命周期**：发出 → 忙碌中；回来（成功或失败都一样）→ 回到在线。
   // app.js 只把请求交给这里，前端不猜"任务还在不在跑"。
   function trackRequest(promise) {
@@ -175,24 +362,40 @@ window.Session = (() => {
     });
   }
 
+  // 头像取"名字的第一个字"。
+  // 用 Array.from 而不是 [0]：中文一个字就是一个字符（"唐宇" → 唐），
+  // emoji 这类由两个编码单元组成的字符也不会被劈成半个方块。
+  function firstGlyph(text) {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) return "未";
+    return Array.from(trimmed)[0];
+  }
+
+  // 顶栏那个名字显示的是**显示名**（注册时可以另填，留空就是账号名本身），
+  // 账号名只在用户菜单的一行说明里出现 —— 两个不一样时才两个都提一句。
+  function kindNote(who) {
+    if (!who) return "还没进来";
+    if (who.kind === "guest") return "游客（本机随机取名，不留身份）";
+    const account = who.name;
+    return who.displayName && who.displayName !== account
+      ? `账号（本机注册的账号：${account}）`
+      : "账号（本机注册的账号，登录时对过密码）";
+  }
+
   function renderUserArea() {
     const who = state.who;
-    const name = who ? who.name : "未登录";
-    setText("avatar", name.slice(0, 1));
+    const name = who ? (who.displayName || who.name) : "未登录";
+    setText("avatar", who ? firstGlyph(name) : "未");
     setText("user-name", name);
-    setText("um-name", who ? name : "未登录");
-    setText("um-kind", who
-      ? (who.kind === "guest" ? "游客（本机随机取名，不留身份）" : "账号（登录时你自己填的）")
-      : "还没进来");
+    setText("um-name", name);
+    setText("um-kind", kindNote(who));
     renderStatus();
   }
 
   function renderPaneUser() {
     const who = state.who;
-    setText("rp-user-name", who ? who.name : "未登录");
-    setText("rp-user-kind", who
-      ? (who.kind === "guest" ? "游客（本机随机取名，不留身份）" : "账号（登录时你自己填的）")
-      : "—");
+    setText("rp-user-name", who ? (who.displayName || who.name) : "未登录");
+    setText("rp-user-kind", who ? kindNote(who) : "—");
   }
 
   function toast(message, kind) {
@@ -221,33 +424,140 @@ window.Session = (() => {
     return state.guestName;
   }
 
-  function setFieldError(inputId, messageId, message) {
+  // tone：不传 = 红字（填错了）；"ok" = 绿字（查过了，可用）。
+  // 两种都用同一个落点，这样"红字不跟着人走"的清理逻辑只有一处。
+  function setFieldError(inputId, messageId, message, tone) {
     const input = $(inputId);
     const box = $(messageId);
-    if (input) input.classList.toggle("is-bad", !!message);
+    const kind = message ? (tone || "bad") : "";
+    if (input) {
+      input.classList.toggle("is-bad", kind === "bad");
+      input.classList.toggle("is-ok", kind === "ok");
+    }
     if (box) {
       box.textContent = message || "";
       box.hidden = !message;
+      box.classList.toggle("is-ok", kind === "ok");
     }
   }
 
-  // 只做**形态**检查：账号 2~40 个字符、密码至少 6 位。
-  // 这里不比对任何密码（本机也没存过密码可比），所以它拦的是"填错格了"，不是"密码不对"。
+  // 账号形态：2~40 个字符，且只用允许的那几种字符。
+  // 前后端用同一套口径（这里是**提前拦**，真正的判定在后端）。
+  function accountShapeMessage(account) {
+    if (account.length < 2) return "账号至少 2 个字符（最多 40 个）。";
+    if (account.length > 40) return "账号最多 40 个字符，短一点更好记。";
+    if (!USERNAME_OK.test(account)) return "账号只能用中文、字母、数字和下划线、点、中划线。";
+    return "";
+  }
+
+  // 登录表单的**形态**检查（填错格了，不是"密码不对"）。
+  // 真正的"对不对"由后端判定 —— 密码在发出去之前，这里只数位数；
+  // 验证码也一样：这里只检查"填了没有、是不是 4 个字符"，对错由后端说了算。
   function validateAccount() {
     const account = (($("login-name") || {}).value || "").trim();
     const password = (($("login-pwd") || {}).value || "");
-    let accountMessage = "";
-    let pwdMessage = "";
-    if (account.length < 2) accountMessage = "账号至少 2 个字符（最多 40 个）。";
-    else if (account.length > 40) accountMessage = "账号最多 40 个字符，短一点更好记。";
-    if (password.length < 6) pwdMessage = "密码至少 6 位。";
+    const captchaText = captchaPayload("account").captcha_text;
+    const accountMessage = accountShapeMessage(account);
+    const pwdMessage = password.length < 6 ? "密码至少 6 位。" : "";
+    const captchaMessage = captchaText.length !== 4 ? "请填图上的 4 个字符。" : "";
     setFieldError("login-name", "login-name-msg", accountMessage);
     setFieldError("login-pwd", "login-pwd-msg", pwdMessage);
-    return { ok: !accountMessage && !pwdMessage, name: account };
+    setFieldError("login-captcha", "login-captcha-msg", captchaMessage);
+    return { ok: !accountMessage && !pwdMessage && !captchaMessage, name: account, password: password };
   }
 
-  function enter(name, kind) {
-    state.who = { name: name, kind: kind };
+  // 注册表单的形态检查：账号 / 密码 / 确认密码 / 验证码（显示名不填就用账号名）。
+  function validateRegister() {
+    const account = (($("reg-name") || {}).value || "").trim();
+    const password = (($("reg-pwd") || {}).value || "");
+    const again = (($("reg-pwd2") || {}).value || "");
+    const display = (($("reg-display") || {}).value || "").trim();
+    const captchaText = captchaPayload("register").captcha_text;
+    const accountMessage = accountShapeMessage(account);
+    const pwdMessage = password.length < 6 ? "密码至少 6 位。" : "";
+    // 两次不一致的提示只在"密码本身没问题"时说（否则会同时冒两条，反而看不清先改哪个）
+    const againMessage = (!pwdMessage && again !== password) ? "两次填的密码不一样，再对一遍。" : "";
+    const displayMessage = display.length > 40 ? "显示名最多 40 个字符。" : "";
+    const captchaMessage = captchaText.length !== 4 ? "请填图上的 4 个字符。" : "";
+    setFieldError("reg-name", "reg-name-msg", accountMessage);
+    setFieldError("reg-pwd", "reg-pwd-msg", pwdMessage);
+    setFieldError("reg-pwd2", "reg-pwd2-msg", againMessage);
+    setFieldError("reg-display", "reg-display-msg", displayMessage);
+    setFieldError("reg-captcha", "reg-captcha-msg", captchaMessage);
+    return {
+      ok: !accountMessage && !pwdMessage && !againMessage && !displayMessage && !captchaMessage,
+      name: account, password: password, display: display,
+    };
+  }
+
+  // 密码强度：**纯前端提醒，不拦人**（弱密码也能注册，只是提醒一句）。
+  // 口径写在这儿，别处不许再算一遍：
+  //   长度 ≥8 记 1 分、≥12 再记 1 分；同时有字母和数字记 1 分；有其它符号再记 1 分。
+  //   0~1 分 = 弱，2 分 = 中，3 分及以上 = 强。
+  function strengthOf(password) {
+    const value = password || "";
+    if (value.length < 6) return null;                  // 还没到能注册的长度，先不评
+    let score = 0;
+    if (value.length >= 8) score += 1;
+    if (value.length >= 12) score += 1;
+    if (/[A-Za-z]/.test(value) && /[0-9]/.test(value)) score += 1;
+    if (/[^A-Za-z0-9]/.test(value)) score += 1;
+    if (score <= 1) return { label: "弱", ratio: 1 };
+    if (score === 2) return { label: "中", ratio: 2 };
+    return { label: "强", ratio: 3 };
+  }
+
+  function renderStrength() {
+    const password = (($("reg-pwd") || {}).value || "");
+    const box = $("reg-strength");
+    const fill = $("reg-strength-fill");
+    const text = $("reg-strength-text");
+    const level = strengthOf(password);
+    if (!box) return;
+    if (!level) {
+      hide(box);
+      return;
+    }
+    show(box);
+    box.className = `pwd-strength lv-${level.ratio}`;
+    if (fill && fill.style) fill.style.width = `${Math.round(level.ratio / 3 * 100)}%`;
+    if (text) text.textContent = `密码强度：${level.label}`
+      + (level.label === "弱" ? "（能注册，只是建议长一点、混着字母数字）" : "");
+  }
+
+  // 账号框失焦：问一次后端"这个名字有没有被注册"，就地给结论。
+  // 名字没变过就不重复问（切来切去不该反复打请求）；问不到就**不下结论**（不假装可用）。
+  async function checkNameAvailable() {
+    const input = $("reg-name");
+    if (!input) return;
+    const account = (input.value || "").trim();
+    if (!account) {
+      state.lastCheckedName = "";
+      setFieldError("reg-name", "reg-name-msg", "");
+      return;
+    }
+    const shape = accountShapeMessage(account);
+    if (shape) {
+      state.lastCheckedName = "";
+      setFieldError("reg-name", "reg-name-msg", shape);
+      return;
+    }
+    if (account === state.lastCheckedName) return;
+    if (typeof API === "undefined" || !API.accountExists) return;
+    try {
+      const answer = await API.accountExists(account);
+      state.lastCheckedName = account;
+      setFieldError("reg-name", "reg-name-msg",
+        (answer && answer.exists) ? "这个账号已被注册，换一个吧。" : "✓ 可用",
+        (answer && answer.exists) ? "bad" : "ok");
+    } catch (err) {
+      state.lastCheckedName = "";
+      setFieldError("reg-name", "reg-name-msg", "");
+    }
+  }
+
+  function enter(name, kind, displayName) {
+    state.who = { name: name, kind: kind, displayName: displayName || name };
     writeWho(state.who);
     hide($("login-gate"));
     if (document.body) document.body.classList.remove("is-locked");
@@ -260,22 +570,99 @@ window.Session = (() => {
     if (pending) pending();
   }
 
+  // 登录：账号与密码**原样交给后端**核对（前端不比、不算、不存）。
+  // 401 → 「账号或密码不对」（后端刻意不区分是账号不存在还是密码错）；
+  // 失败时**保留账号、清空密码框**，并把光标放回密码框 —— 重试只需要再敲密码。
   async function submitAccount(event) {
     if (event && event.preventDefault) event.preventDefault();
     const checked = validateAccount();
-    if (!checked.ok) return;                        // 形态不对：就地标红，不发任何请求
+    if (!checked.ok) return;                        // 形态不对：就地标红，不发请求
     const button = $("btn-login");
     const spinner = $("login-spinner");
     if (button) button.disabled = true;
     show(spinner);
     setStatus("busy", "login");
-    // 等页面上那次**真实**的数据读取（服务慢的时候它就是真在等），不是设定时器凑时间
-    await (factsPromise || Promise.resolve()).catch(() => {});
+    let account = null;
+    try {
+      const answer = await API.authLogin({
+        username: checked.name,
+        password: checked.password,
+        ...captchaPayload("account"),
+      });
+      account = (answer && answer.account) || null;
+    } catch (err) {
+      if (button) button.disabled = false;
+      hide(spinner);
+      setStatus("offline", "login");
+      // 验证码这条路上的三种人话先分出去（填错/过期/太多次）——它跟"账号密码不对"不是一回事
+      if (handleCaptchaError("account", err)) return;
+      const wrongPassword = err && err.status === 401;
+      const message = wrongPassword
+        ? "账号或密码不对。账号还在框里，密码要重新敲一遍。"
+        : ((err && err.message) || "登录没成功，请稍后再试。");
+      setFieldError("login-pwd", "login-pwd-msg", message);
+      // 密码或账号不对：**换一张验证码**（旧的那张已经交出去了，不能再用第二次）
+      loadCaptcha("account");
+      const pwd = $("login-pwd");
+      if (pwd) {
+        pwd.value = "";                            // 清空密码，保留账号
+        if (pwd.focus) pwd.focus();
+      }
+      return;
+    }
     const remember = $("login-remember");
     rememberName(remember && remember.checked ? checked.name : "");
     if (button) button.disabled = false;
     hide(spinner);
-    enter(checked.name, "account");
+    enter(account && account.username ? account.username : checked.name, "account",
+      (account && account.display_name) || checked.name);
+  }
+
+  // 注册：成功后**直接用新账号进来**（不再让人回去重填一次登录表单）。
+  // 重复账号（409）就地标在账号框下面 —— 那句话就是后端给的，前端不改写。
+  async function submitRegister(event) {
+    if (event && event.preventDefault) event.preventDefault();
+    const checked = validateRegister();
+    if (!checked.ok) return;
+    const button = $("btn-register");
+    const spinner = $("register-spinner");
+    if (button) button.disabled = true;
+    show(spinner);
+    setStatus("busy", "login");
+    let account = null;
+    try {
+      const answer = await API.authRegister({
+        username: checked.name,
+        password: checked.password,
+        display_name: checked.display,
+        ...captchaPayload("register"),
+      });
+      account = (answer && answer.account) || null;
+    } catch (err) {
+      if (button) button.disabled = false;
+      hide(spinner);
+      setStatus("offline", "register");
+      if (handleCaptchaError("register", err)) return;
+      const taken = err && err.status === 409;
+      const message = taken
+        ? "这个账号已被注册，换一个吧。"
+        : ((err && err.message) || "注册没成功，请稍后再试。");
+      setFieldError(taken ? "reg-name" : "reg-pwd", taken ? "reg-name-msg" : "reg-pwd-msg", message);
+      // 这一张已经用掉了（一次性的），换一张再让人改别的地方
+      loadCaptcha("register");
+      if (taken) {
+        state.lastCheckedName = checked.name;        // 已经知道被占了，别再问一次
+        const nameInput = $("reg-name");
+        if (nameInput && nameInput.focus) nameInput.focus();
+      }
+      return;
+    }
+    if (button) button.disabled = false;
+    hide(spinner);
+    const who = (account && account.username) || checked.name;
+    enter(who, "account", (account && account.display_name) || who);
+    toast(`账号「${(account && account.display_name) || who}」已经建好，并用它进来了。`
+      + "下次进来要输对密码才行 —— 密码只在这台机器上保存成不可还原的校验值。", "ok");
   }
 
   async function submitGuest(event) {
@@ -294,21 +681,20 @@ window.Session = (() => {
       + "游客不留身份，退出后再进来会换一个新的。", "ok");
   }
 
+  // 三栏切换：账号登录 / 注册 / 游客登录。
+  // 「注册」做成第三个标签（而不是只留着底部那个链接）：注册与登录是**并列**的两件事 ——
+  // 第一次来的人要先注册，把它藏在底部小字里会让人以为"必须先有账号才能用"；
+  // 底部的「注册账号」链接保留，点它等于切到这一栏（老位置、老习惯不掉）。
   function switchTab(kind) {
-    const isAccount = kind !== "guest";
-    const accountTab = $("ltab-account");
-    const guestTab = $("ltab-guest");
-    if (accountTab) accountTab.classList.toggle("is-on", isAccount);
-    if (guestTab) guestTab.classList.toggle("is-on", !isAccount);
-    if (isAccount) {
-      show($("login-form"));
-      hide($("guest-pane"));
-    } else {
-      hide($("login-form"));
-      show($("guest-pane"));
-    }
-    setText("login-title", isAccount ? "欢迎回来 👋" : "游客模式");
-    setText("login-sub", isAccount ? "登录后即可开始分析" : "不用填账号密码，直接进来看看");
+    const wanted = PANES[kind] ? kind : "account";
+    Object.entries(PANES).forEach(([key, paneId]) => {
+      const tab = $(`ltab-${key}`);
+      if (tab) tab.classList.toggle("is-on", key === wanted);
+      const pane = $(paneId);
+      if (key === wanted) show(pane); else hide(pane);
+    });
+    setText("login-title", TABS[wanted].title);
+    setText("login-sub", TABS[wanted].sub);
   }
 
   // 眼睛图标两态：睁眼（明文藏着，点了就显示）↔ 闭眼带斜线（明文显示中，点了藏回去）。
@@ -360,12 +746,29 @@ window.Session = (() => {
     setEyeState(false);                     // 眼睛复位成"睁眼 = 点了显示明文"
     setFieldError("login-name", "login-name-msg", "");
     setFieldError("login-pwd", "login-pwd-msg", "");
+    // 注册表单也一并清干净：退出/登录后回来不该看到上一次填了一半的密码框
+    ["reg-name", "reg-display", "reg-pwd", "reg-pwd2", "reg-captcha"].forEach((id) => {
+      const input = $(id);
+      if (input) input.value = "";
+      setFieldError(id, `${id}-msg`, "");
+    });
+    // 验证码一并换新的：上次那张早就作废了（一次性），留着只会让人"填对了还被拒"
+    const loginCaptcha = $("login-captcha");
+    if (loginCaptcha) loginCaptcha.value = "";
+    setFieldError("login-captcha", "login-captcha-msg", "");
+    loadCaptcha("account");
+    loadCaptcha("register");
+    hide($("reg-strength"));
+    state.lastCheckedName = "";
     const loginButton = $("btn-login");
     if (loginButton) loginButton.disabled = false;
     const guestButton = $("btn-guest");
     if (guestButton) guestButton.disabled = false;
+    const registerButton = $("btn-register");
+    if (registerButton) registerButton.disabled = false;
     hide($("login-spinner"));
     hide($("guest-spinner"));
+    hide($("register-spinner"));
     switchTab("account");
   }
 
@@ -395,40 +798,140 @@ window.Session = (() => {
     return factsPromise;
   }
 
+  // 首次使用引导：问一次"这台机器上有几个账号"，一个都没有就把"先注册一个"那条亮出来。
+  // 读不到就**不亮**（宁可少一条提示，也不假装知道系统里有没有账号）。
+  function loadAccountHint() {
+    if (typeof API === "undefined" || !API.accountExists) return null;
+    return API.accountExists().then((answer) => {
+      const count = Number((answer || {}).account_count || 0);
+      const box = $("login-firstrun");
+      if (!box) return;
+      if (count > 0) hide(box);
+      else show(box);
+    }).catch(() => { hide($("login-firstrun")); });
+  }
+
   // ══════════════════════════════════════════════════════════════════════
   // 事件绑定
   // ══════════════════════════════════════════════════════════════════════
   function bindGate() {
-    // 账号登录只有**一条**提交路径：表单 submit（按钮 type=submit，回车也一样走这里）
+    // 两个表单各自只有**一条**提交路径：form 的 submit 事件。
+    // 按钮是 type="submit" 且表单里就有它 —— 所以**光标在输入框里按回车**走的是同一条路
+    // （浏览器的隐式提交），不用另写 keydown，也就不会出现"回车和点按钮做两件事"。
     const form = $("login-form");
     if (form) form.addEventListener("submit", submitAccount);
+    const registerForm = $("register-form");
+    if (registerForm) registerForm.addEventListener("submit", submitRegister);
     const guestButton = $("btn-guest");
     if (guestButton) guestButton.addEventListener("click", submitGuest);
     const eye = $("btn-pwd-eye");
     if (eye) eye.addEventListener("click", togglePassword);
-    const accountTab = $("ltab-account");
-    if (accountTab) accountTab.addEventListener("click", () => switchTab("account"));
-    const guestTab = $("ltab-guest");
-    if (guestTab) guestTab.addEventListener("click", () => switchTab("guest"));
+    Object.keys(PANES).forEach((key) => {
+      const tab = $(`ltab-${key}`);
+      if (tab) tab.addEventListener("click", () => switchTab(key));
+    });
 
-    // 尚未开通的入口：点一下给一句人话，不做"点不动的假按钮"
-    const notReady = [
-      ["link-forgot", "该功能尚未开通：找回密码还没做。本地模式下没有密码可比对，换个密码重新填一次就能进。"],
-      ["link-register", "该功能尚未开通：注册还没做。直接填个账号登录，或用游客身份进来即可。"],
-      ["link-help", "该功能尚未开通：帮助文档还没提供，先看看页面上的示例问题。"],
-      ["link-privacy", "该功能尚未开通：隐私说明还没提供。这台机器上只保存你填的账号与本次状态，不保存密码。"],
-    ];
-    notReady.forEach(([id, message]) => {
-      const button = $(id);
-      if (button) button.addEventListener("click", () => toast(message));
+    // 「注册账号」底部那个链接：切到注册那一栏（老位置还在，习惯不用改）
+    const registerLink = $("link-register");
+    if (registerLink) registerLink.addEventListener("click", () => {
+      switchTab("register");
+      const input = $("reg-name");
+      if (input && input.focus) input.focus();
+    });
+    // 首次使用那条引导：点一下同样是切到注册栏
+    const firstRun = $("login-firstrun");
+    if (firstRun) firstRun.addEventListener("click", () => {
+      switchTab("register");
+      const input = $("reg-name");
+      if (input && input.focus) input.focus();
+    });
+
+    // 「忘记密码？」——**本机模式没法找回**，就如实说，不假装能发邮件重置。
+    // （本机重置要么"谁坐在键盘前都能改别人的密码"、要么得先有一套恢复凭据，
+    //   两样都不是这一轮该顺手做掉的东西；所以这里只给可行的两条路。）
+    const forgot = $("link-forgot");
+    if (forgot) forgot.addEventListener("click", () => toast(
+      "这台机器上没法找回原来的密码：密码只存成不可还原的校验值，谁也还原不出原文。"
+      + "可以注册一个新账号，或先用游客身份进来。"
+    ));
+
+    // 帮助 / 隐私：打开同一只右侧抽屉（不是"尚未开通"的提示条）。
+    // 登录页底部两个入口 + 顶栏 ☰ 菜单里两个入口，打开的是**同一只抽屉**（内容只有一份）。
+    const openFrom = (kind, closeTopbarMenu) => () => {
+      if (closeTopbarMenu) {
+        const menu = $("topbar-menu");
+        if (menu) hide(menu);                       // 菜单先收起来，别让抽屉盖着一张菜单
+        const toggle = $("btn-menu");
+        if (toggle) toggle.setAttribute("aria-expanded", "false");
+      }
+      openInfo(kind);
+    };
+    [["link-help", "help", false], ["link-privacy", "privacy", false],
+     ["link-note-privacy", "privacy", false],
+     ["menu-item-help", "help", true], ["menu-item-privacy", "privacy", true]]
+      .forEach(([id, kind, fromMenu]) => {
+        const button = $(id);
+        if (button) button.addEventListener("click", openFrom(kind, fromMenu));
+      });
+    const closeButton = $("btn-info-close");
+    if (closeButton) closeButton.addEventListener("click", closeInfo);
+    const backdrop = $("info-backdrop");
+    if (backdrop) backdrop.addEventListener("click", closeInfo);
+    document.addEventListener("keydown", (event) => {
+      if (event && event.key === "Escape" && infoOpen()) closeInfo();   // Esc 也能关
+    });
+
+    // 验证码：点图换一张（这是"看不清"的唯一出路，必须有）
+    Object.keys(CAPTCHA_SLOTS).forEach((which) => {
+      const slot = CAPTCHA_SLOTS[which];
+      const image = $(slot.img);
+      const button = $(slot.button);
+      // 用户主动换图：先把上一条红字收走，再取新图（新图是"重新开始"，不该带着旧提示）
+      const reload = () => {
+        setFieldError(slot.input, slot.msg, "");
+        loadCaptcha(which);
+      };
+      if (image) image.addEventListener("click", reload);
+      if (button) button.addEventListener("click", reload);
     });
 
     // 输入时清掉上一次的红字（红字不跟着人走）
-    ["login-name", "login-pwd"].forEach((id) => {
+    ["login-name", "login-pwd", "reg-display", "reg-pwd2",
+     "login-captcha", "reg-captcha"].forEach((id) => {
       const input = $(id);
       if (input) input.addEventListener("input", () => {
         setFieldError(id, `${id}-msg`, "");
       });
+    });
+
+    // 注册表单专门的几条：账号失焦去查重、密码框边打边给强度提示
+    const regName = $("reg-name");
+    if (regName) {
+      regName.addEventListener("input", () => {
+        state.lastCheckedName = "";           // 名字改过了：上一次的查重结论作废
+        setFieldError("reg-name", "reg-name-msg", "");
+      });
+      // 失焦就问一次"这个账号有没有被注册"：不用等提交才知道重名
+      regName.addEventListener("blur", checkNameAvailable);
+    }
+    const regPwd = $("reg-pwd");
+    if (regPwd) {
+      regPwd.addEventListener("input", () => {
+        renderStrength();
+        setFieldError("reg-pwd", "reg-pwd-msg", "");
+        // 密码变过之后，确认框里那句"两次不一样"要重新判定
+        const again = $("reg-pwd2");
+        if (again && again.value) {
+          setFieldError("reg-pwd2", "reg-pwd2-msg",
+            again.value === regPwd.value ? "" : "两次填的密码不一样，再对一遍。");
+        }
+      });
+    }
+    const regPwd2 = $("reg-pwd2");
+    if (regPwd2) regPwd2.addEventListener("input", () => {
+      const first = $("reg-pwd");
+      setFieldError("reg-pwd2", "reg-pwd2-msg",
+        (first && first.value === regPwd2.value) ? "" : "两次填的密码不一样，再对一遍。");
     });
   }
 
@@ -523,6 +1026,9 @@ window.Session = (() => {
       if (rememberBox) rememberBox.checked = true;
     }
     loadFacts();
+    loadAccountHint();                          // 一个账号都没有 → 亮出"先注册一个"
+    loadCaptcha("account");                     // 两张验证码图各取一张（登录 / 注册）
+    loadCaptcha("register");
     setInterval(tick, 1000);
   }
 
@@ -542,6 +1048,7 @@ window.Session = (() => {
     },
     trackRequest,
     name: () => (state.who ? state.who.name : ""),
+    displayName: () => (state.who ? (state.who.displayName || state.who.name) : ""),
     // 排查与验收用（不参与界面渲染）
     status: () => state.status,
     loggedIn: () => !!state.who,

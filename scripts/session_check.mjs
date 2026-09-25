@@ -40,7 +40,7 @@ function step(title) {
 // ════════════════════════════════════════════════════════════════════════
 function makeElement(id) {
   const classes = new Set();
-  return {
+  const node = {
     id,
     hidden: false,
     textContent: "",
@@ -62,22 +62,45 @@ function makeElement(id) {
       },
       has: (name) => classes.has(name),
     },
+    handlers: {},
+    children: [],
+    appendChild(child) { this.children.push(child); return child; },
     setAttribute(key, value) { this[key] = value; },
     getAttribute(key) { return this[key]; },
     addEventListener(type, fn) { (this.handlers[type] = this.handlers[type] || []).push(fn); },
   };
+  // innerHTML 的 setter：真 DOM 里 `innerHTML = ""` 会清空子节点，这里也要一样 ——
+  // 否则"每次打开帮助都重渲染一遍清单"会越堆越多，检查出来的条数是假的。
+  let markup = "";
+  Object.defineProperty(node, "innerHTML", {
+    get: () => markup,
+    set: (value) => {
+      markup = value;
+      if (value === "") node.children.length = 0;
+    },
+  });
+  return node;
 }
 
 // 页面里真实存在的 id 一律从 index.html 里读出来（不另抄一份清单，抄了就会和页面走散）
 const html = fs.readFileSync(path.join(WEB, "index.html"), "utf8");
 const htmlIds = [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]);
 const elements = new Map();
-for (const id of htmlIds) elements.set(id, makeElement(id));
+for (const id of htmlIds) {
+  const node = makeElement(id);
+  // 起手把 hidden 属性读进来：不然假 DOM 里"默认全是展开的"，
+  // 会漏掉"这东西本来就该是收起的"这类问题（抽屉就吃过这个亏）
+  const at = html.indexOf(`id="${id}"`);
+  const tag = html.slice(html.lastIndexOf("<", at), html.indexOf(">", at));
+  if (/\shidden(\s|>|$)/.test(tag)) node.hidden = true;
+  elements.set(id, node);
+}
 
 const documentHandlers = {};
 const documentStub = {
   readyState: "complete",
   body: makeElement("body"),
+  createElement: (tag) => makeElement(`created-${tag}`),
   getElementById: (id) => elements.get(id) || null,
   addEventListener(type, fn) {
     (documentHandlers[type] = documentHandlers[type] || []).push(fn);
@@ -156,9 +179,81 @@ const capsPayload = {
   data_profile: {
     rows: 541909, customer_count: 4372, country_count: 38,
     first_day: "2010-12-01", last_day: "2011-12-09",
+    currency: { code: "CNY", symbol: "¥", name: "元" },
+  },
+  unsupported: { dimensions: ["区域/大区/片区", "省份/城市", "门店/渠道"], reason: "没有这些字段" },
+  report: { export_formats: [{ format: "docx", label: "Word" }, { format: "xlsx", label: "Excel" }] },
+};
+// 后端账号端点的**形状**照抄真实响应（就是那几个字段）。这里不测"密码对不对"——
+// 那是后端的事（由 tests/test_auth.py 拿真服务验）；这里测的是"前端拿到响应之后怎么走"：
+// 注册成功要直接进来、401 要就地提示并清空密码框、409 要把话说在账号框下面。
+const accountsStub = { "唐宇": "123456", "tangyu": "s3cret-1" };
+const registeredLog = [];
+// 验证码：跟真后端一个脾气 —— 一次性的、会过期、错了有话说。
+// 这里**固定**一个答案（真后端是随机图），因为这份检查验的是"前端拿到各种响应之后怎么走"。
+const CAPTCHA_CODE = "AB23";
+let captchaSeq = 0;
+const liveCaptchas = new Set();      // 还活着的那些编号（登录一张、注册一张，各是各的）
+const captchaIssued = [];
+const apiError = (status, code, message) => {
+  const err = new Error(message);
+  err.status = status;
+  err.code = code;
+  return err;
+};
+const checkCaptchaStub = ({ captcha_id, captcha_text }) => {
+  if (!captcha_id || !String(captcha_text || "").trim()) {
+    return apiError(400, "captcha_missing", "请先填写验证码。");
+  }
+  if (!liveCaptchas.has(captcha_id)) {
+    return apiError(400, "captcha_expired", "验证码已过期，请点一下刷新。");
+  }
+  if (String(captcha_text).trim().toUpperCase() !== CAPTCHA_CODE) {
+    return apiError(400, "captcha_wrong", "验证码不对，请重新输入。");
+  }
+  liveCaptchas.delete(captcha_id);          // 用一次即作废（与真后端一致：防重放）
+  return null;
+};
+const APIStub = {
+  chatCapabilities: () => Promise.resolve(capsPayload),
+  health: () => Promise.resolve({ data_snapshot: { path: "data/Online Retail.xlsx", match: true } }),
+  captcha: () => {
+    captchaSeq += 1;
+    const id = `cap-${captchaSeq}`;
+    liveCaptchas.add(id);
+    captchaIssued.push(id);
+    return Promise.resolve({
+      captcha_id: id,
+      image_svg: '<svg xmlns="http://www.w3.org/2000/svg"><text>AB23</text></svg>',
+      expires_in: 120,
+    });
+  },
+  accountExists: (username) => Promise.resolve({
+    exists: Object.keys(accountsStub).some((n) => n.toLowerCase() === String(username || "").toLowerCase()),
+    account_count: Object.keys(accountsStub).length,
+  }),
+  authLogin: ({ username, password, captcha_id, captcha_text }) => {
+    const captchaProblem = checkCaptchaStub({ captcha_id, captcha_text });
+    if (captchaProblem) return Promise.reject(captchaProblem);
+    const hit = Object.keys(accountsStub).find((n) => n.toLowerCase() === String(username).toLowerCase());
+    if (!hit || accountsStub[hit] !== password) {
+      return Promise.reject(apiError(401, "bad_credentials", "账号或密码不对。"));
+    }
+    return Promise.resolve({ account: { username: hit, display_name: hit, created_at: "", last_login_at: null } });
+  },
+  authRegister: ({ username, password, display_name, captcha_id, captcha_text }) => {
+    const captchaProblem = checkCaptchaStub({ captcha_id, captcha_text });
+    if (captchaProblem) return Promise.reject(captchaProblem);
+    if (Object.keys(accountsStub).some((n) => n.toLowerCase() === String(username).toLowerCase())) {
+      return Promise.reject(apiError(409, "username_taken", "这个账号已被注册，换一个吧。"));
+    }
+    accountsStub[username] = password;
+    registeredLog.push(username);
+    return Promise.resolve({
+      account: { username, display_name: display_name || username, created_at: "", last_login_at: null },
+    });
   },
 };
-const APIStub = { chatCapabilities: () => Promise.resolve(capsPayload) };
 
 const context = vm.createContext({
   window: {},
@@ -181,6 +276,10 @@ const Session = context.window.Session;
 const el = (id) => elements.get(id);
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));   // 让已排队的 promise 跑完
 const loginCallbackLog = [];
+// "照着图把字填进去"：真人是看图抄，这里是照 stub 里那张图的答案填
+const fillCaptcha = (which) => {
+  el(which === "account" ? "login-captcha" : "reg-captcha").value = CAPTCHA_CODE;
+};
 
 console.log("session_check · 用真源码跑 session.js 的登录与状态机\n");
 console.log(`index.html 里的 id 共 ${htmlIds.length} 个；session.js 引用的 id 必须都在里面。`);
@@ -204,7 +303,7 @@ check(el("user-name").textContent === "未登录", "顶栏名字：未登录");
 check(loginCallbackLog.length === 0, "主界面初始化被挂住（登录前不读后端数据）");
 
 // ════════════════════════════════════════════════════════════════════════
-step("B-01 表单是「账号」形态（不是填姓名），未开通的入口点了有话说");
+step("B-01 表单是「账号」形态（不是填姓名）；注册是真栏目，未开通的入口点了有话说");
 // ════════════════════════════════════════════════════════════════════════
 check(html.includes(">账号<") && html.includes('placeholder="手机号 / 邮箱 / 用户名"'),
   "字段是「账号」+ 手机号 / 邮箱 / 用户名 的提示语");
@@ -213,9 +312,15 @@ check(html.includes("登 录") && html.includes("进入系统") === false, "主�
 check(html.includes("忘记密码") && html.includes("注册账号"), "忘记了密码 / 注册账号两个入口都在");
 check(html.includes("姓名") === false && source.includes("姓名") === false, "页面上不再有「姓名」这个说法");
 check(html.includes("不留身份") && source.includes("不留身份"), "游客那栏说清「不留身份」");
+check(html.includes(">账号登录<") && html.includes(">注册<") && html.includes(">游客登录<"),
+  "三个入口并列：账号登录 / 注册 / 游客登录");
 fire(el("link-register"), "click");
-check(el("toast").hidden === false && el("toast").textContent.includes("尚未开通"),
-  "点「注册账号」给一句人话（不是点不动的死按钮）", `「${el("toast").textContent}」`);
+check(el("register-form").hidden === false && el("login-form").hidden === true,
+  "点底部「注册账号」切到注册栏（不再是要不来的提示）");
+check(el("ltab-register").classList.has("is-on") && el("ltab-account").classList.has("is-on") === false,
+  "「注册」标签点亮，「账号登录」熄灭");
+fire(el("ltab-account"), "click");        // 切回来，后面的登录流程照旧
+check(el("login-form").hidden === false && el("register-form").hidden === true, "点「账号登录」切回登录栏");
 
 // ════════════════════════════════════════════════════════════════════════
 step("B-01 密码框的眼睛图标：睁眼 ↔ 闭眼两态，标签跟着状态走");
@@ -243,10 +348,82 @@ check(el("login-pwd").type === "password" && eyeBtn().classList.has("is-shown") 
   "再点一下：回到掩码 + 睁眼（图标跟着状态走，不是固定一个眼睛）");
 
 // ════════════════════════════════════════════════════════════════════════
+step("验证码：图真的取到了、点一下能换、填错有人话、没填也拦得住");
+// ════════════════════════════════════════════════════════════════════════
+await flush();                             // 等 boot 里那两次"取图"落地（它们是异步的）
+const captchaImgSrc = () => el("login-captcha-img").src || "";
+check(captchaImgSrc().startsWith("data:image/svg+xml"),
+  "登录页的验证码是**一张图**（当图片显示，不是页面上的文字）", captchaImgSrc().slice(0, 32));
+check(el("reg-captcha-img").src.startsWith("data:image/svg+xml"), "注册页同样有一张图");
+check(el("login-captcha").getAttribute("maxlength") === undefined
+  || html.includes('id="login-captcha" type="text" maxlength="4"'), "验证码输入框限 4 位");
+check(html.includes('alt="验证码图片，点一下换一张"'), "验证码图有 alt（读屏能念）");
+
+// 点图换一张：编号要换成新的，输入框里旧的字符要清掉
+const beforeReload = captchaIssued.length;
+el("login-captcha").value = "AB23";
+fire(el("login-captcha-img"), "click");
+await flush();
+check(captchaIssued.length === beforeReload + 1, "点图换了一张（又取了一张新图）",
+  `${beforeReload} → ${captchaIssued.length}`);
+check(el("login-captcha").value === "", "换图后输入框清空（旧的那 4 个字符已经作废）");
+check(el("login-captcha-msg").hidden === true, "换图顺手把上一条红字收走");
+
+// 填错 → 就地人话 + **自动换一张**
+el("login-name").value = "唐宇";
+el("login-pwd").value = "123456";
+el("login-captcha").value = "ZZZZ";
+const wrongCaptchaIssued = captchaIssued.length;
+fire(el("login-form"), "submit");
+await flush();
+check(el("login-captcha-msg").hidden === false
+  && el("login-captcha-msg").textContent.includes("验证码不对"),
+  "验证码填错：就地人话", `「${el("login-captcha-msg").textContent}」`);
+check(captchaIssued.length === wrongCaptchaIssued + 1, "填错之后**自动换一张**（不让人对着作废的图重试）");
+check(el("login-gate").hidden === false && Session.loggedIn() === false, "验证码不对不放行");
+
+// 没填 → 就地拦下，**一个请求都不发**
+el("login-captcha").value = "";
+const missingIssued = captchaIssued.length;
+fire(el("login-form"), "submit");
+await flush();
+check(el("login-captcha-msg").hidden === false
+  && el("login-captcha-msg").textContent.includes("4 个字符"),
+  "没填验证码：就地人话", `「${el("login-captcha-msg").textContent}」`);
+check(captchaIssued.length === missingIssued, "没填就不发请求（省一次往返）");
+check(el("login-gate").hidden === false, "没填验证码不放行");
+
+// 过期（图放了太久 / 后端那边已经把它作废了）→ 提示"已帮你换一张"，并且真的换一张
+liveCaptchas.clear();                      // 模拟"这一张在服务端已经失效"
+el("login-captcha").value = CAPTCHA_CODE;  // 用户照着旧图填的字，其实已经没用了
+const expiredIssued = captchaIssued.length;
+fire(el("login-form"), "submit");
+await flush();
+check(el("login-captcha-msg").hidden === false
+  && el("login-captcha-msg").textContent.includes("已过期"),
+  "验证码过期：提示「已过期，已帮你换一张」", `「${el("login-captcha-msg").textContent}」`);
+check(captchaIssued.length === expiredIssued + 1, "过期之后确实换了一张新图");
+
+// 连续失败进了冷却 → 照后端说的"等多久"显示，而不是含糊一句"失败了"
+const realAuthLogin = APIStub.authLogin;
+APIStub.authLogin = () => Promise.reject(
+  apiError(429, "too_many_attempts", "尝试次数过多，请 60 秒后再试。"));
+fillCaptcha("account");
+fire(el("login-form"), "submit");
+await flush();
+check(el("login-captcha-msg").hidden === false
+  && el("login-captcha-msg").textContent.includes("尝试次数过多")
+  && el("login-captcha-msg").textContent.includes("60 秒"),
+  "冷却中：把人话原样显示出来（含还要等多久）", `「${el("login-captcha-msg").textContent}」`);
+check(el("login-gate").hidden === false && Session.loggedIn() === false, "冷却中不放行");
+APIStub.authLogin = realAuthLogin;
+
+// ════════════════════════════════════════════════════════════════════════
 step("B-05 只做形态校验：账号太短 / 太长 / 密码太短 → 标红 + 就地提示");
 // ════════════════════════════════════════════════════════════════════════
 el("login-name").value = "唐";
 el("login-pwd").value = "123";
+fillCaptcha("account");                    // 先把验证码填上：这一段测的是账号/密码的形态，不是验证码
 fire(el("login-form"), "submit");
 await flush();
 check(el("login-name-msg").hidden === false && el("login-name-msg").textContent.length > 0,
@@ -264,10 +441,27 @@ check(el("login-name-msg").hidden === false && el("login-name").classList.has("i
   "账号 41 个字符：拦下并提示", `「${el("login-name-msg").textContent}」`);
 
 // ════════════════════════════════════════════════════════════════════════
+step("B-02 密码不对：就地人话 + 清空密码框（账号留着），不放行");
+// ════════════════════════════════════════════════════════════════════════
+el("login-name").value = "唐宇";
+el("login-pwd").value = "wrong-password";
+fillCaptcha("account");                    // 上一次失败后图已经换过一张，这里重新照新图填
+fire(el("login-form"), "submit");
+await flush();
+check(el("login-pwd-msg").hidden === false && el("login-pwd-msg").textContent.includes("账号或密码不对"),
+  "登录失败：就地人话「账号或密码不对」", `「${el("login-pwd-msg").textContent}」`);
+check(el("login-pwd").value === "" && el("login-name").value === "唐宇",
+  "失败后：密码框清空、账号保留（重试只要再敲一次密码）",
+  `pwd=「${el("login-pwd").value}」 name=「${el("login-name").value}」`);
+check(el("login-gate").hidden === false && Session.loggedIn() === false, "登录失败不放行（还在登录页）");
+check(el("login-pwd").classList.has("is-bad"), "密码框标红（红字落点就在那个框下面）");
+
+// ════════════════════════════════════════════════════════════════════════
 step("B-02 账号登录：填「唐宇」进主界面，顶栏显示名字");
 // ════════════════════════════════════════════════════════════════════════
 el("login-name").value = "唐宇";
 el("login-pwd").value = "123456";
+fillCaptcha("account");                    // 失败那条路把上一张交出去了，这里用新的一张
 el("login-remember").checked = true;
 const submitEvent = fire(el("login-form"), "submit");
 check(submitEvent.defaultPrevented, "提交被拦截（不会真的跳转走）");
@@ -388,6 +582,141 @@ step("登录页的数字：来自当前数据源（读不到就不摆一排「�
 check(el("fact-rows").textContent === "541,909", "交易行数按后端给的渲染", `「${el("fact-rows").textContent}」`);
 check(el("fact-customers").textContent === "4,372", "客户编号数", `「${el("fact-customers").textContent}」`);
 check(el("login-facts-note").textContent.includes("2010-12-01"), "数据范围也写出来");
+
+// ════════════════════════════════════════════════════════════════════════
+step("注册：真表单 → 查重 → 成功即进来（中文显示名 → 中文首字头像）");
+// ════════════════════════════════════════════════════════════════════════
+fire(el("um-logout"), "click");
+check(el("login-gate").hidden === false, "先退出，回到登录页");
+for (const id of ["reg-name", "reg-display", "reg-pwd", "reg-pwd2", "btn-register", "reg-strength"]) {
+  check(html.includes(`id="${id}"`), `注册表单里有 ${id}`);
+}
+check(html.includes('<form class="login-form" id="register-form"')
+  && html.includes('id="btn-register" type="submit"'),
+  "注册是 <form> + type=submit 按钮 —— 光标在输入框里按回车就是提交（浏览器隐式提交走同一条路）");
+check(html.includes('<form class="login-form" id="login-form"')
+  && html.includes('id="btn-login" type="submit"'), "登录同样是 <form> + type=submit（回车能提交）");
+fire(el("ltab-register"), "click");
+check(el("register-form").hidden === false && el("login-form").hidden === true, "切到注册栏");
+
+// ① 两次密码不一致 → 就地人话，且**一个请求都不发**
+el("reg-name").value = "唐小宇";
+el("reg-display").value = "唐小宇（销售）";
+el("reg-pwd").value = "abc12345";
+el("reg-pwd2").value = "abc12346";
+const beforeRegister = registeredLog.length;
+fire(el("register-form"), "submit");
+await flush();
+check(el("reg-pwd2-msg").hidden === false && el("reg-pwd2-msg").textContent.includes("不一样"),
+  "两次不一致：就地人话", `「${el("reg-pwd2-msg").textContent}」`);
+check(registeredLog.length === beforeRegister && el("login-gate").hidden === false,
+  "不一致就不发注册请求、不放行");
+
+// ② 密码强度提示（弱/中/强，纯前端提醒，不拦人）
+fire(el("reg-pwd"), "input");
+check(el("reg-strength").hidden === false && el("reg-strength-text").textContent.includes("强度"),
+  "边打边给强度提示", `「${el("reg-strength-text").textContent}」`);
+check(el("reg-strength").className.includes("lv-"), "强度条按等级换长度");
+
+// ③ 改一致 → 注册成功 → **直接进来**
+el("reg-pwd2").value = "abc12345";
+fire(el("reg-pwd2"), "input");
+fillCaptcha("register");                   // 注册也要验证码（与登录一致）
+check(el("reg-pwd2-msg").hidden === true, "改一致后那条红字自己消失");
+fire(el("register-form"), "submit");
+await flush();
+check(el("login-gate").hidden === true && Session.loggedIn() === true, "注册成功直接进系统（不用再登一次）");
+check(el("user-name").textContent === "唐小宇（销售）", "顶栏显示的是**显示名**",
+  `「${el("user-name").textContent}」`);
+check(el("avatar").textContent === "唐", "中文显示名 → 中文首字做头像", `「${el("avatar").textContent}」`);
+check(Session.name() === "唐小宇" && Session.displayName() === "唐小宇（销售）", "账号名与显示名分开记");
+check(el("toast").textContent.includes("已经建好"), "注册成功后给一句人话", `「${el("toast").textContent}」`);
+const storedReg = JSON.parse(store.get("sra.who"));
+check(storedReg.display_name === "唐小宇（销售）" && ("password" in storedReg) === false,
+  "本机记录里有显示名、没有密码");
+
+// ④ 账号失焦查重：两种提示都要对
+fire(el("um-logout"), "click");
+fire(el("ltab-register"), "click");
+el("reg-name").value = "唐宇";                        // 这个名字在（stub 里）已经被占
+fire(el("reg-name"), "blur");
+await flush();
+check(el("reg-name-msg").hidden === false && el("reg-name-msg").textContent.includes("已被注册"),
+  "失焦查重：已被注册", `「${el("reg-name-msg").textContent}」`);
+check(el("reg-name-msg").classList.has("is-ok") === false && el("reg-name").classList.has("is-bad"),
+  "是红字，不是绿字");
+el("reg-name").value = "谁都没用过";
+fire(el("reg-name"), "input");                        // 改过名字：上一次的结论作废
+fire(el("reg-name"), "blur");
+await flush();
+check(el("reg-name-msg").textContent.includes("可用") && el("reg-name-msg").classList.has("is-ok"),
+  "失焦查重：没人用过 → 绿色「✓ 可用」", `「${el("reg-name-msg").textContent}」`);
+
+// ⑤ 重复注册（409）：没建出第二条同名记录
+el("reg-name").value = "唐宇";
+el("reg-pwd").value = "abc12345";
+el("reg-pwd2").value = "abc12345";
+fillCaptcha("register");
+const namesBefore = Object.keys(accountsStub).filter((n) => n === "唐宇").length;
+fire(el("register-form"), "submit");
+await flush();
+check(el("reg-name-msg").textContent.includes("已被注册"), "重复账号被拦下，话说在账号框下面",
+  `「${el("reg-name-msg").textContent}」`);
+check(Object.keys(accountsStub).filter((n) => n === "唐宇").length === namesBefore,
+  "没有建出第二条同名记录");
+check(el("login-gate").hidden === false && Session.loggedIn() === false, "重复注册不放行");
+
+// ⑥ 首次使用引导：一个账号都没有时才亮（这里把账号数临时改成 0 验一次）
+const realExists = APIStub.accountExists;
+APIStub.accountExists = () => Promise.resolve({ exists: false, account_count: 0 });
+Session._boot();
+await flush();
+check(el("login-firstrun").hidden === false, "账号数为 0 → 亮出「先注册一个」引导");
+fire(el("login-firstrun"), "click");
+check(el("register-form").hidden === false, "点引导 → 直接切到注册栏");
+APIStub.accountExists = realExists;
+
+// ════════════════════════════════════════════════════════════════════════
+step("帮助 / 隐私：同一只抽屉，内容是真内容（数字还是从后端读的）");
+// ════════════════════════════════════════════════════════════════════════
+check(el("info-drawer").hidden === true, "抽屉默认是收起的");
+fire(el("link-help"), "click");
+await flush();
+check(el("info-drawer").hidden === false && el("info-pane-help").hidden === false,
+  "点「帮助」→ 打开抽屉并显示帮助那一栏");
+check(el("info-pane-privacy").hidden === true, "另一栏没有同时冒出来");
+check(el("info-title").textContent === "帮助", "标题跟着换", `「${el("info-title").textContent}」`);
+check(el("toast").textContent.includes("尚未开通") === false, "不再是「尚未开通」那条提示");
+for (const label of ["销售汇总", "销售趋势", "产品排行", "两区间比较", "国家分布", "客户分析", "商品分析"]) {
+  check(html.includes(`<b>${label}</b>`), `帮助里「${label}」这一类在页面上`);
+}
+check(el("help-rows").textContent === "541,909", "帮助里的行数是**从后端读的**",
+  `「${el("help-rows").textContent}」`);
+check(el("help-source").textContent.includes("Online Retail.xlsx"), "数据源名也是读出来的",
+  `「${el("help-source").textContent}」`);
+check(el("help-range").textContent.includes("2010-12-01"), "覆盖范围是读出来的",
+  `「${el("help-range").textContent}」`);
+check(el("help-currency").textContent.includes("元"), "币种是读出来的",
+  `「${el("help-currency").textContent}」`);
+check(el("help-last-day").textContent === "2011-12-09", "最后一天也是读出来的");
+check(el("help-unsupported").children.length === 3, "「数据里没有什么」照后端清单渲染（不手抄）",
+  `${el("help-unsupported").children.length} 条`);
+check(el("help-report-formats").textContent.includes("Word"), "报告导出格式也是读出来的",
+  `「${el("help-report-formats").textContent}」`);
+
+fire(el("link-privacy"), "click");
+check(el("info-pane-privacy").hidden === false && el("info-pane-help").hidden === true,
+  "点「隐私」→ 换成隐私那一栏");
+check(el("info-title").textContent === "隐私说明", "标题跟着换", `「${el("info-title").textContent}」`);
+
+fire(el("btn-info-close"), "click");
+check(el("info-drawer").hidden === true, "点关闭 → 抽屉收起");
+fire(el("link-privacy"), "click");
+fire(el("info-backdrop"), "click");
+check(el("info-drawer").hidden === true, "点背后那层 → 收起");
+fire(el("link-help"), "click");
+fire(documentStub.body, "keydown", { key: "Escape" });
+check(el("info-drawer").hidden === true, "按 Esc → 收起（三条关闭路都通）");
 
 // ════════════════════════════════════════════════════════════════════════
 step("B-11 本机记录里没有密码；界面文案里没有技术字样");

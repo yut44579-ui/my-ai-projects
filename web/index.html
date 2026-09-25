@@ -15,9 +15,14 @@
 
 <!-- ═══ 登录页 ═══════════════════════════════════════════════════════
      打开页面先看到它；登录成功后收起来，刷新靠本机记录保持登录态，
-     退出登录再回来。左边是这套系统能干什么，右边是两个入口：账号登录 / 游客登录。
-     表单按常见账号登录的样子排：账号（手机号 / 邮箱 / 用户名）+ 密码 + 记住账号 +
-     忘记密码 / 注册账号。**这只是形态**：不做哈希、不做比对、不发令牌。
+     退出登录再回来。左边是这套系统能干什么，右边是三个入口：
+     账号登录 / 注册 / 游客登录。
+
+     账号是真的：注册会把账号写进这台机器的账号表，密码由后端存成不可还原的校验值，
+     登录时由后端核对 —— 密码原文不落盘、不比对、不进页面。这是**单机自用**级别：
+     没有角色权限、没有多用户数据隔离、不发令牌（那些留待后续）。
+     游客仍然是"本机随机取个名字"，不进账号表，退出后名字会变。
+
      页面上的数字（交易行数 / 客户编号数 / 国家地区数）都从当前数据源读出来，
      不写死在页面里 —— 换数据源它们会跟着变。 -->
 <div class="login-gate" id="login-gate" hidden>
@@ -58,8 +63,15 @@
 
       <div class="login-tabs">
         <button class="login-tab is-on" id="ltab-account" type="button">账号登录</button>
+        <button class="login-tab" id="ltab-register" type="button">注册</button>
         <button class="login-tab" id="ltab-guest" type="button">游客登录</button>
       </div>
+
+      <!-- 首次使用引导：这台机器上一个账号都没有时出现（由 session.js 按后端回的账号数决定）。
+           点一下直接切到注册那一栏 —— 比"进去发现登不上再猜"少一步。 -->
+      <button class="login-firstrun" id="login-firstrun" type="button" hidden>
+        这台机器上还没有账号 —— <b>点这里先注册一个</b>；也可以直接用游客身份进来看看。
+      </button>
 
       <form class="login-form" id="login-form" novalidate>
         <div class="field">
@@ -94,6 +106,20 @@
           </div>
           <p class="field-msg" id="login-pwd-msg" hidden></p>
         </div>
+        <div class="field">
+          <label class="field-label" for="login-captcha">验证码</label>
+          <div class="captcha-row">
+            <input id="login-captcha" type="text" maxlength="4" autocomplete="off"
+                   spellcheck="false" placeholder="填图上的 4 个字符">
+            <!-- 图就是按钮：看不清点一下换一张（必须给这个出路，否则用户卡死）。
+                 图本身由本机现画现发，不缓存、不落地。 -->
+            <button class="captcha-btn" id="login-captcha-btn" type="button"
+                    title="看不清？点一下换一张" aria-label="验证码图片，点一下换一张">
+              <img id="login-captcha-img" alt="验证码图片，点一下换一张">
+            </button>
+          </div>
+          <p class="field-msg" id="login-captcha-msg" hidden></p>
+        </div>
         <div class="login-row">
           <label class="check"><input type="checkbox" id="login-remember"> 记住账号</label>
           <button class="link-btn" id="link-forgot" type="button">忘记密码？</button>
@@ -102,6 +128,55 @@
           <span class="spinner" id="login-spinner" hidden></span>
           <span>登 录</span>
         </button>
+      </form>
+
+      <!-- 注册表单：账号 / 显示名（可不填）/ 密码 / 再填一次密码 → 注册成功**直接用新账号进来**，
+           不用再登一次。账号框失焦会去问一次"这个名字有没有被注册"，就地给「✓ 可用」或「已被注册」。
+           密码强度提示只是提醒（弱/中/强，不拦人）；两次不一致就地人话提示。 -->
+      <form class="login-form" id="register-form" novalidate hidden>
+        <div class="field">
+          <label class="field-label" for="reg-name">账号</label>
+          <input id="reg-name" type="text" maxlength="40" autocomplete="username"
+                 placeholder="2~40 个字符，中文 / 字母 / 数字">
+          <p class="field-msg" id="reg-name-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-display">显示名（可以不填）</label>
+          <input id="reg-display" type="text" maxlength="40" autocomplete="nickname"
+                 placeholder="留空就用账号名">
+          <p class="field-msg" id="reg-display-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-pwd">密码</label>
+          <input id="reg-pwd" type="password" autocomplete="new-password" placeholder="至少 6 位">
+          <p class="field-msg" id="reg-pwd-msg" hidden></p>
+          <p class="pwd-strength" id="reg-strength" hidden>
+            <span class="pwd-strength-bar"><i id="reg-strength-fill"></i></span>
+            <span class="pwd-strength-text" id="reg-strength-text"></span>
+          </p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-pwd2">再填一次密码</label>
+          <input id="reg-pwd2" type="password" autocomplete="new-password" placeholder="两次填的要一样">
+          <p class="field-msg" id="reg-pwd2-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-captcha">验证码</label>
+          <div class="captcha-row">
+            <input id="reg-captcha" type="text" maxlength="4" autocomplete="off"
+                   spellcheck="false" placeholder="填图上的 4 个字符">
+            <button class="captcha-btn" id="reg-captcha-btn" type="button"
+                    title="看不清？点一下换一张" aria-label="验证码图片，点一下换一张">
+              <img id="reg-captcha-img" alt="验证码图片，点一下换一张">
+            </button>
+          </div>
+          <p class="field-msg" id="reg-captcha-msg" hidden></p>
+        </div>
+        <button class="btn btn-primary login-submit" id="btn-register" type="submit">
+          <span class="spinner" id="register-spinner" hidden></span>
+          <span>注册并进入</span>
+        </button>
+        <p class="login-hint">注册完直接用这个账号进来，不用再登一次。密码只保存在这台机器上。</p>
       </form>
 
       <div class="login-form" id="guest-pane" hidden>
@@ -114,9 +189,9 @@
         <p class="login-hint">游客不留身份：这个名字是本机随机取的，只用于展示与记录；退出后再进来会换一个新的，也查不到上次的痕迹。</p>
       </div>
 
-      <p class="login-note">
-        本地模式：账号只用于展示与记录，密码只检查长短，本机不保存、不比对。
-      </p>
+      <!-- 登录页**不写**解释实现细节的长句（用户要的是 QQ 那种：几行填完就登）。
+           需要解释的事（密码怎么存、忘记密码怎么办、注册为什么要等管理员批）都收进「帮助」抽屉，
+           点一下就能看；登录页只留一行到哪去找。 -->
       <div class="login-foot">
         <button class="link-btn" id="link-register" type="button">注册账号</button>
         <span class="login-foot-sep">·</span>
@@ -130,6 +205,143 @@
 </div>
 
 <div class="toast" id="toast" hidden></div>
+
+<!-- ═══ 帮助 / 隐私 抽屉 ═══════════════════════════════════════════════
+     登录页底部的「帮助」「隐私」点开就是这个抽屉（右侧滑出，不跳页、不弹窗居中）。
+     为什么放在这里（而不是 .app 里）：登录时主界面整块不渲染，抽屉必须能独立盖在
+     登录页之上；所以它是 body 的直接子元素，层级高于登录页。
+     **里面的每个数字都是从后端读出来的**（数据源名 / 覆盖范围 / 行数 / 客户数 / 国家数 /
+     币种 / 能问什么 / 不能问什么 / 报告能导出成什么格式）—— 换数据源这些字会跟着变，
+     不写死在页面里。文字一律业务话，不出现接口路径、字段名这类词。 -->
+<div class="info-drawer" id="info-drawer" hidden>
+  <div class="info-backdrop" id="info-backdrop"></div>
+  <aside class="info-panel" role="dialog" aria-modal="true"
+         aria-labelledby="info-title">
+    <header class="info-head">
+      <h2 class="info-title" id="info-title">帮助</h2>
+      <button class="icon-btn" id="btn-info-close" type="button" title="关闭" aria-label="关闭">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true" focusable="false">
+          <path d="M6 6l12 12M18 6L6 18"/>
+        </svg>
+      </button>
+    </header>
+
+    <div class="info-body">
+      <!-- ── 帮助 ─────────────────────────────────────────────────── -->
+      <section class="info-pane" id="info-pane-help">
+        <h3 class="info-h">一、能问什么</h3>
+        <p class="info-p">用大白话问就行，这七类都接得住（点页面上的示例也能直接问）：</p>
+        <ul class="info-list">
+          <li><b>销售汇总</b> —— 2011年11月一共卖了多少？</li>
+          <li><b>销售趋势</b> —— 2011年11月的销售趋势，按日看</li>
+          <li><b>产品排行</b> —— 2011年11月卖得最好的5个产品</li>
+          <li><b>两区间比较</b> —— 2011年11月和2011年10月的销售额哪个高？</li>
+          <li><b>国家分布</b> —— 2011年11月销售额最高的10个国家</li>
+          <li><b>客户分析</b> —— 2011年11月销售额最高的10个客户</li>
+          <li><b>商品分析</b> —— 2011年11月各商品的退货情况，前10名</li>
+        </ul>
+        <p class="info-p">另外还可以直接说「<b>做一份销售周报</b>」——它会出一份结构化报告
+          （环比、逐日趋势、国家与商品结构），可以下载带走。</p>
+
+        <h3 class="info-h">二、数据从哪来</h3>
+        <dl class="info-kv">
+          <div><dt>当前数据源</dt><dd id="help-source">读取中…</dd></div>
+          <div><dt>覆盖范围</dt><dd id="help-range">—</dd></div>
+          <div><dt>交易行数</dt><dd id="help-rows">—</dd></div>
+          <div><dt>客户编号数</dt><dd id="help-customers">—</dd></div>
+          <div><dt>国家 / 地区数</dt><dd id="help-countries">—</dd></div>
+          <div><dt>金额单位</dt><dd id="help-currency">—</dd></div>
+        </dl>
+        <p class="info-p">这几个数字都是<b>现在</b>从数据里读出来的：换一个数据源，它们会跟着变。</p>
+
+        <h3 class="info-h">三、数据里没有什么</h3>
+        <p class="info-p">这份数据只有交易本身的信息，<b>没有</b>下面这些：</p>
+        <ul class="info-list" id="help-unsupported"></ul>
+        <p class="info-p">问到这里，系统会直接说"数据不支持"，<b>不会拿别的字段顶着用</b> ——
+          比如不会用「国家」当「区域」、不会用「卖得最多」当「最重要的客户」。</p>
+
+        <h3 class="info-h">四、数字是怎么算出来的</h3>
+        <ul class="info-list">
+          <li><b>同一套口径</b>：问答、报表、导出的表格用的是同一套规则，不存在"页面上一个数、导出里另一个数"。</li>
+          <li><b>日期含首尾</b>：问「11月1日到11月30日」，两天都算在里面（整天，不是到当天 0 点为止）。</li>
+          <li><b>剔除三类</b>：取消掉的订单、数量为负的、单价为负的，都不计入销售额。</li>
+          <li><b>客户维度只算有客户编号的成交</b>：有些单子没记客户号（散客、退货、补录），
+            这些不会算进"客户数"和客户排行 —— 每次客户分析的结果里都会写明这次的覆盖率。</li>
+          <li><b>金额单位是人民币「元」</b>：这是声明出来的单位，不是从数据里读到的（文件里没有货币列），数值不做换算。</li>
+        </ul>
+
+        <h3 class="info-h">五、常见问题</h3>
+        <dl class="info-faq">
+          <div>
+            <dt>为什么某天是空的、最后几天数据不全？</dt>
+            <dd>这份数据记到 <span id="help-last-day">—</span> 中午就断了（最后一天只记了半天），
+              所以最后一天的数看着偏小；某天没有成交记录，那天就是空的 ——
+              不会拿相邻日期的数顶上，也不会把空的画成一条线。</dd>
+          </div>
+          <div>
+            <dt>为什么客户数比订单数少？</dt>
+            <dd>客户维度只统计记了客户编号的成交。当前数据源里有一批单子没记客户号，
+              这些单子照样算销售额，但不会算进"客户数" —— 所以客户数小于实际发生过交易的次数，
+              也小于真正买过货的人数。</dd>
+          </div>
+          <div>
+            <dt>报表在哪导出？能导出成什么？</dt>
+            <dd>问完之后报告就出来了，旁边有下载入口，可以选 <span id="help-report-formats">—</span>；
+              数据表本身也能导出成表格文件带走。导出的数字与页面上看到的完全一致。</dd>
+          </div>
+          <div>
+            <dt>为什么换个数据源，数字就变了？</dt>
+            <dd>数字是<b>现算</b>的：每次提问都按当前数据源重新计算。换了数据源、或者导入了新的表，
+              口径不变但数据变了，结果自然会变 —— 页面上方一直写着当前用的是哪一份数据。</dd>
+          </div>
+        </dl>
+      </section>
+
+      <!-- ── 隐私 ─────────────────────────────────────────────────── -->
+      <section class="info-pane" id="info-pane-privacy" hidden>
+        <h3 class="info-h">一、你的数据存在哪</h3>
+        <p class="info-p">全部在这台电脑上，四类各放一处：</p>
+        <ul class="info-list">
+          <li><b>账号信息</b>：账号名、显示名、密码的加密摘要、建号时间与上次登录时间。</li>
+          <li><b>提问与回答记录</b>：你问过什么、系统算出了什么数、回了什么话（用于翻历史与核对数字）。</li>
+          <li><b>你上传的数据文件</b>：导入的表格原样留一份，供之后重复取数。</li>
+          <li><b>报表产出</b>：生成的报告与导出文件。</li>
+        </ul>
+        <p class="info-p">没有云端备份、没有第三方存储：这台电脑上的东西删了就是删了。</p>
+
+        <h3 class="info-h">二、密码怎么存</h3>
+        <p class="info-p">只保存<b>加密摘要</b>，不保存密码原文 —— 摘要不可还原，
+          就算有人把这台电脑上的账号文件整个拷走，也读不出你的密码。
+          登录时是拿你输入的密码重新算一遍再比对，而不是把原文取出来对。
+          这也是为什么<b>忘记密码找不回原文</b>：本机没有、也不该有原文。</p>
+
+        <h3 class="info-h">三、会不会把数据发到外面去</h3>
+        <p class="info-p"><b>会，但只发一小部分，这里如实说清楚：</b></p>
+        <ul class="info-list">
+          <li><b>会发出去</b>：你提的问题原话，以及<b>本机算好的结果</b>（几个数字与它们的说明），
+            发给模型服务用来"理解你在问什么"和"把结论写成一段人话"。</li>
+          <li><b>不会发出去</b>：你上传的数据文件本身 —— 明细行不会上传，
+            模型看到的是本机算完之后的几个结果，不是原始表格。</li>
+          <li><b>数字不由模型算</b>：所有金额、行数、排行都是本机程序按固定口径算出来的；
+            模型只负责组织语言，它编出来的数字会被核对挡掉。</li>
+          <li><b>不想外发时</b>：页面上会显示模型是否接通；没接通时系统照常算数，
+            只是不再生成那段人话解读。</li>
+        </ul>
+
+        <h3 class="info-h">四、怎么清掉</h3>
+        <ul class="info-list">
+          <li><b>退出登录</b>：清掉"这次是谁"的本机记录，回到登录页（账号本身还在，下次还能登）。</li>
+          <li><b>彻底清除</b>：删掉这台电脑上存数据的那个目录，账号、提问记录、上传的文件、
+            报表产出一次性全没了 —— 本机没有别的副本，删完不可恢复。</li>
+        </ul>
+        <p class="info-p">没有做的事也说明白：没有角色权限区分、没有多用户数据隔离、
+          没有云端同步 —— 这是单机自用模式，登录只用于"认出是你"，不用于限制你能看什么。</p>
+      </section>
+    </div>
+  </aside>
+</div>
 
 <div class="app">
 
@@ -168,6 +380,10 @@
         <button class="menu-item" id="menu-item-import">导入数据</button>
         <button class="menu-item" id="menu-item-report">生成销售报告</button>
         <button class="menu-item" id="menu-item-settings">系统设置</button>
+        <!-- 登录后也要能看帮助与隐私说明（登录页底部那两个入口进了主界面就点不到了）：
+             与登录页底部那两项打开的是**同一只抽屉**，内容一份，不另写一份。 -->
+        <button class="menu-item" id="menu-item-help">帮助</button>
+        <button class="menu-item" id="menu-item-privacy">隐私说明</button>
         <div class="menu-sep"></div>
         <button class="menu-item" id="menu-item-notify" title="通知：暂未提供">通知（暂未提供）</button>
       </div>

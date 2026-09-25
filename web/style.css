@@ -87,6 +87,7 @@
      文字色 = 原色 65% + 白 35%；底色 = 原色 9~12% 的白底叠加。 */
   --td-success-color-text: #5bb99b;
   --td-success-bg: rgba(5, 148, 101, .12);
+  --td-success-bg-hover: rgba(5, 148, 101, .2);       /* 绿色提示条悬停时加深一档 */
   --td-error-color-text: #da878e;
   --td-error-bg: rgba(198, 71, 81, .12);
   --td-warning-color-text: #e0a176;
@@ -136,6 +137,8 @@
 
   /* ── 登录页左栏的品牌底色（整屏铺满，不再用"遮罩 + 半透明卡片"）── */
   --brand-wash: rgba(69, 130, 230, .18);
+  /* ── 遮罩（抽屉/弹层背后压暗的那一层）── */
+  --mask: rgba(0, 0, 0, .45);
 }
 
 * { box-sizing: border-box; }
@@ -947,12 +950,109 @@ body.is-locked .app { display: none; }
   border-radius: var(--td-radius-medium);
 }
 .login-hint { font-size: 11px; color: var(--text-3); margin: 0; line-height: 1.7; }
+
+/* ════ 帮助 / 隐私 抽屉 ════════════════════════════════════════════════
+   从右边滑出，盖在登录页**之上**（它不在 .app 里，所以登录时也能看）。
+   为什么是抽屉不是居中弹窗：帮助与隐私都是"读一段、对照着看"的内容，
+   抽屉保留右侧一整条阅读宽度，也不打断正在填的表单。 */
+.info-drawer { position: fixed; inset: 0; z-index: 120; }
+.info-drawer[hidden] { display: none; }
+.info-backdrop {
+  position: absolute; inset: 0; background: var(--mask);
+}
+.info-panel {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: min(520px, 100%); display: flex; flex-direction: column;
+  background: var(--bg-card); border-left: 1px solid var(--border-strong);
+}
+.info-head {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border);
+}
+.info-title { margin: 0; font-size: 15px; color: var(--text-1); }
+.info-body { flex: 1 1 auto; overflow-y: auto; padding: 4px 16px 24px; }
+.info-pane[hidden] { display: none; }
+.info-h {
+  font-size: 13px; color: var(--text-1); margin: 18px 0 8px;
+  padding-left: 8px; border-left: 2px solid var(--td-brand-color);
+}
+.info-p { font-size: 12px; line-height: 1.9; color: var(--text-2); margin: 0 0 10px; }
+.info-list { margin: 0 0 10px; padding-left: 18px; }
+.info-list li { font-size: 12px; line-height: 1.9; color: var(--text-2); margin-bottom: 4px; }
+.info-list li b { color: var(--text-1); font-weight: 600; }
+.info-kv { margin: 0 0 10px; display: grid; gap: 6px; }
+.info-kv > div {
+  display: flex; gap: 10px; align-items: baseline;
+  padding: 6px 10px; background: var(--bg-inset);
+  border: 1px solid var(--border); border-radius: var(--radius-ctrl);
+}
+.info-kv dt { flex: 0 0 96px; font-size: 12px; color: var(--text-3); margin: 0; }
+.info-kv dd { margin: 0; font-size: 12px; color: var(--text-1); }
+.info-faq > div { margin-bottom: 10px; }
+.info-faq dt { font-size: 12px; color: var(--text-1); margin-bottom: 4px; }
+.info-faq dd { margin: 0; font-size: 12px; line-height: 1.9; color: var(--text-2); }
+.login-note .link-btn { font-size: 11px; vertical-align: baseline; }
+
+@media (max-width: 560px) {
+  .info-panel { width: 100%; border-left: 0; }
+}
 .login-note {
   font-size: 11px; color: var(--text-3); line-height: 1.7;
   margin: 18px 0 0; padding-top: 12px; border-top: 1px solid var(--border);
 }
 .login-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .login-foot-sep { color: var(--text-4); font-size: 11px; }
+
+/* 首次使用引导：这台机器上一个账号都没有时出现（点一下切到注册栏）。
+   它是一条**可点的提示**，所以用提示条的形，别做成主按钮 —— 不该跟「登 录」抢眼。 */
+.login-firstrun {
+  display: block; width: 100%; text-align: left; margin: 0 0 14px;
+  padding: 9px 12px; font-size: 12px; line-height: 1.7; cursor: pointer;
+  color: var(--td-success-color-text); background: var(--td-success-bg);
+  border: 1px solid var(--td-success-color-text); border-radius: var(--radius-ctrl);
+}
+.login-firstrun[hidden] { display: none; }
+.login-firstrun b { font-weight: 600; }
+.login-firstrun:hover { background: var(--td-success-bg-hover); }
+
+/* 密码强度：一根三段的小条 + 一句人话。弱/中/强只换颜色与长度，不拦人注册。 */
+.pwd-strength { display: flex; align-items: center; gap: 8px; margin: 6px 0 0; }
+.pwd-strength[hidden] { display: none; }
+.pwd-strength-bar {
+  flex: 0 0 72px; height: 4px; border-radius: var(--td-radius-small); overflow: hidden;
+  background: var(--bg-inset); border: 1px solid var(--border);
+}
+.pwd-strength-bar i { display: block; height: 100%; width: 33%; background: var(--st-away); }
+.pwd-strength-text { font-size: 11px; color: var(--text-3); }
+.pwd-strength.lv-1 .pwd-strength-bar i { background: var(--td-error-color-text); }
+.pwd-strength.lv-2 .pwd-strength-bar i { background: var(--st-away); }
+.pwd-strength.lv-3 .pwd-strength-bar i { background: var(--st-online); }
+
+/* 字段提示的两种语气：红 = 填错了，绿 = 查过了没问题（比如「✓ 可用」） */
+.field-msg.is-ok { color: var(--td-success-color-text); }
+.field input.is-ok { border-color: var(--td-success-color-text); }
+
+/* ── 图形验证码一行：左边填、右边看图，点图换一张 ──────────────────────
+   两个控件**严格等高**（同一档尺寸 token），不然一行里高矮不齐很显眼。
+   验证码那格单独高一点（宽松档）：它是"照图抄"的活，字大一点更好认；
+   用户明确要"简便、看得清"，所以不做扭曲到看不清的效果。 */
+.captcha-row { display: flex; align-items: stretch; gap: 8px; }
+.captcha-row input {
+  flex: 1 1 auto; min-width: 0; height: var(--td-loose-height);
+  letter-spacing: 3px; text-transform: uppercase;
+}
+/* 按钮不描边：描边会让里面的图比输入框矮 2px（边占掉的高度），
+   一行里差这 2px 看得出来。图自己带浅底与圆角，视觉上不需要再加一层框。
+   hover / 键盘焦点用 outline 画（不占布局，也不会把高度顶出 2px 差）。 */
+.captcha-btn {
+  flex: 0 0 auto; height: var(--td-loose-height); padding: 0;
+  background: none; border: 0; border-radius: var(--radius-ctrl);
+  cursor: pointer; overflow: hidden; line-height: 0;
+}
+.captcha-btn:hover { outline: 1px solid var(--td-brand-color); outline-offset: 1px; }
+.captcha-btn:focus-visible { outline: 2px solid var(--td-brand-color); outline-offset: 1px; }
+.captcha-btn img { height: 100%; width: auto; display: block; }
+.captcha-hint { font-size: 11px; color: var(--text-3); }
 
 /* ── 人话提示（点"尚未开通"的入口时冒出来，几秒后自己收走）── */
 .toast {

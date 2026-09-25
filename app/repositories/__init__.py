@@ -36,6 +36,7 @@ from typing import Callable
 from app.repositories import json_store
 from app.repositories.base import (
     REPOSITORY_INTERFACES,
+    AccountRepository,
     ConversationRepository,
     DatasetRepository,
     DocumentRepository,
@@ -44,6 +45,7 @@ from app.repositories.base import (
     UploadRepository,
 )
 from app.repositories.json_repo import (
+    JsonAccountRepository,
     JsonConversationRepository,
     JsonDatasetRepository,
     JsonDocumentRepository,
@@ -84,6 +86,11 @@ def build_dataset_repository(path_getter: Callable[[], Path] | None = None) -> D
     return JsonDatasetRepository(path_getter)
 
 
+def build_account_repository(path_getter: Callable[[], Path] | None = None) -> AccountRepository:
+    """造一个账号仓库（注册/登录：账号名 + 密码的校验值；明文密码不落盘）。"""
+    return JsonAccountRepository(path_getter)
+
+
 # ════════════════════════════════════════════════════════════════════════
 # 默认实例（惰性构造一次，全局共用）
 # ════════════════════════════════════════════════════════════════════════
@@ -93,6 +100,7 @@ _executions: ExecutionRepository | None = None
 _documents: DocumentRepository | None = None
 _conversations: ConversationRepository | None = None
 _datasets: DatasetRepository | None = None
+_accounts: AccountRepository | None = None
 
 
 def uploads() -> UploadRepository:
@@ -143,6 +151,14 @@ def datasets() -> DatasetRepository:
     return _datasets
 
 
+def accounts() -> AccountRepository:
+    """本地账号表（`state/accounts.json`：注册/登录）。"""
+    global _accounts
+    if _accounts is None:
+        _accounts = build_account_repository()
+    return _accounts
+
+
 __all__ = [
     "UploadRepository",
     "TaskRepository",
@@ -150,6 +166,7 @@ __all__ = [
     "DocumentRepository",
     "ConversationRepository",
     "DatasetRepository",
+    "AccountRepository",
     "REPOSITORY_INTERFACES",
     "JsonUploadRepository",
     "JsonTaskRepository",
@@ -157,18 +174,21 @@ __all__ = [
     "JsonDocumentRepository",
     "JsonConversationRepository",
     "JsonDatasetRepository",
+    "JsonAccountRepository",
     "build_upload_repository",
     "build_task_repository",
     "build_execution_repository",
     "build_document_repository",
     "build_conversation_repository",
     "build_dataset_repository",
+    "build_account_repository",
     "uploads",
     "tasks",
     "executions",
     "documents",
     "conversations",
     "datasets",
+    "accounts",
     "json_store",
     "LOCK",
     "SCHEMA_VERSION",

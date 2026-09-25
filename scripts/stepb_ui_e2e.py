@@ -11,7 +11,9 @@
 ④ 顺带把 DOM 里的状态四态文案与用户区元素对齐（登录后的状态迁移由
    scripts/session_check.mjs 用真源码验，浏览器里的点击由 Hermes 用 CDP 走查）。
 
-【不做的事】不比对密码、不发令牌、不建服务端会话 —— 本轮没有真实认证，也不假装有。
+【不做的事】角色权限 / 多用户数据隔离 / 令牌 / 服务端会话 —— 那些仍然没有。
+  但**注册与登录是真的**：账号写进本机账号表，密码只以不可还原的校验值落盘、由后端比对。
+  所以③里那一步走的是**真注册**（注册成功即进主界面），不是"填个名字就放行"。
 【为什么不用无头浏览器模拟点击】本机没装驱动库，也不想为一次验收引入新依赖：
   Edge 的 --dump-dom 能给出"JS 跑完之后的真 DOM"，配合 node 那份行为检查已经能定性。
 ════════════════════════════════════════════════════════════════════════
@@ -135,6 +137,8 @@ PROBE_SCRIPT = """
     gate: readGate(),
     gateVisible: !(document.getElementById("login-gate") || {}).hidden,
     locked: document.body.classList.contains("is-locked"),
+    title: label("login-title"),
+    tabs: ["ltab-account", "ltab-register", "ltab-guest"].map(label),
     userName: label("user-name"),
     bodyHasReading: (document.body.innerText || "").includes("读取中"),
     bodyText: (document.body.innerText || "").replace(/\\s+/g, " ").slice(0, 160),
@@ -147,18 +151,100 @@ PROBE_SCRIPT = """
     document.documentElement.setAttribute("data-probe", JSON.stringify(box));
   };
 
-  window.addEventListener("load", () => {
+  const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // 等这张图真的到手（取图是异步的）
+  const waitImage = async (img) => {
+    for (let i = 0; i < 50; i += 1) {
+      if (img && img.src && img.src.indexOf("data:") === 0) return true;
+      await tick(100);
+    }
+    return false;
+  };
+
+  // 从**图**上把 4 个字符读出来 —— 就是"人看图抄字"的机器版：
+  // 图是 data: 地址，把地址解回 SVG，逐个取出 <text> 里的字符。
+  const readCode = (img) => {
+    const svg = decodeURIComponent((img.src.split(",")[1] || ""));
+    const found = [];
+    svg.split("</text>").forEach((part) => {
+      const at = part.lastIndexOf(">");
+      if (at >= 0 && part.length - at === 2) found.push(part.slice(at + 1));
+    });
+    return found.join("");
+  };
+
+  const textOf = (id) => {
+    const el = document.getElementById(id);
+    return el ? (el.textContent || "").trim() : "";
+  };
+
+  // 打开帮助 / 隐私，把内容原样记下来（核对"是不是真内容、数字是不是真的"）
+  const openInfo = async (kind) => {
+    const link = document.getElementById(kind === "help" ? "link-help" : "link-privacy");
+    if (link) link.click();
+    if (kind === "help") {                            // 帮助里的数字要等接口回来
+      for (let i = 0; i < 60; i += 1) {
+        const rows = textOf("help-rows");
+        if (rows && rows !== "—" && rows !== "读取中…") break;
+        await tick(200);
+      }
+    } else {
+      await tick(300);
+    }
+    const drawer = document.getElementById("info-drawer");
+    const pane = document.getElementById(kind === "help" ? "info-pane-help" : "info-pane-privacy");
+    const record = {
+      open: Boolean(drawer) && !drawer.hidden,
+      title: textOf("info-title"),
+      text: pane ? (pane.innerText || "").replace(/\s+/g, " ") : "",
+      rows: textOf("help-rows"), source: textOf("help-source"), range: textOf("help-range"),
+      currency: textOf("help-currency"), formats: textOf("help-report-formats"),
+      lastDay: textOf("help-last-day"),
+    };
+    const close = document.getElementById("btn-info-close");
+    if (close) close.click();
+    await tick(150);
+    record.closed = Boolean(drawer) && drawer.hidden;
+    return record;
+  };
+
+  window.addEventListener("load", async () => {
     write("boot", snapshot());                       // ① 登录页阶段
-    const name = document.getElementById("login-name");
-    const pwd = document.getElementById("login-pwd");
-    if (name && pwd) {                               // ② 走一遍登录（真事件，真流程）
-      name.value = "探针唐宇";
-      pwd.value = "123456";
-      document.getElementById("login-form")
+    // ② 帮助 / 隐私：点开看一眼（内容是真内容，数字是当前数据源的真数字）
+    try {
+      write("help", await openInfo("help"));
+      write("privacy", await openInfo("privacy"));
+    } catch (err) {
+      write("help", { error: String(err) });
+    }
+    // ③ 走一遍**真注册**（注册成功即登录）：点「注册」标签 → 填表（含验证码）→ 真提交。
+    //    注册与登录现在都由后端判定（密码只以不可还原的校验值落盘），
+    //    所以探针走的这条，就是用户第一次用这套系统走的那条 —— 验证码也是照着图填的。
+    const regTab = document.getElementById("ltab-register");
+    if (regTab) regTab.click();
+    const rn = document.getElementById("reg-name");
+    const rd = document.getElementById("reg-display");
+    const rp = document.getElementById("reg-pwd");
+    const rp2 = document.getElementById("reg-pwd2");
+    const captchaImg = document.getElementById("reg-captcha-img");
+    const captchaInput = document.getElementById("reg-captcha");
+    await waitImage(captchaImg);
+    const code = readCode(captchaImg);
+    write("captcha", { code, length: code.length,
+                       src: captchaImg ? captchaImg.src.slice(0, 22) : "" });
+    if (rn && rp && rp2 && captchaInput) {
+      rn.value = "探针唐宇";
+      if (rd) rd.value = "探针唐宇";
+      rp.value = "probe-123456";
+      rp2.value = "probe-123456";
+      captchaInput.value = code;
+      captchaInput.dispatchEvent(new Event("input", { bubbles: true }));
+      document.getElementById("register-form")
         .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     }
-    setTimeout(() => { write("afterLogin", snapshot()); }, 9000);    // ③ 登录后 9 秒（虚拟时间）内
-    setTimeout(() => { write("afterIdle", snapshot()); }, 13000);   // ④ 再等一会儿看会不会回退
+    setTimeout(() => { write("afterLogin", snapshot()); }, 9000);    // ④ 进主界面后 9 秒（虚拟时间）内
+    setTimeout(() => { write("afterIdle", snapshot()); }, 13000);   // ⑤ 再等一会儿看会不会回退
   });
 })();
 </script>
@@ -166,8 +252,9 @@ PROBE_SCRIPT = """
 
 
 def start_probe_proxy(upstream_port: int, listen_port: int):
-    """起探测代理（单线程够用：dump-dom 一次只打几个请求）。返回 httpd 对象。"""
+    """起探测代理（dump-dom 一次只打几个请求）。返回 httpd 对象。"""
     import http.server
+    import urllib.error
     import urllib.request
 
     upstream = f"http://127.0.0.1:{upstream_port}"
@@ -175,18 +262,36 @@ def start_probe_proxy(upstream_port: int, listen_port: int):
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def do_GET(self):                                        # noqa: N802（http.server 的命名）
+        def _forward(self, method: str) -> None:
+            """把请求**原样**转发给真服务。
+
+            为什么要 POST：本轮起注册与登录是**真请求**（页面会 POST 到后端）。
+            以前只转发 GET 够用，是因为那时候登录纯前端 —— 现在不够了。
+            4xx 也要原样带回去（409「已被注册」/ 401「账号或密码不对」都是**真响应**，
+            页面要按它显示人话，代理不能把它们变成 502）。
+            """
+            length = int(self.headers.get("Content-Length") or 0)
+            payload = self.rfile.read(length) if length else None
+            request = urllib.request.Request(upstream + self.path, data=payload, method=method)
+            content_type = self.headers.get("Content-Type")
+            if content_type:
+                request.add_header("Content-Type", content_type)
             try:
-                with urllib.request.urlopen(upstream + self.path, timeout=120) as response:
+                with urllib.request.urlopen(request, timeout=120) as response:
                     status = response.status
                     body = response.read()
                     # 从 HTTPMessage 上按名取（大小写不敏感）；转成 dict 再取会取不到
-                    content_type = response.headers.get("Content-Type", "")
+                    response_type = response.headers.get("Content-Type", "")
                     headers = list(response.headers.items())
+            except urllib.error.HTTPError as exc:                # 4xx/5xx 也是真响应，原样带回
+                status = exc.code
+                body = exc.read()
+                response_type = exc.headers.get("Content-Type", "")
+                headers = list(exc.headers.items())
             except Exception as exc:                             # noqa: BLE001 代理层不许把脚本搞崩
                 self.send_error(502, f"proxy upstream failed: {exc}")
                 return
-            if "text/html" in content_type:
+            if "text/html" in response_type:
                 html = body.decode("utf-8", errors="replace")
                 body = html.replace("</body>", PROBE_SCRIPT + "</body>").encode("utf-8")
             self.send_response(status)
@@ -198,6 +303,12 @@ def start_probe_proxy(upstream_port: int, listen_port: int):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def do_GET(self):                                        # noqa: N802（http.server 的命名）
+            self._forward("GET")
+
+        def do_POST(self):                                       # noqa: N802
+            self._forward("POST")
 
         def log_message(self, *args):                            # 不刷屏
             return
@@ -373,9 +484,69 @@ def main() -> int:
             gate = re.search(r'<div class="login-gate" id="login-gate"[^>]*>', dom)
             check(bool(gate), "登录页容器在页面上")
             check(boot.get("locked") is True, "打开时主界面被锁住（body 带 is-locked）")
-            check("欢迎回来" in text and "账号登录" in text and "游客登录" in text,
-                  "两个入口与欢迎语都渲染出来了")
-            check("本地模式" in text, "如实标注了这是本机模式", "（人话，不是技术字样）")
+            # 三个入口在页面上；打开时的标题是「欢迎回来」（探针随后切到了注册栏，
+            # 所以末态标题是「建一个账号」—— 两个都用**打开那一刻**的快照来验）
+            check(boot.get("title") == "欢迎回来 👋", "打开时的标题是「欢迎回来 👋」",
+                  f"「{boot.get('title')}」")
+            check(boot.get("tabs") == ["账号登录", "注册", "游客登录"],
+                  "三个入口并列：账号登录 / 注册 / 游客登录", f"{boot.get('tabs')}")
+            check("本机模式" in text, "如实标注了这是本机模式", "（人话，不是技术字样）")
+
+            # ── ③b 帮助 / 隐私：真内容 + 真数字（不是写死的、也不是"尚未开通"）
+            help_box = probe.get("help") or {}
+            privacy_box = probe.get("privacy") or {}
+            check(help_box.get("open") is True and help_box.get("title") == "帮助",
+                  "点「帮助」→ 真帮助内容打开（标题是「帮助」）",
+                  f"open={help_box.get('open')} title=「{help_box.get('title')}」")
+            check(help_box.get("closed") is True, "关闭按钮能把它收起来")
+            help_text = help_box.get("text") or ""
+            for part in ("能问什么", "数据从哪来", "数据里没有什么", "数字是怎么算出来的", "常见问题"):
+                check(part in help_text, f"帮助里有「{part}」这一部分")
+            for label in ("销售汇总", "销售趋势", "产品排行", "两区间比较", "国家分布",
+                          "客户分析", "商品分析"):
+                check(label in help_text, f"能问的七类里有「{label}」")
+            check("做一份销售周报" in help_text, "帮助里提了周报")
+            for keyword in ("最后几天", "客户数", "导出", "数据源"):
+                check(keyword in help_text, f"常见问题里有问到「{keyword}」")
+            # ★ 帮助里的数字必须与**当前数据源**对得上（不是页面写死的）
+            check(help_box.get("rows") == f"{profile.get('rows'):,}",
+                  "帮助里的行数与后端画像一致", f"页面 {help_box.get('rows')} / 后端 {profile.get('rows'):,}")
+            check("2010-12-01" in (help_box.get("range") or "")
+                  and "2011-12-09" in (help_box.get("range") or ""),
+                  "帮助里的覆盖范围与后端一致", f"「{help_box.get('range')}」")
+            check("元" in (help_box.get("currency") or ""), "帮助里写清了金额单位是「元」",
+                  f"「{help_box.get('currency')}」")
+            check("Word" in (help_box.get("formats") or ""), "帮助里的导出格式是照后端清单写的",
+                  f"「{help_box.get('formats')}」")
+            check("区域" in help_text and "销售员" in help_text and "门店" in help_text,
+                  "帮助里列清了「数据里没有」的那些维度")
+
+            check(privacy_box.get("open") is True and privacy_box.get("title") == "隐私说明",
+                  "点「隐私」→ 真隐私说明打开（标题是「隐私说明」）",
+                  f"open={privacy_box.get('open')} title=「{privacy_box.get('title')}」")
+            privacy_text = privacy_box.get("text") or ""
+            for part in ("数据存在哪", "密码怎么存", "会不会把数据发到外面去", "怎么清掉"):
+                check(part in privacy_text, f"隐私四项里有「{part}」")
+            check("会发出去" in privacy_text and "不会发出去" in privacy_text,
+                  "隐私说明如实把「发什么 / 不发什么」分开说了")
+            check("明细行不会上传" in privacy_text and "模型" in privacy_text,
+                  "说清了「上传的数据文件不外发、数字由本机算」")
+
+            # 两栏里都不许出现技术字样
+            drawer_text = (help_text + " " + privacy_text).lower()
+            banned_hits = [word for word in DOM_BANNED if word.lower() in drawer_text]
+            banned_hits += [word for word in ("尚未开通", "captcha", "svg", "endpoint")
+                            if word in drawer_text]
+            check(not banned_hits, "帮助 / 隐私里没有技术字样、也没有占位话术",
+                  f"命中：{banned_hits}" if banned_hits else "干净")
+
+            # 验证码：探针是照着图填的，这里核对"图上真能读出 4 个字符"
+            captcha_box = probe.get("captcha") or {}
+            check(captcha_box.get("length") == 4,
+                  "注册页的验证码图上有 4 个字符（探针是照图读出来填的）",
+                  f"读到「{captcha_box.get('code')}」")
+            check((captcha_box.get("src") or "").startswith("data:image"),
+                  "验证码是当**图片**显示的", f"「{captcha_box.get('src')}」")
             check("扫码" not in text, "扫码登录没有出现（本轮不做）")
             check(boot.get("userName") == "未登录", "打开时顶栏显示未登录（不是假装有个用户）",
                   f"「{boot.get('userName')}」")

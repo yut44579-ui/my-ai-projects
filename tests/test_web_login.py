@@ -39,7 +39,12 @@ WEB_DIR = PROJECT_ROOT / "web"
 LOGIN_IDS = ("login-gate", "login-form", "login-name", "login-pwd", "btn-login",
              "login-name-msg", "login-pwd-msg", "btn-pwd-eye", "login-remember",
              "ltab-account", "ltab-guest", "btn-guest", "guest-pane", "guest-name",
-             "link-forgot", "link-register", "toast")
+             "link-forgot", "link-register", "toast",
+             # 图形验证码（登录一张、注册一张：输入框 + 图 + 出错提示）
+             "login-captcha", "login-captcha-img", "login-captcha-msg",
+             "reg-captcha", "reg-captcha-img", "reg-captcha-msg",
+             # 帮助 / 隐私抽屉
+             "info-drawer", "info-pane-help", "info-pane-privacy", "btn-info-close")
 STATUS_ORDER = ("online", "busy", "away", "offline")
 
 
@@ -164,8 +169,9 @@ def test_B01_登录页整屏铺满且不露主界面() -> None:
 def test_B01_登录表单是账号形态而不是填姓名() -> None:
     """用户实测反馈：「不要弄姓名这个，按照正常腾讯 QQ 那种账号形式的」。
 
-    形态 = 账号 + 密码 + 记住账号 + 忘记密码 / 注册账号 + 一个登录按钮；
-    **仍然只是形态**：不做哈希、不做比对（下一条 B-05/B-11 盯着这一点）。
+    形态 = 账号 + 密码 + 记住账号 + 忘记密码 / 注册账号 + 一个登录按钮。
+    （本轮起注册与登录都是**真的**：密码由后端存成不可还原的校验值并比对 ——
+      但**前端这一层**依旧不碰密码运算，B-05/B-11 那几条盯着这一点。）
     """
     html, js = read("index.html"), read("session.js")
     assert "姓名" not in html and "姓名" not in js, "登录页还留着「姓名」这个说法"
@@ -181,11 +187,14 @@ def test_B01_登录表单是账号形态而不是填姓名() -> None:
     assert "sra.remembered-name" in js
     # 游客那一栏说清"不留身份、退出后名字会变"
     assert "不留身份" in html and "不留身份" in js
-    # 登录后右上角的口径也是账号，不再叫姓名
-    assert "账号（登录时你自己填的）" in js, "用户区身份说明还在用「名字由你自己填」"
+    # 登录后右上角的口径也是账号，不再叫姓名；而且要跟上"账号是本机注册的、登录时对过密码"
+    assert "账号（本机注册的账号，登录时对过密码）" in js, "用户区身份说明没跟上账号已经是真的"
     assert "名字由你自己填" not in js
-    # 未开通的入口给人话提示，且说清是"尚未开通"而不是做成点不动的死按钮
-    assert "该功能尚未开通" in js
+    # 还没做的入口给人话提示，且说清是"尚未开通"而不是做成点不动的死按钮
+    # （"该功能尚未开通"这句话现在只剩「个人设置」那一栏在用 —— 帮助/隐私已经是真内容了）
+    assert "尚未开通" in js and "个人设置" in js
+    # 但「注册」不在"尚未开通"之列：它已经是真栏目（点一下就切到注册表单）
+    assert "注册还没做" not in js and "注册还没做" not in html, "注册还留着「还没做」那套说辞"
 
 
 def test_B01_密码框用眼睛图标而不是显示隐藏文字() -> None:
@@ -328,6 +337,12 @@ def test_B06_忙碌中由真实分析请求驱动() -> None:
 # B-05 / B-11 只记名字，绝不碰密码；不做任何真实认证
 # ════════════════════════════════════════════════════════════════════════
 def test_B05_B11_只做形态校验且不碰密码() -> None:
+    """前端这一层**永远**不碰密码运算：不比、不摘要、不加密、不落盘。
+
+    本轮起"对不对"是真的了 —— 但那件事**整个在后端**（`app/accounts.py`），
+    前端只把输入框里的东西原样递过去。这条测试盯着的是这道边界：
+    session.js 里一旦出现摘要/编码/fetch/令牌这类词，就说明有人把密码处理挪到前端来了。
+    """
     js = read("session.js")
     assert "account.length < 2" in js and "account.length > 40" in js
     assert "password.length < 6" in js
@@ -335,10 +350,14 @@ def test_B05_B11_只做形态校验且不碰密码() -> None:
                    "sessionStorage", "cookie", "fetch("):
         assert banned not in js, f"session.js 里出现了不该有的东西：{banned}"
     assert "sra.remembered-name" in js and "rememberName" in js
-    stored = re.search(r"JSON\.stringify\(\{(.*?)\}\)", js)
+    # 本机那条记录只写三个字段：账号名、入口类型、显示名 —— 逐字锁住（不是"扫一眼没有密码"）
+    stored = re.search(r"function writeWho\(who\)\s*\{(.*?)\n  \}", js, re.S)
     assert stored, "找不到本机记录的写法"
-    assert "name" in stored.group(1) and "kind" in stored.group(1)
-    assert "password" not in stored.group(1) and "pwd" not in stored.group(1)
+    body = stored.group(1)
+    assert "name: who.name" in body and "kind: who.kind" in body
+    assert "display_name: who.displayName" in body
+    for forbidden in ("password", "pwd", "secret"):
+        assert forbidden not in body, f"本机记录里写进了不该写的东西：{forbidden}"
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -362,7 +381,13 @@ def test_B10_界面不出现技术字样也不吹安全() -> None:
             assert call not in line, f"这一行把后端字段名画到界面上了：{line.strip()[:90]}"
     # 如实标注"这是本机模式"，并且不宣称账号在线
     assert "本地模式" in html, "登录页没有如实标注这是本机模式"
-    assert "不保存、不比对" in html, "没有说清密码只是形态检查"
+    # 密码这件事要说**真话**（本轮起它真的被保存与比对，只是存的是不可还原的校验值）：
+    # 说清"存的是什么、原文不存"，并且不许假装能发邮件找回（本机没有邮件可发）
+    assert "加密摘要" in html and "原文" in html, "没说清密码是怎么存的"
+    assert "无法用邮件找回" in html, "没如实说清忘记密码的后果"
+    # 不许假装能做的能力（"验证码"本身已经是真功能了，所以这里盯的是"发出去的验证码"这类假动作）
+    for fake in ("发送邮件", "重置邮件", "邮件已发送", "短信", "验证码已发送", "短信验证码"):
+        assert fake not in html and fake not in js, f"页面在假装能做的能力：{fake}"
     assert "游客" in html and "随机" in html, "游客名的含义没说清楚"
     assert "本机状态" in read("session.js"), "状态提示没有说清这是本机状态"
 
@@ -370,15 +395,67 @@ def test_B10_界面不出现技术字样也不吹安全() -> None:
 # ════════════════════════════════════════════════════════════════════════
 # 诚实边界：未开通的入口有话说；退出即清
 # ════════════════════════════════════════════════════════════════════════
-def test_B05_未开通的入口给人话提示() -> None:
+def test_B05_登录页每个入口点了都有反应_且不留假按钮() -> None:
+    """底下一排入口的**现状**（这轮盘点过一遍，免得哪一栏又悄悄退回占位）：
+
+        注册账号 → 真的切到注册表单（不留"尚未开通"）
+        帮助     → 真的打开帮助抽屉
+        隐私     → 真的打开隐私抽屉
+        忘记密码 → 如实说本机找不回（不是"尚未开通"，也不假装能发邮件）
+        个人设置 → 仍然"尚未开通"（这一栏确实还没做，就如实说）
+
+    底线是同一条：**要么真能用，要么如实说没做**；不许出现点不动的死按钮。
+    """
     html, js = read("index.html"), read("session.js")
-    for label in ("忘记密码", "注册账号", "个人设置"):
+    for label in ("忘记密码", "注册账号", "帮助", "隐私"):
         assert label in html, f"缺少入口：{label}"
     for control in ("link-forgot", "link-register", "link-help", "link-privacy", "um-settings"):
-        assert f'id="{control}"' in html, f"缺少未开通入口：{control}"
+        assert f'id="{control}"' in html, f"缺少入口：{control}"
         assert f'"{control}"' in js, f"{control} 没有绑定点击事件（会变成点不动的死按钮）"
-    assert "尚未开通" in js
+    # 帮助 / 隐私：真打开抽屉，不是提示条
+    assert "帮助文档还没提供" not in js and "隐私说明还没提供" not in js
+    assert "openInfo" in js
+    # 忘记密码：说真话，且不承诺发邮件
+    forgot = re.search(r'const forgot = \$\("link-forgot"\);(.*?)\);', js, re.S)
+    assert forgot, "找不到「忘记密码」的处理"
+    assert "没法找回" in forgot.group(1), "「忘记密码」没说清本机找不回"
+    assert "注册一个新账号" in forgot.group(1) and "游客" in forgot.group(1),         "「忘记密码」没给出能走的两条路"
+    for fake in ("发送邮件", "重置邮件", "验证码"):
+        assert fake not in forgot.group(1), f"「忘记密码」在承诺做不到的事：{fake}"
+    # 个人设置：确实没做，就如实说"尚未开通"
+    assert "尚未开通" in js and "NOT_READY" in js
     assert "toast" in js and 'id="toast"' in html, "缺少人话提示的落点"
+
+
+def test_B14_登录页有验证码且能点击换图() -> None:
+    """登录与注册两张表单都要有验证码：4 位输入框 + 图 + "点图换一张"的出路。
+
+    图必须是**图片**（<img> 的 src 由页面逻辑从后端拿到的图填进去），
+    不是页面上的文字 —— 否则"看图填字"这道题就白出了。
+    """
+    html, js = read("index.html"), read("session.js")
+    for which, input_id in (("login", "login-captcha"), ("reg", "reg-captcha")):
+        assert f'id="{input_id}"' in html and f'id="{which}-captcha-img"' in html
+        assert f'id="{which}-captcha-btn"' in html, f"{which} 的验证码图不是可点的"
+        block = re.search(rf'<div class="captcha-row">.*?</div>', html, re.S)
+        assert block, "找不到验证码那一行的结构"
+        assert f'maxlength="4"' in html
+        assert f'alt="验证码图片，点一下换一张"' in html, "验证码图缺无障碍说明"
+        assert f'aria-label="验证码图片，点一下换一张"' in html
+    # 图片的地址由页面逻辑填（从后端拿图），点一下换一张
+    assert "loadCaptcha" in js and 'data:image/svg+xml' in js
+    assert "img.src" in js
+    assert "addEventListener(\"click\", reload)" in js, "点图没有换一张"
+    # 提交时把"图 + 用户填的字"一起发出去
+    assert "captchaPayload" in js and "captcha_id" in js and "captcha_text" in js
+    # 三种验证码错法各有各的人话（用户要知道下一步干什么）
+    for message in ("验证码不对，请重新输入。", "验证码已过期，已帮你换一张。",
+                    "请填一下图上的 4 个字符。"):
+        assert message in js, f"缺少这条人话：{message}"
+    assert "尝试次数过多" in js, "连续失败之后的提示没接上"
+    # 退出/重登时验证码要换新的（旧的一次性，留着只会让人"填对了还被拒"）
+    reset = re.search(r"function resetForm\(\)\s*\{(.*?)\n  \}", js, re.S).group(1)
+    assert 'loadCaptcha("account")' in reset and 'loadCaptcha("register")' in reset
 
 
 def test_B08_退出即清本机会话() -> None:

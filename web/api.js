@@ -272,6 +272,18 @@ const API = (() => {
       return { blob, filename: filenameFrom(response.headers.get("content-disposition")) };
     },
 
+    // ── 本地账号（注册 / 登录）─────────────────────────────────────────
+    // 登录校验**在后端**做（密码的比对只发生在那里），这里只把账号与密码原样递过去。
+    // 前端不存密码、不比密码、也不算任何摘要 —— session.js 拿到的只是"这次是谁"。
+    // 错误走统一形状：409 = 这个账号已被注册；401 = 账号或密码不对（后端不区分这两种）。
+    authRegister: (payload) => request("/api/auth/register", json(payload)),
+    authLogin: (payload) => request("/api/auth/login", json(payload)),
+    // 注册页失焦查重：传账号名问"有没有被注册"；不传就只回账号总数
+    // （一个账号都没有 = 首次使用，登录页据此给出"先注册一个"的引导）
+    accountExists: (username) => request(`/api/auth/accounts/exists${query({ username })}`),
+    // 图形验证码：拿一张新图（连同它的编号）。点一下图就再调一次这个 —— 换图不走缓存。
+    captcha: () => request("/api/auth/captcha"),
+
     // 下载地址一律用**后端返回的相对 URL**（download_url）拼当前源，前端不自己拼路径
     downloadUrl: (relative) => new URL(relative, window.location.origin).href,
 

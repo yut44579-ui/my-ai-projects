@@ -892,10 +892,22 @@ def test_AC09_新端点与既有端点并存():
     }
     assert export_paths <= paths
 
+    # 本地账号那次新增的 3 条：注册 / 登录 / 注册页查重。
+    # 它们是**本地单机自用级别**的账号能力（注册、密码校验值比对、账号名是否被占用），
+    # 整个装在 app/api_auth.py 里，走新前缀 /api/auth —— 既有端点语义一个字没动。
+    auth_paths = {
+        "/api/auth/register",
+        "/api/auth/login",
+        "/api/auth/accounts/exists",
+        "/api/auth/captcha",
+    }
+    assert auth_paths <= paths
+
     # 端点总清单**精确**钉死：TASK-004 许新增上面那 4 条、STEP A 许新增这 6 条、
-    # 报告导出许新增这 1 条，其余路径（TASK-002C/002D 的 10 个 + TASK-003 的 4 个）必须原样还在。
+    # 报告导出许新增这 1 条、本地账号许新增这 3 条，
+    # 其余路径（TASK-002C/002D 的 10 个 + TASK-003 的 4 个）必须原样还在。
     # 用集合相等而不是"包含若干条"：新增一条没申报的路径也会在这里被抓住。
-    assert paths - new_paths - stepa_paths - export_paths == {
+    assert paths - new_paths - stepa_paths - export_paths - auth_paths == {
         "/api/upload", "/api/schema", "/api/execute", "/api/download/{execution_id}",
         "/api/executions", "/api/health",
         "/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/run",

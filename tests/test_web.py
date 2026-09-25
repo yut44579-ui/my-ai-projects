@@ -432,7 +432,7 @@ def test_metric_catalog_comes_from_backend() -> None:
 # ════════════════════════════════════════════════════════════════════════
 # 结构性 id：由 JS **运行时拼接**或由 CSS/SVG 内部引用，本来就不该出现在字符串字面量里
 # （`um-status-*` = 用户菜单里那四个状态项，session.js 用 `um-status-${状态名}` 拼出来）
-STRUCTURAL_ID_PREFIXES = ("page-", "nav-", "rp-pane-", "um-status-")
+STRUCTURAL_ID_PREFIXES = ("page-", "nav-", "rp-pane-", "um-status-", "ltab-")
 STRUCTURAL_IDS = {"trend-fill"}
 
 
