@@ -69,7 +69,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import accounts, api_auth, api_chat, api_datasets, api_documents, prewarm, state
+from app import (accounts, api_auth, api_chat, api_datasets, api_documents, api_exports,
+                 prewarm, state)
 from app.engine import executor, loader, renderer
 from app.engine import metrics as engine_metrics
 from app.spec.models import (
@@ -1565,6 +1566,17 @@ app.include_router(api_datasets.router)
 # 密码只以"不可还原的校验值"落 state/accounts.json（实现与边界见 app/accounts.py）。
 # 位置同样必须在 mount("/") **之前**。
 app.include_router(api_auth.router)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 导出直达桌面（FR-002B）—— 走**新路径** `/api/exports/*`
+# ════════════════════════════════════════════════════════════════════════
+# 老的两条导出出口一个字没改：`GET /api/tables/{table}/export` 与
+# `GET /api/conversations/{id}/report/export` 照旧把文件发回浏览器（④ 老下载路径保留）。
+# 新出口只是让服务端**多写一份到本机桌面**（前提：服务端与用户桌面同机同会话，见 app/desktop.py），
+# 渲染复用同一条路径 —— 不存在"下载的是一版、桌面上的是另一版"。
+# 位置同样必须在 mount("/") **之前**。
+app.include_router(api_exports.router)
 
 
 # ════════════════════════════════════════════════════════════════════════

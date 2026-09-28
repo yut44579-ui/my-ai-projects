@@ -219,22 +219,11 @@ def _content_disposition(filename: str, ascii_name: str) -> str:
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quoted}"
 
 
-@router.get(
-    "/conversations/{conversation_id}/report/export",
-    responses={404: {"description": "conversation_id 不存在（conversation_not_found）"},
-               400: {"description": "这次问答没有报告 / 格式不支持"}},
-    summary="下载这份报告（Word / Excel / Markdown，三种格式数字一致）",
-)
-def export_report(
-    conversation_id: str,
-    fmt: str = Query(default=export_docs.DEFAULT_FORMAT, alias="format",
-                     description="docx / xlsx / md"),
-) -> Response:
-    """把这次问答出的报告渲染成真文件发回去。
+def render_report_file(conversation_id: str, fmt: str) -> tuple[bytes, str, str]:
+    """这份报告 → `(内容, 文件名, 内容类型)`（**唯一的**渲染入口，供两条出口共用）。
 
-    内容**现取现渲染**：报告结构在回答时就冻结在会话记录里（`report_document`），
-    这里只是把它排成 Word / Excel / Markdown —— 不重新算数，也不重新问模型，
-    所以下载到的数字与页面上看到的逐位相同。
+    FR-002B 把"浏览器下载"与"直接存到桌面"都接到这个函数上：两条出口拿到的
+    是**同一份字节、同一个文件名**，不存在"下载的是一版、存到桌面的又是另一版"。
     """
     record = state.get_conversation(conversation_id)
     if record is None:
@@ -266,14 +255,44 @@ def export_report(
             profile=profile,
         )["markdown"]
 
-    content, filename, mime = export_docs.render_report(
+    return export_docs.render_report(
         report, fmt,
         why_text=why_text, actions_text=actions_text, profile=profile, markdown=markdown,
     )
-    # 中文文件名之外再给一个纯 ASCII 兜底名（老下载器认 filename= 那个字段）
-    span = str(report.get("period_label") or "").replace(" ~ ", "_").replace("~", "_")
+
+
+def report_ascii_name(report_span: str, fmt: str) -> str:
+    """纯 ASCII 兜底文件名（老下载器认 `filename=` 那个字段；存桌面时用不到，但要一致）。"""
     extension = export_docs.FORMATS[fmt]["ext"]
-    ascii_name = f"sales-report-{span}.{extension}" if span else f"sales-report.{extension}"
+    return f"sales-report-{report_span}.{extension}" if report_span else f"sales-report.{extension}"
+
+
+@router.get(
+    "/conversations/{conversation_id}/report/export",
+    responses={404: {"description": "conversation_id 不存在（conversation_not_found）"},
+               400: {"description": "这次问答没有报告 / 格式不支持"}},
+    summary="下载这份报告（Word / Excel / Markdown，三种格式数字一致）",
+)
+def export_report(
+    conversation_id: str,
+    fmt: str = Query(default=export_docs.DEFAULT_FORMAT, alias="format",
+                     description="docx / xlsx / md"),
+) -> Response:
+    """把这次问答出的报告渲染成真文件发回去。
+
+    内容**现取现渲染**：报告结构在回答时就冻结在会话记录里（`report_document`），
+    这里只是把它排成 Word / Excel / Markdown —— 不重新算数，也不重新问模型，
+    所以下载到的数字与页面上看到的逐位相同。
+
+    渲染本身在 `render_report_file`（FR-002B 起"存到桌面"那条出口也调它）——
+    本端点只负责把它包成一次 HTTP 下载响应，浏览器下载这条路**照旧可用**。
+    """
+    content, filename, mime = render_report_file(conversation_id, fmt)
+    # 再取一次同一条冻结记录，只为了拿 period_label 拼那个 ASCII 兜底名
+    # （`render_report_file` 已经把"记录不存在 / 没有报告"这两件事拦在前面了，这里不会空）。
+    report = (state.get_conversation(conversation_id) or {}).get("report_document") or {}
+    span = str(report.get("period_label") or "").replace(" ~ ", "_").replace("~", "_")
+    ascii_name = report_ascii_name(span, fmt)
     return Response(
         content=content,
         media_type=mime,

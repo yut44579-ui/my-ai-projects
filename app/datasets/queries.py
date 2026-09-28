@@ -114,7 +114,16 @@ PRODUCT_COLUMNS: tuple[dict[str, Any], ...] = (
 # dimension_value**（前端按这个 key 取数，不许动）。
 SALES_AXIS_LABELS: dict[str, str] = {"day": "期间", "week": "周", "country": "国家"}
 
+# 第一列装的是什么，就声明成什么（**只影响导出时的单元格类型**，页面 JSON 里仍是字符串）：
+#   day / week → 日期（period_start 是"这天/这周的周一"，导出必须落成真日期，不是文本）
+#   country    → 文本（United Kingdom 这类国家名）
+# 见 `_sales_columns` 的注释：写死成 text 会让日期在 Excel 里显示成 40875。
+SALES_AXIS_FORMATS: dict[str, str] = {"day": "date", "week": "date", "country": "text"}
+
 SALES_COLUMNS: tuple[dict[str, Any], ...] = (
+    # 第一列的 label 与 format 都由 `_sales_columns(dimension)` 按维度覆写
+    # （见 SALES_AXIS_LABELS / SALES_AXIS_FORMATS）—— 这里写的是默认维度的样子，
+    # 不是"写死"：真正的值是那份覆写的结果，别直接拿 _TABLE_COLUMNS[TABLE_SALES] 去渲染。
     _column("dimension_value", "期间", "text"),
     _column("sales_amount", "销售额", "money", "right"),
     _column("order_count", "订单数", "int", "right"),
@@ -151,10 +160,18 @@ def _sales_columns(dimension: str) -> tuple[dict[str, Any], ...]:
 
     维度取不到已知值时退回「期间」（与 SALES_DIMENSIONS 的默认维度一致）——
     宁可给一个通称，也不会摆出一个和这一列数据不符的名字。
+
+    ★ 第一列的**格式也跟着维度走**（FR-002B）：`day` / `week` 这一列装的是日期
+      （`period_start`，形如 `2011-11-28`），声明成 `date` → 导出成 Excel 时是真日期
+      单元格；`country` 那一列装的是国家名，声明成 `text`。
+      上一版一律写 `text`，于是日期被当成文本存，导出文件里显示成 `40875`（日期序列号）——
+      列格式必须与这一列**实际装的东西**一致，不能图省事写死一个。
     """
     axis = SALES_AXIS_LABELS.get(dimension, SALES_AXIS_LABELS["day"])
+    axis_format = SALES_AXIS_FORMATS.get(dimension, SALES_AXIS_FORMATS["day"])
     return tuple(
-        {**column, "label": axis} if column["key"] == "dimension_value" else column
+        {**column, "label": axis, "format": axis_format}
+        if column["key"] == "dimension_value" else column
         for column in SALES_COLUMNS
     )
 
@@ -753,6 +770,7 @@ __all__ = [
     "MAX_EXPORT_ROWS",
     "PAGE_SIZES",
     "QueryError",
+    "SALES_AXIS_FORMATS",
     "SALES_AXIS_LABELS",
     "SALES_DIMENSIONS",
     "SALES_DIMENSION_LABELS",

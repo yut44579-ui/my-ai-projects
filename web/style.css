@@ -1180,3 +1180,8 @@ body.is-locked .app { display: none; }
 .report-bar select.report-format:hover { border-color: var(--border-strong); }
 .report-bar select.report-format:focus { border-color: var(--td-brand-color); }
 .report-hint { margin: 0; padding: 8px 12px 0; }
+
+/* 「存到桌面 / 在文件夹中打开」（FR-002B）
+   —— 它出现在两个地方：业务表的工具条、报告面板的按钮行。两处的按钮间距本来由父容器
+   （.toolbar / .report-bar）的 gap 管，这里只把「两个按钮是一组的」这件事在换行时保住。 */
+.desktop-actions { display: inline-flex; align-items: center; gap: 8px; flex: none; }

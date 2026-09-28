@@ -290,6 +290,17 @@ const API = (() => {
       return { blob, filename: filenameFrom(response.headers.get("content-disposition")) };
     },
 
+    // ── 导出直达桌面（FR-002B）─────────────────────────────────────────
+    // 「文件下载了但找不到/打不开」的真因是**文件掉在了别处**（下载目录被设成 D:\ 之类），
+    // 所以这里让服务端把同一份文件**直接写到桌面**，并能在资源管理器里定位它。
+    //
+    // 请求体里**没有路径**：写到哪儿由服务端决定（桌面目录走系统机制解析，见 app/desktop.py），
+    // 前端只说要哪一份导出（哪个表 / 哪次问答的报告 + 什么格式）。
+    // 存到桌面的是**同一份字节**：后端那条出口与浏览器下载共用同一个渲染函数。
+    saveExportToDesktop: (payload) => request("/api/exports/desktop", json(payload)),
+    // 「在文件夹中打开」只认刚刚生成的那个文件：这里只能带它的编号做校验，带不了路径。
+    revealExport: (exportId) => request("/api/exports/reveal", json({ export_id: exportId || null })),
+
     // ── 本地账号（注册 / 登录）─────────────────────────────────────────
     // 登录校验**在后端**做（密码的比对只发生在那里），这里只把账号与密码原样递过去。
     // 前端不存密码、不比密码、也不算任何摘要 —— session.js 拿到的只是"这次是谁"。

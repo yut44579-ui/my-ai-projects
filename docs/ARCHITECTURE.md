@@ -32,6 +32,7 @@
 | 数据管理 | 数据源上传、登记、检查（`inspect`）、导入（`import`） |
 | 账号能力 | 注册 / 登录 / **可选的管理员审批**（通过·拒绝·停用·恢复；默认不审批，见 D22）/ 游客模式 / **密码恢复**（恢复码自助重置 + 管理员一次性临时密码） |
 | 确定性报表 | 按 Report Spec 区间算数 → openpyxl 原地改模板 → 下载真实 xlsx |
+| 导出直达桌面 | 把一次导出（业务表 / 报告）**直接写到本机桌面** + 一键在资源管理器里定位；**仅限本机单用户部署**（见 6.2） |
 | 文档输入 | Word / PDF 上传 → 真实文本提取 + 规则化摘要 |
 
 ### 1.2 未来计划（**未实现**，全部集中在第 7 节）
@@ -102,6 +103,8 @@
 | `app/api_datasets.py` | 数据集与业务表端点：`/api/datasets*`、`/api/tables/{table}`（含 export） | ✅ 当前 |
 | `app/api_documents.py` | 文档端点：`/api/documents/*`（文本提取 / 摘要 / 下载） | ✅ 当前 |
 | `app/api_auth.py` | 账号端点：注册 / 登录 / 登出 / 查重 / 账号列表 / 审批 / 删除 / 验证码 | ✅ 当前 |
+| `app/api_exports.py` | 导出直达桌面端点：`/api/exports/desktop`（落盘）、`/api/exports/reveal`（资源管理器定位）；**请求体里没有路径字段** | ✅ 当前 |
+| `app/desktop.py` | 桌面落盘：桌面目录**走系统机制解析**（SHGetKnownFolderPath → 注册表 → SHGetFolderPath，都拿不到就报错）、文件名清洗、同名不覆盖、临时文件 + `os.replace` 原子写、`explorer /select` 定位 | ✅ 当前 |
 | `app/accounts.py` | 账号：PBKDF2 校验值存储、状态机、**模式开关（本机单用户 / 真实审批流）+ 启动迁移**、管理员审批、**内存会话**（含"临时密码登录 → 必须先改密"的会话标记与守卫） | ✅ 当前 |
 | `app/captcha.py` | 图形验证码（本机生成，零新依赖） | ✅ 当前 |
 | `app/challenge.py` | 「挑战」抽象层（FR-001A）：只认 `challenge_id`/`challenge_proof`，当前实现 = 图形验证码；FR-001B 的滑块接同一个口子 | ✅ 当前 |
@@ -130,7 +133,7 @@
 | `scripts/serve.py` | **唯一推荐的启动入口**（`workers=1` 写死在代码里） | ✅ 当前 |
 | `scripts/*_e2e.py` · `scripts/*_smoke.py` · `scripts/*_cdp.mjs` · `scripts/session_check.mjs` · `scripts/hermes_gate.py` | 端到端验证与门禁脚本（真 HTTP / 真浏览器 CDP / 真杀进程重启） | ✅ 当前 |
 | `scripts/auto_pipeline.py` | 无人值守的 TASK 流水线（Hermes 侧的自动化驱动器：派单 → 等完成 → 跑门禁 → 自动提交） | ✅ 当前 |
-| `tests/` | pytest：17 个测试文件 + `conftest.py` + `test_cases.json`（50 条测试集） | ✅ 当前 |
+| `tests/` | pytest：`conftest.py` + `test_cases.json`（50 条测试集）+ 各 TASK 的测试文件（全部用例数见 `docs/PROGRESS.md`） | ✅ 当前 |
 | `templates/weekly_sales_template.xlsx` | 报表样式模板（openpyxl 在它的副本上原地改） | ✅ 当前 |
 | `data/Online Retail.xlsx` | 冻结数据快照，541,909 行 × 8 列（SHA256 见 6.1） | ✅ 当前 |
 | `outputs/` · `state/` · `data/uploads/` · `data/.cache/` | 运行时目录（产出 / JSON 状态 / 上传件 / 解析缓存）—— 均已在 `.gitignore` 中，不随仓库分发 | ✅ 当前 |
@@ -287,6 +290,12 @@ data/Online Retail.xlsx
   它只回答"这台机器上这次登录的是谁"。
 - **业务端点目前没有完整的服务端权限控制**：对话、数据集、业务表、文档、执行等端点
   不做登录校验——因为当前定位是单机自用；这也意味着**前端 guard 是绕得过去的**。
+- **「写到桌面」只在本机单用户部署下成立**：服务端进程与用户桌面必须**同机、同 Windows 会话**
+  （本机自用就是这样：进程跑在用户自己机器上，127.0.0.1 访问）。它靠系统机制解析桌面目录，
+  因此 OneDrive 重定向、中文 Windows、改过桌面位置都能正确处理；但**一旦部署到别的机器**
+  （服务器 / 容器 / 多用户），这个"用户的桌面"就不存在了——那时必须停用这条能力，
+  换成"浏览器下载 + 用户自选位置"。响应里的 `deployment` 字段如实标注了这个前提。
+  这是**刻意不做成通用机制**的一条：通用 Web 应用没有"用户桌面"这个东西。
 
 ### 6.3 未实现
 

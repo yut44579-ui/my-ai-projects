@@ -17,6 +17,8 @@
 | TASK-STEP-C | 账号审批（管理员）+ 游客限制 + 登录页文案简化 | `app/accounts.py`（+`delete_account`）、`app/api_auth.py`（+`DELETE /api/auth/accounts/{u}`）、`app/repositories/{base,json_repo,json_store}.py`（+`remove`）、`app/state.py`（+`remove_account`）、`web/{session.js,app.js,api.js,index.html,style.css}`、`tests/{test_auth_admin.py,test_web_guest.py}`（新）、`scripts/{stepc_accounts_e2e.py,stepc_guest_cdp.mjs}`（新） | ① 硬证据一：真 uvicorn **杀掉再拉起**，注册过的账号照旧能登（`scripts/stepc_accounts_e2e.py` 34/34）；② 硬证据二：游客点受限入口，**网络请求次数一次都不涨**（真 Edge + CDP 数 `window.fetch`，55/55）；③ 四种「登不上」给四句不同的话；④ ⚠ 只出现在 9 个静态受限入口 + 动态生成的导出按钮上，别处为 0。详见 **D21** |
 | **FR-002A** | 本机单用户模式（注册即生效）+ 启动迁移 | `app/accounts.py`（+`require_approval` / `migrate_accounts`）、`app/api.py`（lifespan 最前面接迁移）、`app/api_auth.py`（注册文案）、`web/{session.js,index.html}`、`.env.example`、`README.md`、`docs/DECISIONS.md`（D22）、`tests/test_fr002a_local_mode.py`（新，18 条） | ✅ 完成：`SRA_REQUIRE_APPROVAL` 默认 0 = 注册即生效（第一个 admin / 其余 user，无需任何人批准）；置 1 才走审批流（原有审批逻辑一行未改）。启动迁移幂等、留痕、不改密码、不产生第二个 admin；死锁回归（有 pending、无可用 admin → 启动后可登录、不删库）走真启动路径。既有审批流测试 fixture 显式置 1（断言未动）。详见 **D22** |
 
+| **FR-002B** | 导出直达桌面 + 「期间」列日期序列号缺陷修复 | `app/desktop.py`（新）、`app/api_exports.py`（新）、`app/api.py`（+1 import / +1 include_router）、`app/api_chat.py`（抽出 `render_report_file` 供两条出口共用）、`app/datasets/{queries,export}.py`（日期缺陷）、`web/{api.js,app.js,style.css}`（两个按钮）、`docs/ARCHITECTURE.md`、`tests/{test_fr002b_desktop.py(新),test_chat.py}` | ✅ 完成：① 服务端把导出**直接写桌面**（桌面目录走系统机制解析，拿不到就明确报错，不写别处；同名不覆盖；原子写；请求体无路径字段）② `explorer /select` 定位**刚刚生成的那个文件**（非 Windows 明确 501）③ 「期间」列导出成真 datetime + `yyyy-mm-dd`（openpyxl 读回断言，修复前后：`40875/@` → `datetime/@`→`datetime/yyyy-mm-dd`）④ 老下载路径原样保留。全量 pytest 全绿（基线 616），engine 一行未动。细节见 `docs/PROGRESS.md` |
+
 ## 进行中 / 待办
 | ID | 任务 | 交付物 | 验收标准 |
 |---|---|---|---|

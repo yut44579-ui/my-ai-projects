@@ -105,8 +105,10 @@ def to_xlsx(payload: dict[str, Any]) -> bytes:
     for row_index, item in enumerate(payload["items"], start=2):
         for column_index, column in enumerate(columns, start=1):
             value = item.get(column["key"])
-            cell = sheet.cell(row=row_index, column=column_index, value=_excel_value(value))
-            number_format = _FORMAT_MAP.get(column.get("format", "text"))
+            column_format = column.get("format", "text")
+            cell = sheet.cell(row=row_index, column=column_index,
+                              value=_excel_value(value, column_format))
+            number_format = _FORMAT_MAP.get(column_format)
             if number_format:
                 cell.number_format = number_format
             if column.get("align") == "right":
@@ -120,13 +122,25 @@ def to_xlsx(payload: dict[str, Any]) -> bytes:
     return stream.getvalue()
 
 
-def _excel_value(value: Any) -> Any:
-    """Excel 单元格值：日期字符串 → datetime（否则 Excel 里是文本，排不了序）。"""
+def _excel_value(value: Any, fmt: str = "text") -> Any:
+    """Excel 单元格值：**列声明为 date/datetime** 时，把日期字符串转成真日期对象。
+
+    ★ 这里必须**跟着列的格式走**，不能见着像日期的字符串就转（FR-002B 的教训）：
+      上一版不看列的格式，只要字符串长得像 `YYYY-MM-DD` 就转成 datetime，而转出来的
+      单元格又挂着该列的 number_format —— 「期间」列当时声明的是文本（`@`），于是
+      Excel 拿到"日期序列号 + 文本格式"这对组合，单元格里显示的就是 `40875`
+      而不是 `2011-11-28`（用户实测反馈的那个缺陷）。
+
+      所以：`date` / `datetime` 列 → 转真日期（配 `yyyy-mm-dd` 格式，读写都是日期类型）；
+      其余列（文本/数字）→ **原样**，绝不把文本列偷偷变成日期。
+    """
+    if fmt not in ("date", "datetime"):
+        return value
     if isinstance(value, str) and len(value) >= 10 and value[4:5] == "-" and value[7:8] == "-":
         try:
             return _dt.datetime.fromisoformat(value)
         except ValueError:
-            return value
+            return value                       # 认不出来的原样写，不猜、不崩
     return value
 
 

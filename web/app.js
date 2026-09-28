@@ -1623,6 +1623,12 @@
       hint.textContent = `已开始下载：${item.filename || ""}`;
     });
     bar.appendChild(button);
+    // 「存到桌面」：同一份报告（同一个 conversation_id + 同一个格式），只是换个落点 ——
+    // 用户报的「生成得出 Word/Excel 却打不开」其实是文件掉在了别处，不是文件坏了。
+    bar.appendChild(desktopActions(
+      () => ({ source: "report", conversation_id: conversationId, format: picker.value }),
+      hint,
+    ));
     wrap.appendChild(bar);
     file.textContent = chosen().filename || doc.filename || "";
 
@@ -2329,6 +2335,12 @@
     toolbar.appendChild(field("每页", pageSizeSelect));
     toolbar.appendChild(exportXlsx);
     toolbar.appendChild(exportCsv);
+    // 存到桌面用的是**同一组查询条件**（exportParams），所以桌面上的那份与下载到的
+    // 那份是同一份内容；只是落点不同（用户的浏览器下载目录经常不在他以为的地方）。
+    toolbar.appendChild(desktopActions(
+      () => ({ source: "table", table: spec.table, format: "xlsx", ...exportParams() }),
+      statusLine,
+    ));
     root.appendChild(toolbar);
 
     // ── 时间范围提示条（越界时**立刻**出现，不等查询）────────────────────
@@ -2551,8 +2563,9 @@
       }
     };
 
-    panel.exportTo = async (format) => {
-      if (!allow("export")) return;               // 游客：请求根本不发出去
+    // 「当前条件」只在这里拼一次：**导出下载**与**存到桌面**用的是同一组条件
+    // （同一份数据、同一个筛选、同一个排序），两边不会各拼一套。
+    const exportParams = () => {
       const params = {
         search: panel.query.search,
         start: panel.elements.startInput.value,
@@ -2566,6 +2579,12 @@
         params.dimension = panel.elements.dimensionSelect.value;
         params.metric = panel.elements.metricSelect.value;
       }
+      return params;
+    };
+
+    panel.exportTo = async (format) => {
+      if (!allow("export")) return;               // 游客：请求根本不发出去
+      const params = exportParams();
       statusLine.textContent = "正在按当前条件生成导出文件…";
       try {
         const result = await API.exportTable(spec.table, params, format);
@@ -2658,6 +2677,69 @@
     exportCsv.addEventListener("click", () => panel.exportTo("csv"));
 
     return panel;
+  }
+
+  // ── 存到桌面 + 在文件夹中打开（FR-002B）──────────────────────────────
+  // 用户的原话：「生成得出 word/excel/markdown，但还是那个问题，**无法打开**。你帮我弄到桌面。」
+  // 查下来文件本身没坏（Excel 能正常加载），是**文件掉在了别的地方**（浏览器下载目录被设成了
+  // D:\ 根目录），所以这里让服务端把同一份文件**直接写到桌面**，再给一个定位入口。
+  //
+  // 前端在两件事上**没有权力**（这是刻意的）：
+  //   ① 写到哪儿：请求里不带任何路径，桌面目录由服务端按系统机制解析；
+  //   ② 打开哪个文件：只能带刚刚生成的编号，路径由服务端从它自己的记录里取。
+  // 文件内容也不是前端拼的 —— 后端那条出口与「下载」共用同一个渲染函数，两边同源。
+  function desktopActions(buildPayload, hintEl) {
+    const box = document.createElement("span");
+    box.className = "desktop-actions";
+    const say = (text) => { if (hintEl) hintEl.textContent = text; };
+
+    const save = button("存到桌面", "btn btn-sm");
+    guardMark(save, "export");                    // 游客：按钮带 ⚠，点了弹登录提示
+    save.addEventListener("click", async () => {
+      if (!allow("export")) return;               // 游客：请求根本不发出去
+      if (save.disabled) return;
+      save.disabled = true;
+      say("正在生成并写入桌面…");
+      try {
+        const record = await API.saveExportToDesktop(buildPayload());
+        say(`已存到桌面：${record.file_name}（${sizeText(record.bytes)}）`);
+        addReveal(record.export_id);              // 存成了才给「在文件夹中打开」
+      } catch (err) {
+        say(`存到桌面失败：${(err && err.message) || err}`);
+      } finally {
+        save.disabled = false;
+      }
+    });
+    box.appendChild(save);
+
+    function addReveal(exportId) {
+      if (box.querySelector(".desktop-reveal")) return;
+      const open = button("在文件夹中打开", "btn btn-sm desktop-reveal");
+      open.addEventListener("click", async () => {
+        if (!allow("export")) return;
+        if (open.disabled) return;
+        open.disabled = true;
+        try {
+          await API.revealExport(exportId);
+          say("已在资源管理器里选中那个文件。");
+        } catch (err) {
+          say(`打开文件夹失败：${(err && err.message) || err}`);
+        } finally {
+          open.disabled = false;
+        }
+      });
+      box.appendChild(open);
+    }
+
+    return box;
+  }
+
+  function sizeText(bytes) {
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value < 0) return "大小未知";
+    if (value < 1024) return `${value} 字节`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
   }
 
   function downloadBlob(filename, blob) {

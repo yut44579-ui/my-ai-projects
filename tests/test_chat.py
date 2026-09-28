@@ -892,6 +892,16 @@ def test_AC09_新端点与既有端点并存():
     }
     assert export_paths <= paths
 
+    # 导出直达桌面那次新增的 2 条（FR-002B）：把一次导出直接写到本机桌面 + 在资源管理器里定位它。
+    # 老的两条导出出口（业务表导出 / 报告下载）**一个字没改**，仍在下面那串冻结路径里 ——
+    # 新出口只是多开一条落盘通道，渲染复用同一条路径（落到桌面与下载到的字节相同）。
+    # 请求体里没有路径字段（`extra="forbid"`），"写到哪儿"只由服务端决定。
+    desktop_paths = {
+        "/api/exports/desktop",
+        "/api/exports/reveal",
+    }
+    assert desktop_paths <= paths
+
     # 本地账号那次新增的 3 条：注册 / 登录 / 注册页查重。
     # 它们是**本地单机自用级别**的账号能力（注册、密码校验值比对、账号名是否被占用），
     # 整个装在 app/api_auth.py 里，走新前缀 /api/auth —— 既有端点语义一个字没动。
@@ -921,10 +931,10 @@ def test_AC09_新端点与既有端点并存():
     assert auth_paths <= paths
 
     # 端点总清单**精确**钉死：TASK-004 许新增上面那 4 条、STEP A 许新增这 6 条、
-    # 报告导出许新增这 1 条、本地账号许新增这 3 条，
+    # 报告导出许新增这 1 条、本地账号许新增这 3 条、FR-002B 许新增这 2 条，
     # 其余路径（TASK-002C/002D 的 10 个 + TASK-003 的 4 个）必须原样还在。
     # 用集合相等而不是"包含若干条"：新增一条没申报的路径也会在这里被抓住。
-    assert paths - new_paths - stepa_paths - export_paths - auth_paths == {
+    assert paths - new_paths - stepa_paths - export_paths - auth_paths - desktop_paths == {
         "/api/upload", "/api/schema", "/api/execute", "/api/download/{execution_id}",
         "/api/executions", "/api/health",
         "/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/run",

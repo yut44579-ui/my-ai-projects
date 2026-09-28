@@ -126,6 +126,16 @@ PYTHONUTF8=1 .venv/Scripts/python.exe scripts/serve.py --port 9000
 - 接口文档：<http://127.0.0.1:8000/docs>
 - 健康检查：<http://127.0.0.1:8000/api/health>
 
+> **「存到桌面」这条能力有个前提：服务端与你的桌面必须同机、同一个 Windows 会话。**
+>
+> 界面上的「存到桌面 / 在文件夹中打开」是把导出文件**由服务端直接写到本机桌面**，
+> 桌面目录走系统机制解析（`SHGetKnownFolderPath` → 注册表 → `SHGetFolderPath`，
+> 见 `app/desktop.py`），因此 OneDrive 重定向、中文 Windows、改过桌面位置都能正确处理；
+> 解析不到时会**明确报错**，不会悄悄写到别处。
+> 这条能力**只在"本机自用"这个部署形态下成立**（进程跑在你自己机器上、127.0.0.1 访问）；
+> 一旦部署到服务器 / 容器 / 多用户环境，"用户的桌面"就不存在了，必须停用它。
+> 浏览器下载那条路**不受影响、照旧可用**（两条出口渲染的是同一份文件）。>
+
 > **★ 请用 `scripts/serve.py` 启动，不要直接用 `uvicorn app.api:app`。**
 >
 > 原因不是"多一层脚本"，而是 `serve.py` 里把 `workers=1` **写死在代码里**：
@@ -149,7 +159,7 @@ set PYTHONUTF8=1 && .venv\Scripts\python.exe -m pytest
 $env:PYTHONUTF8="1"; .venv\Scripts\python.exe -m pytest
 ```
 
-**当前基线：540 passed**（全新环境实测，见下节「可复现性说明」）。
+**当前基线：655 passed**（本机实测 10 分 27 秒；clean-room 复现链路见下节「可复现性说明」）。
 
 > **`PYTHONUTF8=1` 为什么必须加**：这不是测试的问题，是**中文 Windows 的 locale 问题**。
 > 有两个用例会真的起子进程（一个起 Python、一个起 node 跑 `web/session.js`），
@@ -222,8 +232,9 @@ PYTHONUTF8=1 .venv/Scripts/python.exe -m pytest tests/test_api.py -q
 ```
 sales-report-agent/
 ├── app/                     后端（FastAPI）
-│   ├── api*.py              各路由模块（api / api_auth / api_chat / api_datasets / api_documents）
+│   ├── api*.py              各路由模块（api / api_auth / api_chat / api_datasets / api_documents / api_exports）
 │   ├── accounts.py          本地账号：注册/登录/管理员审批（只存校验值，不存明文）
+│   ├── desktop.py           导出直达本机桌面（桌面目录走系统机制解析 + 原子写 + 防重名）
 │   ├── engine/              取数与计算（纯代码，可单测；数字的唯一来源）
 │   ├── spec/                需求 → 固化方案的规格层
 │   ├── datasets/            数据集登记与取数入口
@@ -268,7 +279,7 @@ git clone <本仓库> cr && cd cr          # 全新克隆（不含 .venv / state
 python -m venv .venv                    # 必须用 Python 3.11.x
 .venv/Scripts/python.exe -m pip install -r requirements.txt
 cp .env.example .env                    # 走一遍新人配置流程
-PYTHONUTF8=1 .venv/Scripts/python.exe -m pytest       # → 540 passed
+PYTHONUTF8=1 .venv/Scripts/python.exe -m pytest       # → 655 passed（当前基线）
 PYTHONUTF8=1 .venv/Scripts/python.exe scripts/serve.py
 # 另开一处访问：GET http://127.0.0.1:8000/api/health → 200
 ```
