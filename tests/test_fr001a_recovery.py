@@ -60,8 +60,14 @@ def isolated_state(tmp_path, monkeypatch):
     进程内状态是跨用例共享的模块级数据：验证码字典、挑战在册表、reset_token/ticket、
     登录失败计数、恢复失败计数、会话表、查重节流窗口。不清的话上一条用例留下的东西
     会把下一条带进"冷却 / 已用过 / 超频"，看起来像随机失败。
+
+    ★ FR-002A：本文件大量前置条件是"小李 = 后注册的普通账号 → 要管理员批准"，
+      所以显式打开真实审批流模式 `SRA_REQUIRE_APPROVAL=1`（默认模式下注册即生效，
+      不会产生 pending 账号，这些前置条件就不成立了）。**断言一条没改**，
+      只是把本文件被测的那条路显式选出来；本机单用户模式见 test_fr002a_local_mode.py。
     """
     monkeypatch.setenv("SRA_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv(accounts.ENV_REQUIRE_APPROVAL, "1")
     _clear_all()
     yield tmp_path / "state"
     _clear_all()

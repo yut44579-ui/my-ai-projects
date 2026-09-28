@@ -522,15 +522,26 @@ def test_登录成功把连续失败清零():
     assert accounts.lock_remaining(ACCOUNT) == 0
 
 
+def _make_loginable(username: str) -> None:
+    """把一个刚注册的账号变成"能登录"的状态。
+
+    FR-002A：默认（本机单用户模式）注册即生效，什么都不用做；
+    只有真实审批流模式（`SRA_REQUIRE_APPROVAL=1`）下它才是"待批准"，得管理员先批一下。
+    本文件没开那个开关，这一步是为"两种模式都跑得通"留的 —— 断言一行没动。
+    """
+    if accounts.state.get_account(username)["status"] == accounts.STATUS_PENDING:
+        accounts.review(username, accounts.REVIEW_APPROVE, actor=ACCOUNT)
+
+
 def test_冷却按账号记_不影响别的账号():
     """一个账号被锁，不该连累另一个账号 —— 冷却记的是**账号名**，不是"这台机器"。
 
-    本版起"第二个注册的账号是待批准"（只有第一个账号自动是管理员）——
-    所以这里先把它批了，否则它连"密码正确"都走不到，验不了冷却这件事。
+    第二个账号只有"能走到比密码那一步"才验得了冷却，所以这里先让它可用
+    （本机单用户模式下它本来就是可用的，见 `_make_loginable`）。
     """
     _register()                                    # 第一个 → 管理员、可用
-    _register(username="另一个账号")                # 第二个 → 待批准
-    accounts.review("另一个账号", accounts.REVIEW_APPROVE, actor=ACCOUNT)   # 管理员批一下
+    _register(username="另一个账号")
+    _make_loginable("另一个账号")
     for _ in range(accounts.MAX_ATTEMPTS):
         _login(password="wrong-password")
     assert accounts.lock_remaining(ACCOUNT) > 0

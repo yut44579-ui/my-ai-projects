@@ -100,6 +100,10 @@ def main() -> int:
 
     sandbox = tempfile.mkdtemp(prefix="sra_accounts_e2e_", dir=str(PROJECT_ROOT / "outputs"))
     env = dict(os.environ)
+    # ★ FR-002A：本脚本验的是**审批流**那一套（注册 → 待批准 → 管理员批准 → 能登），
+    # 所以显式打开审批模式。不设它时系统默认走"本机单用户：注册即生效、不需要审批"（D22）。
+    # 本机单用户模式自己的真服务端到端在 scripts/fr002a_local_mode_e2e.py。
+    env["SRA_REQUIRE_APPROVAL"] = "1"
     env["SRA_STATE_DIR"] = os.path.join(sandbox, "state")
     env["SRA_UPLOAD_DIR"] = os.path.join(sandbox, "uploads")
     env["SRA_OUTPUT_DIR"] = os.path.join(sandbox, "outputs")

@@ -4,7 +4,9 @@
 【端点清单（全是新增路径，与既有 12 个端点零交集）】
 ════════════════════════════════════════════════════════════════════════
     GET  /api/auth/captcha                 要一张图形验证码（SVG，2 分钟有效，用一次作废）
-    POST /api/auth/register                注册一个账号（重复 → 409；验证码必填；**注册后等管理员批**）
+    POST /api/auth/register                注册一个账号（重复 → 409；验证码必填）
+                                           ★ FR-002A：**默认本机单用户 = 注册即生效**；
+                                             只有 SRA_REQUIRE_APPROVAL=1（真实审批流）才 pending 待批
     POST /api/auth/login                   登录校验（密码不对 → 401；账号未获批 → 403 且三种情况三句话）
     POST /api/auth/logout                  退出登录（把服务端那条本机会话也清掉）
     GET  /api/auth/accounts/exists         注册页失焦查重 / 首次使用引导
@@ -282,15 +284,18 @@ def get_captcha() -> dict[str, Any]:
     return captcha.issue()
 
 
-@router.post("/register", summary="注册账号（注册后等管理员批准，不能直接登录）")
+@router.post("/register", summary="注册账号（默认本机单用户：注册即生效；审批流模式：待批准）")
 def register(payload: RegisterRequest) -> dict[str, Any]:
-    """注册一个账号，返回它的**状态**（`等待批准` / 第一个账号直接是管理员可用）。
+    """注册一个账号，返回它的**状态**（可用 `active` / 待批准 `pending`）。
 
     · 验证码不对/过期 → 400 + 人话
     · 账号重复 → 409 + 「这个账号已被注册」
     · 账号/密码形态不合格 → 400 + 人话
     · 响应里绝不含盐与校验值（见 app/accounts.py::public）
-    · **不再自动登录**：注册成功之后要等管理员批准（第一个账号除外，它自己就是管理员）
+    · ★ FR-002A：**要不要等审批由模式决定**（见 app/accounts.py 的 MODE 一节）——
+      默认（本机单用户）注册即生效，第一个账号是管理员、其余是可用普通账号；
+      `SRA_REQUIRE_APPROVAL=1`（真实审批流）才落在 pending 上等管理员批准。
+    · 无论哪种模式都**不自动登录**：注册只建账号，登录仍要单独走一次（验证码照旧）。
     """
     _check_captcha(payload)
     try:

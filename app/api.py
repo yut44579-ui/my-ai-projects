@@ -56,8 +56,9 @@ import json as _json
 import math
 import re
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, AsyncIterator, Literal, Sequence
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
@@ -296,14 +297,31 @@ class CreateTaskRequest(BaseModel):
 
 
 # ════════════════════════════════════════════════════════════════════════
+# 启动钩子（两件事，顺序固定）
+# ════════════════════════════════════════════════════════════════════════
+@asynccontextmanager
+async def _lifespan(_app: Any) -> AsyncIterator[None]:
+    """服务启动时按顺序做两件事：
+
+        ① **账号启动迁移**（FR-002A）：把历史上"注册完卡在 pending、又没人能批"
+           的账号解开。同步、很快（只读一个小 JSON、改几条记录），所以放在最前面；
+           失败**不拦服务**（见 app/accounts.py::migrate_accounts）。
+        ② 交给 prewarm 的 lifespan：起后台线程预热数据集 —— 那件事一个字没改，
+           仍然**不阻塞**应用就绪（详见 app/prewarm.py）。
+    """
+    accounts.migrate_accounts()
+    async with prewarm.lifespan(_app):
+        yield
+
+
+# ════════════════════════════════════════════════════════════════════════
 # FastAPI 应用
 # ════════════════════════════════════════════════════════════════════════
 app = FastAPI(
     title="sales-report-agent API",
     version=SERVICE_VERSION,
-    # 冷启动预热：启动时**后台**读一遍数据集（不阻塞就绪、不改任何端点形状）。
-    # 只做这一件事 —— 详见 app/prewarm.py 的说明。
-    lifespan=prewarm.lifespan,
+    # 启动：① 账号迁移（FR-002A）→ ② 后台预热数据集（不改任何端点形状）。
+    lifespan=_lifespan,
     description=(
         "销售报表自动化的最小闭环接口：上传 → 看字段 → 执行（算数+渲染）→ 下载真实 xlsx。\n\n"
         "任务层（TASK-002D）：固化任务 → 看冻结 Spec → 按任务执行 → 看执行历史。\n\n"

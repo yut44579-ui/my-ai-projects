@@ -39,6 +39,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import math
+import os
 import re
 import secrets
 import threading
@@ -51,11 +52,15 @@ PWD_ALGO = "pbkdf2_sha256"
 PWD_ITERATIONS = 200_000          # 2026 年的常规档位；单次比对约 0.1 秒，登录感知不到
 PWD_SALT_BYTES = 16               # 128 位随机盐
 
-# ── 账号状态机（**注册之后不能直接登录，要管理员批**）────────────────────────
+# ── 账号状态机（**注册之后能不能直接登录，看"模式"，不看账号名**）────────────
 #   pending   刚注册，等管理员批准           → 登录时明确说"正在等待批准"
 #   active    可登录
 #   rejected  管理员拒绝                     → 登录时明确说"未通过审批"
 #   disabled  批准过，后来被停用             → 登录时明确说"已被停用"
+#
+# ⚠️ `pending` 只出现在**真实审批流模式**（`SRA_REQUIRE_APPROVAL=1`）下；默认的
+#    本机单用户模式注册即 `active`（见下面 MODE 那一节）。`pending` 这个状态**保留不动** ——
+#    审批流的每一行代码、每一句话都还在，只是默认不走那条路。
 STATUS_PENDING = "pending"
 STATUS_ACTIVE = "active"
 STATUS_REJECTED = "rejected"
@@ -92,6 +97,38 @@ STATUS_ERROR_CODE = {
     STATUS_REJECTED: "account_rejected",
     STATUS_DISABLED: "account_disabled",
 }
+
+# ════════════════════════════════════════════════════════════════════════
+# 模式：本机单用户（默认）vs 真实审批流（FR-002A）
+# ════════════════════════════════════════════════════════════════════════
+# 要解决的问题（用户原话）：
+#     「我这边是管理员，你不要把我的账号以及密码，在正确的情况下或者注册的情况后，
+#      让我还要去通过审批。我找谁审批？**我自己弄的，我还要去找别人审批啊**」
+#
+# 做法：**要不要审批由模式决定**。不是再造一个"能绕过审批的管理员"，
+#      也不用 admin 这个名字 / IP / localhost / 浏览器 Cookie 去证明"你是本机所有者"
+#      —— 那些都不构成所有权证明，而且那样做等于又造了一套登录系统。
+#
+#     SRA_REQUIRE_APPROVAL 未设 / 空 / 0（**默认 = 本机单用户**）
+#           注册即生效：第一个账号 active+admin，其余 active+user —— 谁都不用批。
+#     SRA_REQUIRE_APPROVAL = 1（真实审批流）
+#           第一个账号仍是 active+admin（否则没人能按下"批准"），其余 pending，
+#           等一个已生效的管理员批准。
+#
+# 读法：**调用时现读**（不缓存），所以测试里 `monkeypatch.setenv` 就能切换模式 ——
+#      与项目里其它开关（`SRA_STATE_DIR` 等）同一套做法（见 tests/ 的隔离 fixture）。
+ENV_REQUIRE_APPROVAL = "SRA_REQUIRE_APPROVAL"
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def require_approval() -> bool:
+    """当前是不是**真实审批流**模式（未设 / 空 / 0 → False = 本机单用户）。
+
+    只认写得明白的值。没写、或者写了不认识的东西（例如手滑的 `ture`）一律按
+    **默认的本机单用户模式**走 —— 默认值就是"注册即生效"，
+    配置写错时用户照样进得去，而不是被一句看不懂的开关锁在门外。
+    """
+    return (os.environ.get(ENV_REQUIRE_APPROVAL) or "").strip().casefold() in _TRUTHY
 
 # ── 本机会话（登录后发一个编号，用来回答"这次管理动作是谁按的"）──────────────
 # ⚠️ 边界写清楚（不许被当成企业级令牌）：它在**内存**里、重启服务即全部失效、
@@ -493,9 +530,12 @@ def register(username: str, password: str, display_name: str | None = None) -> d
     重复账号 → AccountError("username_taken")（api_auth.py 映射成 409）。
     重复判断在落盘之前，且账号名大小写不敏感（"Tangyu" 与 "tangyu" 算同一个）。
 
-    ★ **注册之后不能直接登录**：新账号状态是 `pending`，等管理员批准。
-      唯一的例外是**第一个账号**（也是"系统里一个管理员都没有"的情况）：它直接是
-      `admin` + `active` —— 否则没人能按下"批准"，系统当场死锁。
+    ★ **注册完之后能不能直接登录，由模式决定**（见上面 MODE 那一节）：
+      · 本机单用户（默认）→ **注册即生效**：第一个账号 `admin`+`active`，
+        其余 `active`+`user` —— 不需要任何人批准；
+      · 真实审批流（`SRA_REQUIRE_APPROVAL=1`）→ 新账号 `pending`，等管理员批准。
+        唯一的例外仍然是**第一个账号**（"系统里一个管理员都没有"）：它直接是
+        `admin` + `active` —— 否则没人能按下"批准"，系统当场死锁。
     """
     name = validate_username(username)
     secret = password or ""
@@ -505,15 +545,23 @@ def register(username: str, password: str, display_name: str | None = None) -> d
         raise AccountError("username_taken", "这个账号已被注册，换一个吧。")
     validated = validate_password(secret)                # 校验通过后才算校验值（别白算）
     first_one = not any(record.get("role") == ROLE_ADMIN for record in state.list_accounts())
+    # 只有**真实审批流**模式下、且不是第一个账号，才落在 pending 上等批准
+    waiting = require_approval() and not first_one
+    if waiting:
+        reviewed_by = reviewed_at = None                 # 还没人批过
+    elif first_one:
+        reviewed_by, reviewed_at = "（系统：第一个注册的账号自动成为管理员）", state.now_iso()
+    else:
+        reviewed_by, reviewed_at = REVIEWED_BY_LOCAL_MODE, state.now_iso()
     record = {
         "username": name,
         "display_name": normalize_display_name(display_name, name),
-        "status": STATUS_ACTIVE if first_one else STATUS_PENDING,
+        "status": STATUS_PENDING if waiting else STATUS_ACTIVE,
         "role": ROLE_ADMIN if first_one else ROLE_USER,
         "created_at": state.now_iso(),
         "last_login_at": None,                           # 刚注册还没登录过
-        "reviewed_at": None,                             # 第一个账号不需要谁批
-        "reviewed_by": "（系统：第一个注册的账号自动成为管理员）" if first_one else None,
+        "reviewed_at": reviewed_at,
+        "reviewed_by": reviewed_by,
         **make_secret(validated),
     }
     return public(state.record_account(record))
@@ -528,6 +576,126 @@ def is_admin(record: dict | None) -> bool:
 def admin_count() -> int:
     """还有几个可用的管理员（用于"别把最后一个管理员停掉"这条保护）。"""
     return sum(1 for record in state.list_accounts() if is_admin(record))
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 启动迁移（FR-002A）：把历史上"卡在 pending、又没人能批"的账号解开
+# ════════════════════════════════════════════════════════════════════════
+# 真实发生过的事（用户实测复现）：
+#     库里已经有一个 active 的管理员（早期测试账号，密码用户不知道），
+#     用户在实例上注册的账号于是变成 `pending` —— **没有任何人能批准它**，
+#     用户被自己的系统锁在门外。
+#
+# 服务每次启动跑一次（幂等）。四条硬要求（评审冻结，一条都不许放宽）：
+#     · 幂等、可重复执行       —— 已经是 active 的账号一律跳过：不改字段、不刷 mtime、
+#                                不重复写审计（`set_account_status` 自己就"没变不写盘"）
+#     · 留痕                   —— 写进 `reviewed_by` / `reviewed_at`（沿用审批的那两个字段，
+#                                前端"账号管理"里直接看得见是迁移来的）
+#     · 不改密码 / 不删账号 / 不重置权限 —— 本函数**从头到尾没有碰过 pwd_\* 一个字节**
+#     · 不产生第二个 admin     —— 最多只提**一个**账号成 admin（规则②）；
+#                                只要库里已经有可用管理员，谁的角色都不会被改
+#
+# 两条规则：
+#     ① 库里已有可用 admin     → pending 升 active，role 保持 user
+#     ② 库里没有任何可用 admin → 最早的那个账号升 admin+active（否则连"谁批账号"都没人），
+#                                其余 pending 升 active
+# ⚠️ **真实审批流模式（SRA_REQUIRE_APPROVAL=1）下不替管理员按"批准"**：
+#     有可用管理员时迁移什么都不做（pending 本来就该等管理员批）；只有走到规则②
+#     ——"系统里一个可用管理员都没有"——才动手，因为那时不是"该不该批某人"，
+#     而是整个系统已经没人能批账号了（死锁）。
+REVIEWED_BY_MIGRATED = "（本机单用户模式：启动迁移自动激活）"
+REVIEWED_BY_BOOTSTRAP = "（启动迁移：系统里没有任何可用管理员，最早的账号自动成为管理员）"
+REVIEWED_BY_LOCAL_MODE = "（本机单用户模式：注册即生效，无需审批）"
+
+
+def _say(message: str) -> None:
+    """往启动日志写一行（**失败也不许抛**：stdout 编码/关闭都会让 print 炸）。"""
+    try:
+        print(message, flush=True)
+    except Exception:
+        pass
+
+
+def _oldest_first(records: list[dict]) -> list[dict]:
+    """按"谁先注册的"排（早的在前）—— 规则②里"最早的账号"就是指这个顺序。
+
+    `created_at` 是 ISO 字符串，直接比大小就是时间先后。万一手改的记录没有 created_at，
+    它按 "" 参与排序（排在所有带时间的记录前面），并列时看**记录在文件里的位置**：
+    账号文件是"新的在前"，所以位置越靠后 = 注册得越早。
+    """
+    indexed = sorted(enumerate(records),
+                     key=lambda pair: (str(pair[1].get("created_at") or ""), -pair[0]))
+    return [record for _, record in indexed]
+
+
+def migrate_accounts() -> dict:
+    """启动迁移（幂等）。返回一份**给人看**的报告 —— 只进启动日志，不进任何响应体。
+
+    读不出账号文件时**不迁移**并如实记下原因：迁移是来帮忙的，不是服务能起来的前提
+    （宁可维持现状，也不能让一次迁移把服务拦在门外）。
+    """
+    report: dict = {"scanned": 0, "activated": [], "promoted": None, "skipped": None,
+                    "approval_mode": require_approval(), "error": None, "changed": False}
+    try:
+        records = list(state.list_accounts())
+    except Exception as exc:                             # noqa: BLE001 —— 见 docstring
+        report["error"] = f"{type(exc).__name__}: {exc}"
+        _say(f"[账号迁移] 读账号表失败，本次不迁移（服务照常启动）：{report['error']}")
+        return report
+    report["scanned"] = len(records)
+    if not records:
+        return report
+
+    def name_of(record: dict) -> str:
+        return str(record.get("username") or "")
+
+    def status_of(record: dict) -> str:
+        # 老记录（这一版之前建的）没有 status → 当作可用 —— 与 login 同一口径
+        return str(record.get("status") or STATUS_ACTIVE)
+
+    def activate(record: dict) -> None:
+        name = name_of(record)
+        if name and state.set_account_status(name, STATUS_ACTIVE,
+                                             REVIEWED_BY_MIGRATED, state.now_iso()):
+            report["activated"].append(name)
+
+    pending = _oldest_first([r for r in records if status_of(r) == STATUS_PENDING])
+    promoted = None
+    if any(is_admin(r) for r in records):
+        # 规则①：有人能批账号 —— 只把 pending 收进本机单用户模式（真实审批流下不动）
+        if report["approval_mode"]:
+            report["skipped"] = "已有可用管理员：真实审批流模式下不自动激活（等管理员批）"
+    else:
+        # 规则②：一个可用管理员都没有 —— 必须捞出一个人，否则没人能批账号
+        # 优先"本来就写着 admin 的"记录（手改/老数据），这样不会多出一个 admin
+        existing_admin = _oldest_first([r for r in records if r.get("role") == ROLE_ADMIN])
+        usable = _oldest_first([r for r in records if status_of(r) in (STATUS_PENDING, STATUS_ACTIVE)])
+        target = (existing_admin or usable or [None])[0]
+        if target is None:
+            # 全是被拒绝 / 被停用的账号：那是有人按下的决定，迁移**不复活**它们（不猜）
+            report["skipped"] = "没有任何可用账号可以提成管理员（剩下的都是拒绝/停用状态）"
+        else:
+            promoted = name_of(target)
+            if target.get("role") == ROLE_ADMIN:
+                state.set_account_status(promoted, STATUS_ACTIVE,
+                                         REVIEWED_BY_BOOTSTRAP, state.now_iso())
+            else:
+                state.update_account_fields(promoted, {
+                    "role": ROLE_ADMIN, "status": STATUS_ACTIVE,
+                    "reviewed_by": REVIEWED_BY_BOOTSTRAP, "reviewed_at": state.now_iso()})
+            report["promoted"] = promoted
+
+    if not report["approval_mode"]:                      # 本机单用户：pending 一律收进来
+        for record in pending:
+            if name_of(record) != promoted:
+                activate(record)
+    report["changed"] = bool(report["activated"] or report["promoted"])
+    if report["changed"] or report["skipped"]:
+        _say(f"[账号迁移] 扫描 {report['scanned']} 个账号 → "
+             f"激活 {len(report['activated'])} 个{report['activated'] or ''}"
+             + (f"，提为管理员 {report['promoted']}" if report["promoted"] else "")
+             + (f"；未动：{report['skipped']}" if report["skipped"] else ""))
+    return report
 
 
 def require_admin(session_id: str | None) -> dict:
@@ -713,6 +881,10 @@ def account_count() -> int:
 __all__ = [
     "AccountError",
     "COOLDOWN_SECONDS",
+    "ENV_REQUIRE_APPROVAL",
+    "REVIEWED_BY_BOOTSTRAP",
+    "REVIEWED_BY_LOCAL_MODE",
+    "REVIEWED_BY_MIGRATED",
     "REVIEW_ACTIONS",
     "REVIEW_APPROVE",
     "REVIEW_DISABLE",
@@ -736,7 +908,9 @@ __all__ = [
     "is_admin",
     "list_accounts",
     "make_temp_password",
+    "migrate_accounts",
     "open_session",
+    "require_approval",
     "require_admin",
     "require_session",
     "require_session_any",

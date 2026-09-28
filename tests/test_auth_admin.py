@@ -48,8 +48,17 @@ MEMBER = "小李"
 
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
-    """账号表落临时目录（绝不碰仓库里的真实 state/），并清两处进程内状态。"""
+    """账号表落临时目录（绝不碰仓库里的真实 state/），并清两处进程内状态。
+
+    ★ FR-002A：本文件是**审批流**那一套（待批准 / 批准 / 拒绝 / 停用 / 权限），
+      所以显式打开真实审批流模式 `SRA_REQUIRE_APPROVAL=1` ——
+      不设这个变量时系统默认走"本机单用户：注册即生效、不需要审批"（见 D22），
+      那时"第二个账号待批准"这类前置条件根本不会出现。
+      **断言一条没改**，只是把本文件被测的那条路显式选出来。
+      （本机单用户模式自己的验收在 tests/test_fr002a_local_mode.py。）
+    """
     monkeypatch.setenv("SRA_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv(accounts.ENV_REQUIRE_APPROVAL, "1")
     captcha.reset()
     accounts.reset_failures()
     yield tmp_path / "state"
