@@ -197,6 +197,49 @@ if ENABLED:
     pd.read_excel = _cached_read_excel
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# ★ FR-003F：**全局测试隔离**（不是"某个测试文件记得隔离"，而是"谁都别想污染真实目录"）
+# ══════════════════════════════════════════════════════════════════════════
+# 为什么要有这一条：本项目**已经犯过这个错** —— e2e 把大量提问写进了真实的历史记录
+# （评审 §8 原文：「数据库使用独立测试路径，测试不得修改真实 SRA_STATE_DIR」，
+#   并点名"这是 Hermes 已经犯过的错（607 条测试污染）"）。
+# 之前每个测试文件各自 monkeypatch，**漏一个文件就是一个污染源**，而且漏不漏没人查。
+#
+# 所以这里改成**反向的默认值**：整个测试会话一开始就把六个路径指到临时目录，
+# 任何测试（包括将来新写的、忘了写隔离的）都跑不到真实 state/ 与真实 data/app.db。
+# 单个测试仍可用 monkeypatch.setenv 覆盖成自己更细的临时目录（那是缩小范围，不是放开）。
+#
+# ★ 只设**默认值**：已经有人在环境里显式指定的值不覆盖（尊重调用方的意图）。
+_ISOLATED_PATHS: dict[str, str] = {}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_sra_paths(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """把状态目录 / 数据库 / 各类落盘目录全部指到**会话级临时目录**。"""
+    root = tmp_path_factory.mktemp("sra_isolation")
+    defaults = {
+        "SRA_STATE_DIR": root / "state",
+        "SRA_UPLOAD_DIR": root / "uploads",
+        "SRA_DOC_DIR": root / "documents",
+        "SRA_OUTPUT_DIR": root / "outputs",
+        # FR-003B：物化库与原文件副本 —— 不隔离这一条，测试就会往真实的 data/app.db 里写
+        "SRA_DB_PATH": root / "app.db",
+        "SRA_ORIGINAL_DIR": root / "original",
+    }
+    for key, path in defaults.items():
+        if not os.environ.get(key):
+            os.environ[key] = str(path)
+        _ISOLATED_PATHS[key] = os.environ[key]
+    for path in (root / "state", root / "uploads", root / "documents", root / "original"):
+        path.mkdir(parents=True, exist_ok=True)
+    yield
+
+
+def isolated_paths() -> dict[str, str]:
+    """本会话实际用的隔离路径（给"证明没写真实目录"的测试当证据用）。"""
+    return dict(_ISOLATED_PATHS)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _report_speedup() -> None:
     """收尾打印缓存命中情况（给人看的证据，不是断言）。"""

@@ -70,8 +70,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import (accounts, api_auth, api_chat, api_datasets, api_documents, api_exports,
-                 prewarm, state)
+                 api_imports, prewarm, state)
 from app.engine import executor, loader, renderer
+from app.importer import db as importer_db
 from app.engine import metrics as engine_metrics
 from app.spec.models import (
     DEFAULT_TIMEZONE,
@@ -300,17 +301,33 @@ class CreateTaskRequest(BaseModel):
 # ════════════════════════════════════════════════════════════════════════
 # 启动钩子（两件事，顺序固定）
 # ════════════════════════════════════════════════════════════════════════
+def _ensure_import_schema() -> None:
+    """FR-003B：启动时幂等建好 SQLite 的表（`data/app.db`，或环境变量指到别处）。
+
+    · 幂等：`CREATE TABLE IF NOT EXISTS`，重复启动无副作用；
+    · 路径**在调用时**读 `SRA_DB_PATH` —— 测试靠改环境隔离，不需要重建模块；
+    · 失败**不拦服务**：导入能力起不来，不该把整个服务（问答/报表）拖下水，
+      原因打到启动日志里（`/api/health` 的响应形状是冻结契约，**不为这件事动它**）。
+    """
+    try:
+        importer_db.init_schema()
+    except Exception as exc:                            # noqa: BLE001 —— 见上，不拦服务
+        print(f"[导入] 初始化导入库失败（不影响问答/报表）：{exc!r}")
+
+
 @asynccontextmanager
 async def _lifespan(_app: Any) -> AsyncIterator[None]:
-    """服务启动时按顺序做两件事：
+    """服务启动时按顺序做三件事：
 
         ① **账号启动迁移**（FR-002A）：把历史上"注册完卡在 pending、又没人能批"
            的账号解开。同步、很快（只读一个小 JSON、改几条记录），所以放在最前面；
            失败**不拦服务**（见 app/accounts.py::migrate_accounts）。
-        ② 交给 prewarm 的 lifespan：起后台线程预热数据集 —— 那件事一个字没改，
+        ② **导入库建表**（FR-003B）：`data/app.db` 的七张表，幂等；失败同样不拦服务。
+        ③ 交给 prewarm 的 lifespan：起后台线程预热数据集 —— 那件事一个字没改，
            仍然**不阻塞**应用就绪（详见 app/prewarm.py）。
     """
     accounts.migrate_accounts()
+    _ensure_import_schema()
     async with prewarm.lifespan(_app):
         yield
 
@@ -1577,6 +1594,17 @@ app.include_router(api_auth.router)
 # 渲染复用同一条路径 —— 不存在"下载的是一版、桌面上的是另一版"。
 # 位置同样必须在 mount("/") **之前**。
 app.include_router(api_exports.router)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 统一导入 + 已物化数据源 + 地区维度（FR-003）—— 走**新路径** `/api/imports*` `/api/sources*`
+# ════════════════════════════════════════════════════════════════════════
+# 六种格式（Excel/CSV/Markdown/PPTX/Word/PDF）汇入**同一条**导入管道：
+# 解析 → 物化进 SQLite（data/app.db）→ 登记来源链路（source_file → import → dataset/document）。
+# 既有端点一个字没改：`/api/upload` 与 `/api/datasets/*` 照旧（它们是"引用式"登记，
+# 与这里的"已物化"是两种状态，两份列表各自的语义见 app/api_imports.py 顶部）。
+# 位置同样必须在 mount("/") **之前**。
+app.include_router(api_imports.router)
 
 
 # ════════════════════════════════════════════════════════════════════════

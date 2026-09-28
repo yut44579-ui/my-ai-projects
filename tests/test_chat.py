@@ -930,11 +930,30 @@ def test_AC09_新端点与既有端点并存():
     }
     assert auth_paths <= paths
 
+    # FR-003 统一导入那次新增的 8 条：预览 / 导入 / 导入记录 2 条 /
+    # 已物化数据源 2 条 / 地区维度可用性 / 按地区查询。
+    # 六种格式（Excel/CSV/Markdown/PPTX/Word/PDF）汇入同一条管道（解析 → 物化进 SQLite
+    # → 登记来源链路），整个装在 app/api_imports.py 里，走新前缀 /api/imports 与 /api/sources
+    # —— 既有端点语义一个字没动（`/api/upload` 与 `/api/datasets/*` 保持"引用式登记"不动）。
+    import_paths = {
+        "/api/imports/preview",
+        "/api/imports",
+        "/api/imports/documents/{document_id}",
+        "/api/imports/{import_id}",
+        "/api/sources",
+        "/api/sources/{dataset_id}",
+        "/api/sources/{dataset_id}/region",
+        "/api/sources/{dataset_id}/region/query",
+    }
+    assert import_paths <= paths
+
     # 端点总清单**精确**钉死：TASK-004 许新增上面那 4 条、STEP A 许新增这 6 条、
-    # 报告导出许新增这 1 条、本地账号许新增这 3 条、FR-002B 许新增这 2 条，
+    # 报告导出许新增这 1 条、本地账号许新增这 3 条、FR-002B 许新增这 2 条、
+    # FR-003 许新增这 8 条，
     # 其余路径（TASK-002C/002D 的 10 个 + TASK-003 的 4 个）必须原样还在。
     # 用集合相等而不是"包含若干条"：新增一条没申报的路径也会在这里被抓住。
-    assert paths - new_paths - stepa_paths - export_paths - auth_paths - desktop_paths == {
+    assert paths - new_paths - stepa_paths - export_paths - auth_paths - desktop_paths \
+        - import_paths == {
         "/api/upload", "/api/schema", "/api/execute", "/api/download/{execution_id}",
         "/api/executions", "/api/health",
         "/api/tasks", "/api/tasks/{task_id}", "/api/tasks/{task_id}/run",

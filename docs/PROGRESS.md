@@ -250,3 +250,57 @@ POST /api/exports/reveal    在资源管理器里定位**刚刚生成的那个�
 ### 没做的（如实记录）
 * 没有多账号下拉 / 账号列表 / 账号切换器（评审点名不许做）。
 * 没有「记住密码」的任何形态：密码框每次都从空的开始，本机存储里也没有它的位置。
+
+## 2026-09-29 · FR-003 多格式导入 + 地区维度（A→F 六个子任务）
+
+| 项 | 结果 |
+|---|---|
+| 用户原话 | ①「外部 Excel / PPT / Markdown 导入进来，真的存进数据库」②「地区维度……不要有国家这种」「各个地区的就行了」 |
+| 交付 | FR-003A 统一 Import/Source 模型 → B SQLite 物化+幂等+事务 → C 统一解析 → D 地区维度识别+确定性计算 → E API+UI → F 隔离与回归 |
+| 新增代码 | `app/importer/{__init__,models,db,normalize,regions,parsers,store,pipeline,frames,region_query}.py`、`app/api_imports.py`（9 个端点） |
+| 改动代码 | `app/api.py`（+1 import / +1 建表 / +1 include_router）、`web/{api.js,app.js,index.html}`（导入卡 + 已入库数据源卡 + 按地区卡）、`tests/conftest.py`（会话级路径隔离）、`tests/test_chat.py`（端点清单同步申报）、`requirements.txt`（+python-pptx） |
+| 新增测试 | `tests/{fr003_helpers,test_fr003a_sources,test_fr003b_materialize,test_fr003c_parsers,test_fr003d_regions,test_fr003e_api,test_fr003f_acceptance}.py` |
+| 真浏览器实测 | `scripts/fr003_import_cdp.mjs` **18/18**（真 Edge + CDP：真注册 → 真登录 → 真选文件 → 真点预览 → 真点导入 → 真点查看 → 表格数字 广东100/浙江200/江苏300） |
+| engine | `app/engine/**` **一行未动** |
+
+### 这条线的核心是三句话
+
+```
+① 一份文件只登记一次（按内容 SHA-256），一次导入尝试留一条审计记录（含失败）——
+   成功解析出来的东西，表格类落 dataset、资料类落 document，两种产物共享同一个 source_file_id。
+② SQLite 只是**放行的地方**，不是**算数的地方**：dataset_rows 里一行一条 JSON payload，
+   查询只允许 SELECT payload；SUM/GROUP BY 一个都不许写。算数仍然在 pandas 里，口径只有一份。
+③ 地区维度**从数据源本身认出来**：字段名 + 非空率 + 取值个数 + 文本形态四条同时成立才算；
+   名字里有「国家 / Country」的列**直接排除**。认不出来就明确报 DIMENSION_UNAVAILABLE ——
+   **绝不拿国家冒充地区，也绝不猜一个维度填上**。
+```
+
+### 走查时发现并修掉的两个真缺陷（都不是"测试环境问题"）
+
+1. **前端函数重名导致导入回执永远不显示**：`web/app.js` 里已经有一个
+   `renderImportResult(dataset)`（旧的"登记数据源"流程，写到 `#ds-import-result`）。
+   新写的那个同名函数被它**覆盖**（函数声明提升，后声明者胜），于是导入完成后回执区一片空白，
+   而且旧函数会把新接口的返回值当 dataset 读、往另一个框里画 undefined。
+   改名 `renderUnifiedImportResult` 后回执正常。
+   **这一条是浏览器走查抓出来的**：接口 200、数据入库、接口测试全绿 —— 只有真点一下才看得见。
+2. **`DOM.setFileInputFiles` 必须传绝对路径**：传相对路径时它**不报错也不抛异常**，
+   只是静默地什么都没设；于是点「预览」时页面读到空文件列表、**连请求都不发**
+   （服务端日志里一条 `POST /api/imports/preview` 都没有）。这个坑吃掉了很多排查时间，
+   已经写进探针注释里，免得下次再踩。
+
+### 走查脚本本身的形态（如实记录）
+
+`scripts/fr003_import_cdp.mjs` 的每一段（②③④⑤）都会**换一个全新的浏览器进程 + 全新 profile**
+再开始：实测"在同一份文档上连着做很多次操作之后，渲染进程会整体不再应答"（Runtime/Page 调用
+全部超时，连新开 WebSocket 也一样 —— 卡的是渲染进程不是连接）。所以每段开头重启浏览器、
+重新登录（验证码从页面上的 SVG 里读），再进「数据管理」。
+**这么做不削弱证据**：每段要断言的东西都存在服务端（导入记录 / 数据源 / 地区维度），
+换个进程读到的是同一份真相 —— 反而更接近"用户自己重新打开这个页面"。
+
+### 没做的（如实记录）
+
+* 地区**多级下钻**（省份 → 城市）没做；一次只按一个维度汇总。
+* 「按国家」这个维度**没删**（裁决只禁止它冒充地区），要删得单独提。
+* 导入**没有流式进度**，大文件时前端只有一句"正在导入"。
+* 一份 PPT 里的**图片/图表**不解析（只取文本框与表格）。
+* `state/` 与 `data/app.db` 全程未被触碰（实测：走查与全量测试跑完，两者 mtime 仍是 03:26 / 03:50）。

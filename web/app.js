@@ -55,6 +55,7 @@
     tablePanels: {},       // 表格面板实例（每张表一个，负责组装查询条件与渲染）
     inspect: null,         // 导入向导第 1 步的结果（文件类型/工作表/预览/字段映射）
     imported: null,        // 导入向导第 2 步的结果（登记出来的数据集）
+    sources: [],           // 已**入库**的数据源（FR-003：行已在库里，与上面的"已登记"不是一回事）
     menuOpen: false,
   };
 
@@ -264,7 +265,7 @@
       // 否则一条慢请求就能把"数据源"一直拖在"读取中"上（用户实测反馈的病灶就是它）。
       loadHealth().then(renderDatasourceChip).catch(renderDatasourceUnknown),
       loadTasks(), loadExecutions(), loadDocuments(),
-      loadConversations(), loadCapabilities(), loadDatasets(),
+      loadConversations(), loadCapabilities(), loadDatasets(), loadSources(),
     ]);
     const failed = results.find((item) => item.status === "rejected");
     if (failed) {
@@ -2880,6 +2881,292 @@
     }
   }
 
+  // ══════════════════════════════════════════════════════════════════════
+  // 统一导入（FR-003）+ 已入库数据源 + 按地区
+  //
+  // 三条边界（写在这里，免得以后被"顺手"改掉）：
+  //   ① 识别、解析、入库、算金额**全在服务端**；页面只把结果显示出来，一个数都不自己算。
+  //   ② 每份文件的成败**分开显示**（"3 份成功、1 份被拒"要看得见），不合并成一句"导入完成"。
+  //   ③ 「按地区」只在数据源**真的带地区字段**时才出现；没有就不显示这个入口。
+  // ══════════════════════════════════════════════════════════════════════
+  async function loadSources() {
+    const payload = await API.listSources({ limit: 100 });
+    state.sources = payload.sources || [];
+    renderSources();
+    renderRegionPicker();
+  }
+
+  function renderSources() {
+    const body = $("sources-body");
+    if (body) clear(body);
+    state.sources.forEach((source) => {
+      if (!body) return;
+      const row = document.createElement("tr");
+      cell(row, text(source.name));
+      cell(row, fmtInt(source.row_count)).className = "num";
+      cell(row, fmtInt(source.table_count)).className = "num";
+      cell(row, text(source.source_filename));
+      const regions = source.region_dimensions || [];
+      cell(row, regions.length
+        ? regions.map((item) => item.label || item.field).join(" / ")
+        : "无");
+      cell(row, fmtTime(source.materialized_at));
+      badge(row, "success", source.status_label || "已入库");
+      body.appendChild(row);
+    });
+    toggleEmpty("sources-empty", state.sources.length > 0);
+    const note = $("sources-note");
+    if (note) {
+      const withRegion = state.sources.filter((item) => item.has_region);
+      const parts = [`已入库 ${state.sources.length} 个数据源（行已存在本机库里，原始文件另存留底）。`];
+      if (withRegion.length) {
+        parts.push(`其中 ${withRegion.length} 个带地区字段，可以在下面「按地区」里看分布。`);
+      } else if (state.sources.length) {
+        parts.push("它们里面没有地区字段 —— 地区只能来自数据源本身，不用其它字段顶替。");
+      }
+      note.textContent = parts.join("");
+    }
+  }
+
+  function pickedImportFiles() {
+    const input = $("imp-file-input");
+    return input && input.files ? Array.from(input.files) : [];
+  }
+
+  async function previewImportFiles() {
+    if (!allow("import")) return;
+    const files = pickedImportFiles();
+    if (!files.length) {
+      status("imp-state", "请先选择要导入的文件。", "error");
+      return;
+    }
+    status("imp-state", `正在识别 ${files.length} 个文件（只读，不写入库）…`, "loading");
+    hide($("imp-result"));
+    try {
+      const payload = await API.previewImports(files);
+      renderImportPreview(payload);
+      status("imp-state",
+        `识别完成：${payload.ok_count} / ${payload.count} 个文件可以导入。`, "success");
+    } catch (err) {
+      hide($("imp-preview"));
+      status("imp-state", err.message, "error");
+    }
+  }
+
+  // 预览结果：**逐份文件**给出「格式 / 会落成什么 / 行数×列数 / 地区字段 / 说明」。
+  // "会落成什么"是这一屏最关键的一列 —— 一个 PPT 可能既是文档资料、又带来数据集。
+  function renderImportPreview(payload) {
+    const box = $("imp-preview");
+    if (!box) return;
+    clear(box);
+    (payload.results || []).forEach((item) => {
+      const card = document.createElement("div");
+      card.className = "field";
+      const head = document.createElement("p");
+      head.className = "field-label";
+      head.textContent = item.ok
+        ? `${item.filename} · ${item.source_type_label || ""}`
+        : `${item.filename} · 无法识别`;
+      card.appendChild(head);
+
+      if (!item.ok) {
+        const bad = document.createElement("p");
+        bad.className = "note";
+        bad.textContent = item.message || "这份文件没有被接受。";
+        card.appendChild(bad);
+        box.appendChild(card);
+        return;
+      }
+
+      const lands = [];
+      if (item.will_create_document) lands.push(`文档资料（${fmtInt(item.document_chars)} 字）`);
+      if (item.will_create_dataset) lands.push(`数据集（${fmtInt(item.table_count)} 张表）`);
+      const lines = [
+        `会落成：${lands.length ? lands.join(" + ") : "没有可用内容"}`,
+      ];
+      (item.tables || []).forEach((table) => {
+        lines.push(`${table.display_name}：${fmtInt(table.row_count)} 行 × ${fmtInt(table.column_count)} 列`);
+        const columns = (table.columns || [])
+          .map((column) => `${column.name}（${column.type_label}）`).join("、");
+        if (columns) lines.push(`字段：${columns}`);
+      });
+      const regions = item.region_dimensions || [];
+      lines.push(regions.length
+        ? `地区字段：${regions.map((hit) => hit.label || hit.field).join(" / ")}`
+        : "地区字段：无");
+      const detail = document.createElement("p");
+      detail.className = "note";
+      detail.textContent = lines.join("　·　");
+      card.appendChild(detail);
+      box.appendChild(card);
+    });
+    show(box);
+  }
+
+  async function runImportFiles() {
+    if (!allow("import")) return;
+    const files = pickedImportFiles();
+    if (!files.length) {
+      status("imp-state", "请先选择要导入的文件。", "error");
+      return;
+    }
+    status("imp-state", `正在导入 ${files.length} 个文件（会真正解析并入库）…`, "loading");
+    hide($("imp-preview"));
+    try {
+      const payload = await API.importFiles(files);
+      renderUnifiedImportResult(payload);
+      status("imp-state",
+        `导入完成：成功 ${payload.ok_count} 个，失败 ${payload.failed_count} 个。`,
+        payload.failed_count ? "error" : "success");
+      await loadSources().catch(() => {});
+    } catch (err) {
+      hide($("imp-result"));
+      status("imp-state", err.message, "error");
+    }
+  }
+
+  // ★ 名字里必须带 Unified：这个文件里**已经有一个** `renderImportResult(dataset)`（旧的
+  //   "登记数据源"流程，写到 #ds-import-result）。函数声明会被提升，同一声明作用域里
+  //   后声明的那个**直接覆盖**前面的 —— 重名的话这一段永远不会被调用，而且旧函数会把
+  //   新接口的返回值当 dataset 去读，往 #ds-import-result 里画一堆 undefined。
+  function renderUnifiedImportResult(payload) {
+    const box = $("imp-result");
+    if (!box) return;
+    clear(box);
+    (payload.results || []).forEach((item) => {
+      const card = document.createElement("div");
+      card.className = "field";
+      const head = document.createElement("p");
+      head.className = "field-label";
+      head.textContent = item.ok ? (item.summary_text || `${item.filename} 已导入`) : `${item.filename} 未导入`;
+      card.appendChild(head);
+
+      const lines = [];
+      if (item.ok) {
+        const datasets = item.datasets || [];
+        datasets.forEach((dataset) => {
+          lines.push(`「${dataset.name}」：${fmtInt(dataset.row_count)} 行，`
+            + `${fmtInt(dataset.table_count)} 张表，状态 ${dataset.status_label}`);
+          const regions = dataset.region_dimensions || [];
+          lines.push(regions.length
+            ? `地区字段：${regions.map((hit) => hit.label || hit.field).join(" / ")}`
+            : "地区字段：无");
+        });
+        (item.documents || []).forEach((doc) => {
+          lines.push(`文档资料「${doc.title || doc.filename}」：${fmtInt(doc.char_count)} 字`);
+        });
+        lines.push(item.original_kept ? "原始文件：已保留" : "原始文件：未保留");
+        if (item.idempotent) lines.push("这份文件之前已导入过，本次没有重复入库");
+      } else {
+        lines.push(item.message || "这份文件没有被导入。");
+        if (item.rejected) lines.push("这份文件没有被写入任何数据。");
+      }
+      const detail = document.createElement("p");
+      detail.className = "note";
+      detail.textContent = lines.join("　·　");
+      card.appendChild(detail);
+      box.appendChild(card);
+    });
+    show(box);
+  }
+
+  // ── 按地区 ────────────────────────────────────────────────────────────
+  // 只有**至少一个数据源带地区字段**时，这张卡才出现（没有就不显示这个入口）。
+  // 下拉框里也只列带地区字段的数据源 —— 点不出"这个数据源没有地区字段"这种死路。
+  function regionSources() {
+    return (state.sources || []).filter((item) => item.has_region);
+  }
+
+  function renderRegionPicker() {
+    const card = $("region-card");
+    const picker = $("region-source");
+    if (!card || !picker) return;
+    const usable = regionSources();
+    if (!usable.length) {
+      hide(card);
+      return;
+    }
+    const previous = picker.value;
+    clear(picker);
+    usable.forEach((source) => {
+      const option = document.createElement("option");
+      option.value = source.dataset_id;
+      option.textContent = source.name;
+      picker.appendChild(option);
+    });
+    if (previous && usable.some((item) => item.dataset_id === previous)) picker.value = previous;
+    renderRegionDimensions();
+    show(card);
+  }
+
+  function currentRegionSource() {
+    const picker = $("region-source");
+    const id = picker ? picker.value : "";
+    return regionSources().find((item) => item.dataset_id === id) || null;
+  }
+
+  function renderRegionDimensions() {
+    const select = $("region-dimension");
+    const source = currentRegionSource();
+    if (!select) return;
+    clear(select);
+    if (!source) return;
+    (source.region_dimensions || []).forEach((item) => {
+      const option = document.createElement("option");
+      // 值用后端认的维度键（region / province / city），显示用中文名
+      option.value = item.key || item.field;
+      option.textContent = `${item.label || item.field}（${item.dimension_label || ""}）`;
+      select.appendChild(option);
+    });
+    if ((source.region_dimensions || []).length > 1) {
+      status("region-state", "这个数据源有多个地区字段，请选择按哪一个看。", "");
+    } else {
+      status("region-state", "", "");
+    }
+  }
+
+  async function runRegionQuery() {
+    const source = currentRegionSource();
+    const select = $("region-dimension");
+    if (!source) return;
+    const params = select && select.value ? { dimension: select.value } : {};
+    status("region-state", "正在计算…", "loading");
+    try {
+      const payload = await API.querySourceRegion(source.dataset_id, params);
+      renderRegionRows(payload);
+      status("region-state", `已按「${payload.dimension.label}」汇总。`, "success");
+    } catch (err) {
+      hide($("region-table-wrap"));
+      status("region-state", err.message, "error");
+    }
+  }
+
+  function renderRegionRows(payload) {
+    const body = $("region-body");
+    if (body) clear(body);
+    const label = $("region-axis-label");
+    if (label) label.textContent = payload.dimension.label || "地区";
+    (payload.rows || []).forEach((row) => {
+      if (!body) return;
+      const tr = document.createElement("tr");
+      cell(tr, text(row.region));
+      cell(tr, fmtMoney(row.amount)).className = "num";
+      cell(tr, row.share === null || row.share === undefined
+        ? "—" : `${(row.share * 100).toFixed(2)}%`).className = "num";
+      body.appendChild(tr);
+    });
+    show($("region-table-wrap"));
+    const note = $("region-note");
+    if (note) {
+      const parts = [
+        `合计 ${fmtMoney(payload.total_amount)}${currencySymbol()}`,
+        `${fmtInt(payload.region_count)} 个${payload.dimension.label}`,
+      ];
+      (payload.notes || []).forEach((item) => parts.push(item));
+      note.textContent = parts.join("　·　");
+    }
+  }
+
   async function inspectDatasetFile() {
     if (!allow("import")) return;                 // 游客：文件连上传都不上传
     const input = $("ds-file-input");
@@ -3060,6 +3347,26 @@
     if (importButton) importButton.addEventListener("click", () => importDataset());
   }
 
+  function bindUnifiedImport() {
+    const previewButton = $("btn-imp-preview");
+    if (previewButton) previewButton.addEventListener("click", () => previewImportFiles());
+    const importButton = $("btn-imp-run");
+    if (importButton) importButton.addEventListener("click", () => runImportFiles());
+    // 选了新文件就把上一轮的预览/结果收起来 —— 屏幕上的东西必须对应**当前**选中的文件
+    const input = $("imp-file-input");
+    if (input) {
+      input.addEventListener("change", () => {
+        hide($("imp-preview"));
+        hide($("imp-result"));
+        status("imp-state", "文件已选择，请先「预览」看看会被识别成什么。", "");
+      });
+    }
+    const sourcePicker = $("region-source");
+    if (sourcePicker) sourcePicker.addEventListener("change", () => renderRegionDimensions());
+    const queryButton = $("btn-region-query");
+    if (queryButton) queryButton.addEventListener("click", () => runRegionQuery());
+  }
+
   // ══════════════════════════════════════════════════════════════════════
   // 启动
   // ══════════════════════════════════════════════════════════════════════
@@ -3074,6 +3381,7 @@
     bindReportShortcut();
     bindTablePanels();
     bindDatasetImport();
+    bindUnifiedImport();
     bindSettings();
     renderInertControls();
     await renderMetricOptions();

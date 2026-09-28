@@ -301,6 +301,39 @@ const API = (() => {
     // 「在文件夹中打开」只认刚刚生成的那个文件：这里只能带它的编号做校验，带不了路径。
     revealExport: (exportId) => request("/api/exports/reveal", json({ export_id: exportId || null })),
 
+    // ── 统一导入（FR-003：Excel / CSV / Markdown / PPT / Word / PDF）────
+    // 六种格式汇入**同一个入口**：后端按扩展名分流，前端不分。
+    // 「导入前预览」与「导入」用同一份文件：先看不写库，用户确认了才真的入库。
+    //
+    // 为什么文件用 FormData 的**同一个字段名重复 append**：FastAPI 的 `list[UploadFile]`
+    // 就是这么收多文件的（`files: list[UploadFile] = File(...)`）—— 一个文件一个同名条目。
+    previewImports(files) {
+      const form = new FormData();
+      Array.from(files || []).forEach((file) => form.append("files", file, file.name));
+      return request("/api/imports/preview", { method: "POST", body: form });
+    },
+    importFiles(files) {
+      const form = new FormData();
+      Array.from(files || []).forEach((file) => form.append("files", file, file.name));
+      return request("/api/imports", { method: "POST", body: form });
+    },
+    listImports: (params) => request(`/api/imports${query(params)}`),
+    getImport: (importId) => request(`/api/imports/${encodeURIComponent(importId)}`),
+    // 导入进来的文档正文（与 /api/documents/* 那条老管道是两份存储：这里是物化进库的那一份）
+    importedDocument: (documentId) => request(
+      `/api/imports/documents/${encodeURIComponent(documentId)}${query({ include_text: "true" })}`),
+
+    // ── 已物化数据源 + 地区维度（FR-003）──────────────────────────────
+    // 与 /api/datasets（已**登记**、分析未开通）是两份列表：这里是**已物化**（行已在库里）。
+    // 两边的语义差别写在 app/api_imports.py 顶部，页面上的文案也照实说。
+    listSources: (params) => request(`/api/sources${query(params)}`),
+    getSource: (datasetId) => request(`/api/sources/${encodeURIComponent(datasetId)}`),
+    // 这个数据源有没有地区字段（没有 → 页面**不显示**「按地区」，不是点了才说没有）
+    sourceRegion: (datasetId) => request(`/api/sources/${encodeURIComponent(datasetId)}/region`),
+    // 按地区的销售额：条件原样传给后端，聚合全部在服务端由确定性代码算（前端不参与计算）
+    querySourceRegion: (datasetId, params) => request(
+      `/api/sources/${encodeURIComponent(datasetId)}/region/query${query(params)}`),
+
     // ── 本地账号（注册 / 登录）─────────────────────────────────────────
     // 登录校验**在后端**做（密码的比对只发生在那里），这里只把账号与密码原样递过去。
     // 前端不存密码、不比密码、也不算任何摘要 —— session.js 拿到的只是"这次是谁"。

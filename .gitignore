@@ -7,6 +7,11 @@ outputs/
 # 运行期数据（TASK-002C 起产生）：不是源码，不该进版本库
 state/
 data/uploads/
+# FR-003 起：导入物化库（SQLite）。它是**运行时数据**，不是源码 ——
+# 里面装的是用户导入进去的表和资料，不该跟着仓库走；-wal/-shm 是它的伴生文件。
+data/app.db
+data/app.db-wal
+data/app.db-shm
 
 # 测试提速用的落盘缓存（tests/conftest.py 生成，可由数据文件重新生成）
 data/.cache/

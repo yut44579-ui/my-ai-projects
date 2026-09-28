@@ -41,6 +41,8 @@ RESTRICTED_ACTIONS = ("import", "export", "task", "accounts", "delete")
 # 页面上**带 ⚠**的受限入口（id）——正是这些、不多不少
 GUARDED_ELEMENT_IDS = (
     "menu-item-import",        # 顶栏菜单：导入数据
+    "btn-imp-preview",         # 数据管理：统一导入的「预览」（FR-003 新增，申报进清单）
+    "btn-imp-run",             # 数据管理：统一导入的「导入」（FR-003 新增，申报进清单）
     "btn-ds-inspect",          # 数据管理：上传并检查
     "btn-ds-import",           # 数据管理：确认导入
     "btn-upload",              # 旧报表链路：上传表格
@@ -50,6 +52,12 @@ GUARDED_ELEMENT_IDS = (
     "btn-download",            # 下载产出 xlsx
     "btn-accounts-locked",     # 系统设置：账号管理（非管理员看到的那块）
 )
+# ★ FR-003 新增两个（预览 / 导入）：它们属于用户点名的「不能用：导入数据」那一类，
+#   所以挂 `data-guard="import"`；这里同步申报，**不是**为了让它变绿而放宽断言 ——
+#   清单仍然是"正好相等"，多一个少一个都会红。
+#   顺带说明「按地区」那张卡里的 `btn-region-query` **故意不挂**：它是**只读**查询，
+#   与"游客能用：提问 / 看表格 / 看周报（只读浏览）"同类，挂上去就成了满屏 ⚠。
+#   `#imp-file-input`（选文件框）也不挂：它自己不下任何动作，动作在「预览/导入」两个按钮上。
 
 
 def read(name: str) -> str:

@@ -993,6 +993,75 @@
         <p class="note" id="datasets-note"></p>
       </div>
 
+      <!-- 统一导入（FR-003）：六种格式走**同一个入口**。
+           「预览」只读不写库；「导入」才真的解析 → 物化入库 → 留一份原文件。
+           每一步的结果都照实显示（哪份文件成了文档、哪份成了数据集、哪份被拒）。 -->
+      <div class="card">
+        <div class="card-head">
+          <h2>导入资料</h2>
+          <span class="muted-sm">Excel / CSV / Markdown / PPT / Word / PDF</span>
+        </div>
+        <div class="row">
+          <input id="imp-file-input" type="file" multiple
+                 accept=".xlsx,.xlsm,.csv,.md,.markdown,.pptx,.docx,.pdf">
+          <button id="btn-imp-preview" class="btn" data-guard="import">预览</button>
+          <button id="btn-imp-run" class="btn btn-primary" data-guard="import">导入</button>
+          <span class="muted-sm" id="imp-state">选择文件后先「预览」看看会被识别成什么，确认无误再「导入」。</span>
+        </div>
+        <div id="imp-preview" hidden></div>
+        <div id="imp-result" hidden></div>
+      </div>
+
+      <!-- 已入库数据源（FR-003B）：与上面那份「数据源」列表语义不同 ——
+           那边的数据还在原文件里（引用式登记、分析未开通），这里的行**已经在库里**。
+           两块都保留，各自照实标注状态，不合并成一句含糊的「导入成功」。 -->
+      <div class="card">
+        <div class="card-head">
+          <h2>已入库数据源</h2>
+          <span class="muted-sm">行已存入本机库，可直接参与计算；原始文件另存一份留底</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr>
+              <th>数据源</th><th class="num">行数</th><th class="num">表数</th>
+              <th>来源文件</th><th>地区字段</th><th>入库时间</th><th>状态</th>
+            </tr></thead>
+            <tbody id="sources-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="sources-empty">
+          <div class="empty-ico">⛁</div>
+          <div class="empty-title">还没有已入库的数据源</div>
+          <div class="empty-hint">用上面的「导入资料」导入一份带数据的文件，它会出现在这里。</div>
+        </div>
+        <p class="note" id="sources-note"></p>
+      </div>
+
+      <!-- 按地区（FR-003D）：**只有数据源本身带地区字段时才出现**。
+           「地区」不是一个渠道或门店之类的组织维度，也不拿国家顶替 ——
+           没有地区字段的数据源不会出现在这个下拉框里（页面上不存在点了才说没有的入口）。 -->
+      <div class="card" id="region-card" hidden>
+        <div class="card-head">
+          <h2>按地区</h2>
+          <span class="muted-sm">地区字段来自数据源本身；金额按同一套口径由服务端计算</span>
+        </div>
+        <div class="row">
+          <label class="field">数据源<select id="region-source"></select></label>
+          <label class="field">地区<select id="region-dimension"></select></label>
+          <button id="btn-region-query" class="btn btn-primary">查看</button>
+          <span class="muted-sm" id="region-state"></span>
+        </div>
+        <div class="table-wrap" id="region-table-wrap" hidden>
+          <table class="table">
+            <thead><tr>
+              <th id="region-axis-label">地区</th><th class="num">销售额</th><th class="num">占比</th>
+            </tr></thead>
+            <tbody id="region-body"></tbody>
+          </table>
+        </div>
+        <p class="note" id="region-note"></p>
+      </div>
+
       <div class="card">
         <div class="card-head">
           <h2>导入数据</h2>

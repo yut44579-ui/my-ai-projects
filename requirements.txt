@@ -43,6 +43,11 @@ openai==3.19.0            # LLM SDK（DeepSeek 走 OpenAI 兼容协议，app/ai/
 python-dotenv==1.2.3      # 读项目根 `.env`（app/ai/llm.py::load_env）
 python-docx==1.2.0        # Word 输入/导出（app/api_documents.py）
 pypdf==6.19.0             # PDF 输入（app/api_documents.py）
+# FR-003 新增（评审 #2 批准"有条件新增"）：PPTX 解析（app/importer/parsers.py）。
+# 评审明确否决了"自己用 zipfile + XML 解析 PPTX"这条路：文本框/表格/合并单元格/异常文件
+# 会变成隐性维护成本。**只允许这一个新依赖** —— 不许为了 PPT 顺带引入
+# OCR / LibreOffice / Pandoc / Office COM / Java / 浏览器运行时（这条是红线）。
+python-pptx==1.0.2        # PPTX 正文与表格（app/importer/parsers.py::_parse_pptx）
 
 
 # ── runtime transitive (pinned for reproducibility) ────────────────────
@@ -59,6 +64,12 @@ python-dateutil==2.9.0.post0  # pandas 解析 InvoiceDate 用的日期库
 #   它是"运行时能力依赖"而不是"源码依赖"，所以 `pip freeze` 之外的清单最容易漏掉它。
 #   删掉症状：上传接口抛 RuntimeError("Form data requires 'python-multipart'")。
 python-multipart==0.0.32
+# ★ python-pptx 的两条硬依赖：一个读 OOXML 的 XML（lxml）、一个读 PPT 里的图片（Pillow）。
+#   它们不是"我们选的"，但版本换大号会影响解析行为（lxml 的解析宽容度、Pillow 的解码路径），
+#   所以照钉（理由与上面几条传递依赖相同）。（python-pptx 还声明了 XlsxWriter，
+#   只在写图表时用到，本 TASK 不生成 PPT，交给解析器自己拉。）
+lxml==6.1.3               # python-pptx 的 XML 解析后端
+Pillow==12.3.0            # python-pptx 的图片处理后端
 
 
 # ── dev / test ─────────────────────────────────────────────────────────
