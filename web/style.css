@@ -944,6 +944,14 @@ body.is-locked .app { display: none; }
 .pwd-eye.is-shown .eye-off { display: block; }
 .login-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); cursor: pointer; }
+/* 记住账号那一行（FR-002C）：只在"已经记着账号"时出现 —— 说明记的是谁 + 一个「清除」。
+   用了 flex，所以要自己把 [hidden] 收回去（否则 hidden 属性会被 display:flex 顶掉）。 */
+.remember-note {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 8px 0 0; font-size: 11px; color: var(--text-3);
+}
+.remember-note[hidden] { display: none; }
+.remember-who { color: var(--text-2); font-weight: 600; }
 .link-btn {
   background: none; border: 0; padding: 0; cursor: pointer;
   color: var(--td-brand-color-9); font-size: 12px;

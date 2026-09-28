@@ -129,6 +129,13 @@
           <label class="check"><input type="checkbox" id="login-remember"> 记住账号</label>
           <button class="link-btn" id="link-forgot" type="button">忘记密码？</button>
         </div>
+        <!-- 记住账号（FR-002C）：勾了才记**账号名**，只记最近 1 个，密码连碰都不碰。
+             已经记着的时候才亮出这一行 —— 记的是谁看得见，点「清除」就能真的清掉，
+             不用去翻浏览器设置。冻结原则：记住账号 ≠ 记住登录状态 ≠ 记住密码。 -->
+        <p class="remember-note" id="remember-note" hidden>
+          已记住账号 <span class="remember-who" id="remember-who"></span>
+          <button class="link-btn" id="btn-forget-account" type="button">清除</button>
+        </p>
         <button class="btn btn-primary login-submit" id="btn-login" type="submit">
           <span class="spinner" id="login-spinner" hidden></span>
           <span>登 录</span>

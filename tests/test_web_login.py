@@ -38,6 +38,8 @@ WEB_DIR = PROJECT_ROOT / "web"
 
 LOGIN_IDS = ("login-gate", "login-form", "login-name", "login-pwd", "btn-login",
              "login-name-msg", "login-pwd-msg", "btn-pwd-eye", "login-remember",
+             # FR-002C 记住账号：记的是谁看得见 + 一个点得到的「清除」
+             "remember-note", "remember-who", "btn-forget-account",
              "ltab-account", "ltab-guest", "btn-guest", "guest-pane", "guest-name",
              "link-forgot", "link-register", "toast",
              # 图形验证码（登录一张、注册一张：输入框 + 图 + 出错提示）

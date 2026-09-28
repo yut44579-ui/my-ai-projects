@@ -191,6 +191,50 @@ window.Session = (() => {
     } catch (err) { /* 同上：记不住只是下次要重填，不是错误 */ }
   }
 
+  // ── 记住账号（FR-002C）──────────────────────────────────────────────────
+  // ★ 冻结原则：**记住账号 ≠ 记住登录状态 ≠ 记住密码**。
+  // 这一段从头到尾只动 NAME_KEY 这一个键，讲的只有"最近那一个账号名"这一件事：
+  //   · 不存密码 —— 连这样的字段都没有，密码框永远不预填；
+  //   · 不存令牌、不存会话 —— 那是 WHO_KEY 与后端会话的事，与本段无关；
+  //   · 不因为有记住的账号就自动进来 —— 每次打开页面照样要登录一次。
+  const FORGET_TOAST = "已清除记住的账号。下次登录要重新填写账号名。";
+
+  // "记住账号"那一行只在**真的记着**的时候出现：记的是哪一个看得见，点「清除」就能真的清掉，
+  // 不用去翻浏览器设置。没记着的时候它整个收起来（不留一行空话）。
+  function renderRememberNote() {
+    const name = rememberedName();
+    setText("remember-who", name);
+    const note = $("remember-note");
+    if (note) note.hidden = !name;
+  }
+
+  // 页面打开（或退出登录回到登录页）时，把这一块对回**本机实际记着的**样子：
+  // 有 → 账号框预填 + 勾选框勾上 + 亮出「清除」；没有 → 三样都不给。
+  function applyRemembered() {
+    const name = rememberedName();
+    const nameInput = $("login-name");
+    const rememberBox = $("login-remember");
+    if (nameInput) nameInput.value = name;
+    if (rememberBox) rememberBox.checked = !!name;
+    renderRememberNote();
+  }
+
+  // 「清除已记住账号」：把这条记录**真的删掉**（不是只把框子擦干净），并立刻让界面回到
+  // "什么都没记"的样子 —— 账号框也清空，否则名字还在框里，用户会以为没清掉。
+  // 密码本来就没存，无事可清。
+  function forgetAccount() {
+    rememberName("");
+    const nameInput = $("login-name");
+    if (nameInput) {
+      nameInput.value = "";
+      if (nameInput.focus) nameInput.focus();
+    }
+    const rememberBox = $("login-remember");
+    if (rememberBox) rememberBox.checked = false;
+    renderRememberNote();
+    toast(FORGET_TOAST, "ok");
+  }
+
   // ══════════════════════════════════════════════════════════════════════
   // 状态机
   // ══════════════════════════════════════════════════════════════════════
@@ -769,7 +813,10 @@ window.Session = (() => {
       return;
     }
     const remember = $("login-remember");
+    // 勾了 → 记下这个账号名；没勾 → 不保存，并把上一次记住的也清掉（FR-002C B4）。
+    // 只记账号名这一件事：密码、令牌、会话一概不碰（见上面那条冻结原则）。
     rememberName(remember && remember.checked ? checked.name : "");
+    renderRememberNote();
     if (button) button.disabled = false;
     hide(spinner);
     const who = (account && account.username) || checked.name;
@@ -1233,6 +1280,7 @@ window.Session = (() => {
     renderGuestMode();
     applyGuards();                       // 记号只在游客态出现；退出后一个都不该留
     refreshGuestName();
+    applyRemembered();                   // 回到登录页：记着的账号照样预填 + 勾上（与本页刷新同一条路）
     if (typeof document !== "undefined" && document.dispatchEvent) {
       document.dispatchEvent(new CustomEvent("sra:identity", { detail: identity() }));
     }
@@ -1377,6 +1425,19 @@ window.Session = (() => {
     // 没有恢复码的账号走管理员临时密码那条（见帮助「七、忘记密码怎么办」）。
     const forgot = $("link-forgot");
     if (forgot) forgot.addEventListener("click", () => openReset());
+
+    // 「清除已记住账号」（FR-002C）：点一下是真的删掉那条记录（不是只擦干净输入框）。
+    const forgetAccountButton = $("btn-forget-account");
+    if (forgetAccountButton) forgetAccountButton.addEventListener("click", forgetAccount);
+    // 把勾摘掉 = "别记了"：立刻把上一次记住的账号也一起清掉，不用等到下次登录才生效。
+    const rememberToggle = $("login-remember");
+    if (rememberToggle) {
+      rememberToggle.addEventListener("change", () => {
+        if (rememberToggle.checked) return;
+        rememberName("");
+        renderRememberNote();
+      });
+    }
     // 找回流程里的四个按钮 + 一个返回
     const resetBindings = [
       ["btn-reset-step1", submitResetStep1],
@@ -1594,13 +1655,9 @@ window.Session = (() => {
     resetForm();
     refreshGuestName();
 
-    const remembered = rememberedName();
-    const nameInput = $("login-name");
-    const rememberBox = $("login-remember");
-    if (remembered && nameInput) {
-      nameInput.value = remembered;
-      if (rememberBox) rememberBox.checked = true;
-    }
+    // 记住账号（FR-002C B2/B3）：记着名字就预填账号框、勾选框一起勾上，并亮出「清除」。
+    // 只预填**账号名**这一个框 —— 密码框永远是空的（冻结原则：记住账号 ≠ 记住密码）。
+    applyRemembered();
     loadFacts();
     loadAccountHint();                          // 一个账号都没有 → 亮出"先注册一个"
     loadCaptcha("account");                     // 两张验证码图各取一张（登录 / 注册）
