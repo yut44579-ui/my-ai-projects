@@ -109,6 +109,11 @@ PRODUCT_COLUMNS: tuple[dict[str, Any], ...] = (
     _column("return_quantity", "退货数量", "qty", "right"),
 )
 
+# 销售表第一列是**维度轴**：列名必须跟着维度走（按国家看时那一格是 United Kingdom，
+# 却写着「期间」就是错的 —— 列名写死过一版，实测抓到）。**只换 label，key 恒为
+# dimension_value**（前端按这个 key 取数，不许动）。
+SALES_AXIS_LABELS: dict[str, str] = {"day": "期间", "week": "周", "country": "国家"}
+
 SALES_COLUMNS: tuple[dict[str, Any], ...] = (
     _column("dimension_value", "期间", "text"),
     _column("sales_amount", "销售额", "money", "right"),
@@ -139,6 +144,19 @@ _TABLE_COLUMNS: dict[str, tuple[dict[str, Any], ...]] = {
     TABLE_SALES: SALES_COLUMNS,
     TABLE_RAW: RAW_COLUMNS,
 }
+
+
+def _sales_columns(dimension: str) -> tuple[dict[str, Any], ...]:
+    """销售表的列定义：把第一列的 label 换成该维度的轴名，其余列与顺序原样不动。
+
+    维度取不到已知值时退回「期间」（与 SALES_DIMENSIONS 的默认维度一致）——
+    宁可给一个通称，也不会摆出一个和这一列数据不符的名字。
+    """
+    axis = SALES_AXIS_LABELS.get(dimension, SALES_AXIS_LABELS["day"])
+    return tuple(
+        {**column, "label": axis} if column["key"] == "dimension_value" else column
+        for column in SALES_COLUMNS
+    )
 
 # 可排序键（**只认这些**：别的键直接报错，不猜用户想排哪一列）
 _SORT_KEYS: dict[str, tuple[str, ...]] = {
@@ -635,6 +653,9 @@ def fetch_table(
     )
     query = {"search": search, "sort": sort_key, "order": sort_order}
 
+    # 销售表的列名要按维度定（下面选中哪个维度，第一列就叫什么）
+    axis_dimension: str | None = None
+
     if table == TABLE_CUSTOMERS:
         frame, extra = _customer_query(_customer_frame(key[0], low, high), query)
     elif table == TABLE_PRODUCTS:
@@ -650,10 +671,11 @@ def fetch_table(
             _sales_frame(key[0], low, high, chosen_dimension, chosen_metric), query,
             chosen_dimension, chosen_metric,
         )
+        axis_dimension = chosen_dimension
     else:
         frame, extra = _raw_query(_raw_frame(low, high), query, low, high)
 
-    columns = _TABLE_COLUMNS[table]
+    columns = _sales_columns(axis_dimension) if axis_dimension else _TABLE_COLUMNS[table]
     total_rows = int(len(frame))
     if export:
         if total_rows > MAX_EXPORT_ROWS:
@@ -731,6 +753,7 @@ __all__ = [
     "MAX_EXPORT_ROWS",
     "PAGE_SIZES",
     "QueryError",
+    "SALES_AXIS_LABELS",
     "SALES_DIMENSIONS",
     "SALES_DIMENSION_LABELS",
     "SALES_METRICS",

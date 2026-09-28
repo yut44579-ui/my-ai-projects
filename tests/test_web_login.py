@@ -181,14 +181,14 @@ def test_B01_登录表单是账号形态而不是填姓名() -> None:
     assert "记住账号" in html and "记住我" not in html, "「记住我（只记名字）」没改成「记住账号」"
     assert "登 录" in html and "进入系统" not in html, "主按钮不是 QQ 那种「登 录」"
     assert "忘记密码" in html and "注册账号" in html, "底部少了忘记密码 / 注册账号"
-    assert "登录后即可开始分析" in html and "填个名字" not in html, "副标题还是「填个名字就能进」"
-    assert "登录后即可开始分析" in js, "切标签时的副标题没跟着改"
+    assert "登录后使用完整功能" in html and "填个名字" not in html, "副标题还是「填个名字就能进」"
+    assert "登录后使用完整功能" in js, "切标签时的副标题没跟着改"
     # 记住账号存的是账号本身，键名沿用旧写法（老用户的「记住」不会丢）
     assert "sra.remembered-name" in js
     # 游客那一栏说清"不留身份、退出后名字会变"
     assert "不留身份" in html and "不留身份" in js
     # 登录后右上角的口径也是账号，不再叫姓名；而且要跟上"账号是本机注册的、登录时对过密码"
-    assert "账号（本机注册的账号，登录时对过密码）" in js, "用户区身份说明没跟上账号已经是真的"
+    assert "账号（本机注册，登录时已校验密码）" in js, "用户区身份说明没跟上账号已经是真的"
     assert "名字由你自己填" not in js
     # 还没做的入口给人话提示，且说清是"尚未开通"而不是做成点不动的死按钮
     # （"该功能尚未开通"这句话现在只剩「个人设置」那一栏在用 —— 帮助/隐私已经是真内容了）
@@ -418,8 +418,8 @@ def test_B05_登录页每个入口点了都有反应_且不留假按钮() -> Non
     # 忘记密码：说真话，且不承诺发邮件
     forgot = re.search(r'const forgot = \$\("link-forgot"\);(.*?)\);', js, re.S)
     assert forgot, "找不到「忘记密码」的处理"
-    assert "没法找回" in forgot.group(1), "「忘记密码」没说清本机找不回"
-    assert "注册一个新账号" in forgot.group(1) and "游客" in forgot.group(1),         "「忘记密码」没给出能走的两条路"
+    assert "无法找回" in forgot.group(1), "「忘记密码」没说清本机找不回"
+    assert "注册新账号" in forgot.group(1) and "游客" in forgot.group(1),         "「忘记密码」没给出能走的两条路"
     for fake in ("发送邮件", "重置邮件", "验证码"):
         assert fake not in forgot.group(1), f"「忘记密码」在承诺做不到的事：{fake}"
     # 个人设置：确实没做，就如实说"尚未开通"
@@ -440,8 +440,8 @@ def test_B14_登录页有验证码且能点击换图() -> None:
         block = re.search(rf'<div class="captcha-row">.*?</div>', html, re.S)
         assert block, "找不到验证码那一行的结构"
         assert f'maxlength="4"' in html
-        assert f'alt="验证码图片，点一下换一张"' in html, "验证码图缺无障碍说明"
-        assert f'aria-label="验证码图片，点一下换一张"' in html
+        assert f'alt="验证码图片，可点击更换"' in html, "验证码图缺无障碍说明"
+        assert f'aria-label="验证码图片，可点击更换"' in html
     # 图片的地址由页面逻辑填（从后端拿图），点一下换一张
     assert "loadCaptcha" in js and 'data:image/svg+xml' in js
     assert "img.src" in js
@@ -449,8 +449,8 @@ def test_B14_登录页有验证码且能点击换图() -> None:
     # 提交时把"图 + 用户填的字"一起发出去
     assert "captchaPayload" in js and "captcha_id" in js and "captcha_text" in js
     # 三种验证码错法各有各的人话（用户要知道下一步干什么）
-    for message in ("验证码不对，请重新输入。", "验证码已过期，已帮你换一张。",
-                    "请填一下图上的 4 个字符。"):
+    for message in ("验证码不对，请重新输入。", "验证码已过期，已自动更换一张。",
+                    "请输入图中的 4 个字符。"):
         assert message in js, f"缺少这条人话：{message}"
     assert "尝试次数过多" in js, "连续失败之后的提示没接上"
     # 退出/重登时验证码要换新的（旧的一次性，留着只会让人"填对了还被拒"）

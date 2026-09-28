@@ -215,7 +215,7 @@ def test_H05_帮助里的数字都是读出来的不是写死的():
     assert "541,909" not in html and "541909" not in html, "帮助里把行数写死了"
     assert "2010-12-01" not in html and "2011-12-09" not in html, "帮助里把数据范围写死了"
     # 读不到时说的是人话，不是摆一个假数字
-    assert "暂时读不到" in js
+    assert "暂时无法读取" in js
 
 
 def test_H05_关于密码与账号的那几句提示是诚实的():

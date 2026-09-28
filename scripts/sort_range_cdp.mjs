@@ -136,6 +136,8 @@ try {
     const btn = [...root.querySelectorAll("button")].find((b) => b.textContent.includes("使用数据范围"));
     return {
       sortLine: (root.querySelector(".sort-line") || {}).textContent || "",
+      // 表头的**全部列名**（head 只收"当前排序的那一列"，量"第一列叫什么"要全量）
+      headers: [...root.querySelectorAll("thead th")].map((th) => th.textContent.trim()),
       head: [...root.querySelectorAll("thead th")]
         .filter((th) => th.classList.contains("sorted-asc") || th.classList.contains("sorted-desc"))
         .map((th) => th.textContent.trim()
@@ -224,6 +226,7 @@ try {
     `dimension=${s.dimensions} metric=${s.metrics}`);
   check(s.sortLine.trim() === "当前排序：期间（按日） ↑", "页面上写出了「当前排序」", JSON.stringify(s.sortLine.trim()));
   check(s.head.some((h) => h.startsWith("期间") && h.endsWith("asc")), "表头高亮标在「期间」列上（升序）", s.head.join(" , "));
+  check(s.headers[0].startsWith("期间"), "按日：第一列列名写「期间」", s.headers.slice(0, 4).join(" , "));
   const dates1 = s.rows.map((r) => r[0]);
   check(dates1[0] < dates1[1], "第一列确实是日期升序（时间序列的阅读顺序）", dates1.join(" → "));
   console.log(`     证据（前 3 行：期间 / 销售额 / 订单数）：${s.rows.map((r) => r.slice(0, 3).join(" ")).join(" | ")}`);
@@ -287,6 +290,11 @@ try {
     JSON.stringify(s.sortLine.trim()));
   const cust5 = s.rows.map((r) => Number(r[3].replace(/[^\d.-]/g, "")));
   check(cust5[0] >= cust5[1], "数据确实按客户数降序", cust5.join(" ≥ "));
+  // ★ 实测抓到过的一版：第一列列名写死成「期间」，按国家看时那一格是 United Kingdom
+  check(s.headers[0].startsWith("国家"), "★ 第一列列名跟着维度换成「国家」（不是写死的「期间」）",
+    s.headers.slice(0, 4).join(" , "));
+  console.log(`     证据（表头全量）：${s.headers.join(" , ")}`);
+  await shot("sort-05-country-headers.png");
 
   console.log(`\n  ── R5b 按国家 + 默认态切指标 = 销售额`);
   await setSelect(1, "sales_amount");
@@ -296,6 +304,18 @@ try {
   check(s.sortLine.trim() === "当前排序：销售额 ↓", "按国家切指标 → 排序跟着切到新指标降序",
     JSON.stringify(s.sortLine.trim()));
   console.log(`     证据（前 3 行：国家 / 销售额）：${s.rows.map((r) => `${r[0]} ${r[1]}`).join(" | ")}`);
+
+  // ── R5c 切到「按周」：第一列列名跟着换（三个维度逐个量一遍）─────────────
+  console.log(`\n  ── R5c 切维度到「按周」`);
+  await setSelect(0, "week");
+  await waitFor(`document.querySelector("#sales-scope-note").textContent.includes("按周")`);
+  await settle();
+  s = await read();
+  check(s.headers[0].startsWith("周"), "★ 第一列列名跟着维度换成「周」", s.headers.slice(0, 4).join(" , "));
+  check(/^\d{4}-\d{2}-\d{2}$/.test(s.rows[0][0]),
+    "按周的第一列是周起始日（周一）", s.rows[0][0]);
+  console.log(`     证据（表头全量）：${s.headers.join(" , ")}`);
+  await shot("sort-06-week-headers.png");
 
   // ── R6 时间范围 ──────────────────────────────────────────────────────
   console.log(`\n  ── R6 时间范围（覆盖范围 / 边界 / 越界提示）`);

@@ -324,7 +324,7 @@ try {
   check(copy.forgot === "忘记密码？", "「忘记密码？」在", `「${copy.forgot}」`);
   check(copy.register === "注册账号", "「注册账号」在", `「${copy.register}」`);
   check(copy.body.includes("姓名") === false, "渲染出来的文字里没有「姓名」");
-  check(copy.body.includes("登录后即可开始分析"), "副标题是正式话术「登录后即可开始分析」");
+  check(copy.body.includes("登录后使用完整功能"), "副标题是正式话术「登录后使用完整功能」");
   check(copy.guestPane.includes("不留身份") && copy.guestPaneHidden === true,
     "游客那栏（默认收起）说清「不留身份」、退出后名字会变",
     copy.guestPane.replace(/\s+/g, " ").trim().slice(0, 70));
@@ -445,7 +445,7 @@ try {
     "图够大、看得清（不是糊成一小条）", `${captcha.login.w}x${captcha.login.h}`);
   check(captcha.login.h === captcha.login.inputH,
     "图与输入框**等高对齐**", `图 ${captcha.login.h} / 框 ${captcha.login.inputH}`);
-  check(captcha.login.alt.includes("换一张"), "图有无障碍说明（读屏能念）", `「${captcha.login.alt}」`);
+  check(captcha.login.alt.includes("可点击更换"), "图有无障碍说明（读屏能念）", `「${captcha.login.alt}」`);
   check(/^data:image/.test(captcha.login.src), "图是当图片显示的（data: 地址），不是页面上的文字");
   const firstCode = await readCaptchaCode("login-captcha-img");
   check(firstCode.length === 4, "从图上能读出 4 个字符（人眼可读的机器版）", `「${firstCode}」`);
@@ -499,7 +499,33 @@ try {
     "点底部「注册账号」→ 切到**真注册表单**（不再是「尚未开通」的提示条）");
   check(regPane.tabOn, "「注册」标签点亮（三个入口并列：账号登录 / 注册 / 游客登录）");
   check(regPane.fields && regPane.submit.length > 0,
-    "注册表单四块齐全：账号 / 显示名 / 密码 / 再填一次 + 提交按钮", `按钮=「${regPane.submit}」`);
+    "注册表单四块齐全：账号 / 显示名 / 密码 / 确认密码 + 提交按钮", `按钮=「${regPane.submit}」`);
+  // 注册页的字段名与提示语：一行一行量（用户点名的几条，别被改回口语版）
+  const regCopy = await evalJs(`(() => {
+    const label = (id) => {
+      const el = document.querySelector('label[for="' + id + '"]');
+      return el ? el.textContent.trim() : "";
+    };
+    const ph = (id) => (document.getElementById(id) || {}).placeholder || "";
+    const hint = document.querySelector("#register-form .login-hint");
+    return {
+      title: document.getElementById("login-title").textContent.trim(),
+      sub: document.getElementById("login-sub").textContent.trim(),
+      display: label("reg-display"), displayPh: ph("reg-display"),
+      pwd2: label("reg-pwd2"), pwd2Ph: ph("reg-pwd2"),
+      hint: hint ? hint.textContent.replace(/\\s+/g, "").trim() : "",
+    };
+  })()`);
+  check(regCopy.title === "注册账号" && regCopy.sub === "填写账号信息完成注册",
+    "注册那一栏的标题 / 副标题是「注册账号 / 填写账号信息完成注册」",
+    `「${regCopy.title}」「${regCopy.sub}」`);
+  check(regCopy.display === "显示名（选填）", "显示名标签是「显示名（选填）」", `「${regCopy.display}」`);
+  check(regCopy.displayPh === "不填则与账号相同", "显示名提示语是「不填则与账号相同」", `「${regCopy.displayPh}」`);
+  check(regCopy.pwd2 === "确认密码", "确认密码那格写着「确认密码」", `「${regCopy.pwd2}」`);
+  check(regCopy.pwd2Ph === "请再次输入密码", "确认密码的提示语是「请再次输入密码」", `「${regCopy.pwd2Ph}」`);
+  check(regCopy.hint.includes("注册后需管理员批准方可登录"),
+    "注册页那行说明是「注册后需管理员批准方可登录。」", `「${regCopy.hint}」`);
+  await shotPage("register-form.png");
   const regCaptchaBox = await evalJs(`(() => {
     const img = document.getElementById("reg-captcha-img");
     const input = document.getElementById("reg-captcha");
@@ -550,7 +576,7 @@ try {
   await evalJs(`document.getElementById("btn-register").click()`);
   await sleep(500);
   regMsgs = await evalJs(readRegMsgs);
-  check(regMsgs.again.text.includes("不一样") && regMsgs.gateHidden === false,
+  check(regMsgs.again.text.includes("不一致") && regMsgs.gateHidden === false,
     "两次密码不一致：就地人话、不放行", `「${regMsgs.again.text}」`);
   check(regMsgs.strength.includes("强度"), "边打边给密码强度提示（弱 / 中 / 强，不拦人）",
     `「${regMsgs.strength}」`);
@@ -633,6 +659,30 @@ try {
   regMsgs = await evalJs(readRegMsgs);
   check(regMsgs.name.text.includes("已被注册") && regMsgs.gateHidden === false,
     "绕过查重直接提交：后端也拦下并说在账号框下面，不放行", `「${regMsgs.name.text}」`);
+
+  // 三栏的标题 / 副标题跟着栏目走（用户点名要的三句，切一栏量一栏）
+  const paneCopy = async () => evalJs(`(() => ({
+    title: document.getElementById("login-title").textContent.trim(),
+    sub: document.getElementById("login-sub").textContent.trim(),
+  }))()`);
+  await evalJs(`document.getElementById("ltab-account").click()`);
+  await sleep(150);
+  let pane = await paneCopy();
+  check(pane.title === "账号登录" && pane.sub === "登录后使用完整功能",
+    "账号栏标题 / 副标题是「账号登录 / 登录后使用完整功能」", `「${pane.title}」「${pane.sub}」`);
+  await evalJs(`document.getElementById("ltab-register").click()`);
+  await sleep(150);
+  pane = await paneCopy();
+  check(pane.title === "注册账号" && pane.sub === "填写账号信息完成注册",
+    "注册栏标题 / 副标题是「注册账号 / 填写账号信息完成注册」", `「${pane.title}」「${pane.sub}」`);
+  await evalJs(`document.getElementById("ltab-guest").click()`);
+  await sleep(150);
+  pane = await paneCopy();
+  check(pane.title === "游客登录" && pane.sub === "无需账号，部分功能受限",
+    "游客栏标题 / 副标题是「游客登录 / 无需账号，部分功能受限」", `「${pane.title}」「${pane.sub}」`);
+  await shotPage("guest-pane.png");
+  await evalJs(`document.getElementById("ltab-register").click()`);   // 回到注册栏，下面几条接着走
+  await sleep(150);
 
   await evalJs(`document.getElementById("link-forgot").click()`);
   await sleep(250);

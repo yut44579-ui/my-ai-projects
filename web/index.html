@@ -35,13 +35,13 @@
         <div class="brand-logo">SR</div>
         <div class="brand-text">
           <div class="brand-title">销售报表 Agent</div>
-          <div class="brand-sub">说一句话，报表自己出来</div>
+          <div class="brand-sub">说一句话，自动生成报表</div>
         </div>
       </div>
-      <h2 class="login-headline">用大白话提问，销售数字自己算出来</h2>
+      <h2 class="login-headline">用大白话提问，销售数字自动算出</h2>
       <p class="login-lede">
-        不用背公式、不用记口径。问一句「上个月卖了多少」，系统按同一套口径把数算给你，
-        配上解读，也能导出成 Excel 带走。
+        无需记公式、无需背口径。提问「上个月卖了多少」，系统按同一套口径计算，
+        并给出解读，也可导出为 Excel。
       </p>
       <ul class="login-caps">
         <li>自然语言问答</li>
@@ -60,8 +60,8 @@
 
     <section class="card login-card">
       <div class="login-card-inner">
-      <h3 class="login-title" id="login-title">欢迎回来 👋</h3>
-      <p class="login-sub" id="login-sub">登录后即可开始分析</p>
+      <h3 class="login-title" id="login-title">账号登录</h3>
+      <p class="login-sub" id="login-sub">登录后使用完整功能</p>
 
       <div class="login-tabs">
         <button class="login-tab is-on" id="ltab-account" type="button">账号登录</button>
@@ -72,7 +72,7 @@
       <!-- 首次使用引导：这台机器上一个账号都没有时出现（由 session.js 按后端回的账号数决定）。
            点一下直接切到注册那一栏 —— 比"进去发现登不上再猜"少一步。 -->
       <button class="login-firstrun" id="login-firstrun" type="button" hidden>
-        这台机器上还没有账号 —— <b>点这里先注册一个</b>；也可以直接用游客身份进来看看。
+        本机暂无账号，<b>点这里先注册一个</b>；也可使用游客登录。
       </button>
 
       <form class="login-form" id="login-form" novalidate>
@@ -112,12 +112,12 @@
           <label class="field-label" for="login-captcha">验证码</label>
           <div class="captcha-row">
             <input id="login-captcha" type="text" maxlength="4" autocomplete="off"
-                   spellcheck="false" placeholder="填图上的 4 个字符">
+                   spellcheck="false" placeholder="输入图中的 4 个字符">
             <!-- 图就是按钮：看不清点一下换一张（必须给这个出路，否则用户卡死）。
                  图本身由本机现画现发，不缓存、不落地。 -->
             <button class="captcha-btn" id="login-captcha-btn" type="button"
-                    title="看不清？点一下换一张" aria-label="验证码图片，点一下换一张">
-              <img id="login-captcha-img" alt="验证码图片，点一下换一张">
+                    title="看不清时可点击更换" aria-label="验证码图片，可点击更换">
+              <img id="login-captcha-img" alt="验证码图片，可点击更换">
             </button>
           </div>
           <p class="field-msg" id="login-captcha-msg" hidden></p>
@@ -145,9 +145,9 @@
           <p class="field-msg" id="reg-name-msg" hidden></p>
         </div>
         <div class="field">
-          <label class="field-label" for="reg-display">显示名（可以不填）</label>
+          <label class="field-label" for="reg-display">显示名（选填）</label>
           <input id="reg-display" type="text" maxlength="40" autocomplete="nickname"
-                 placeholder="留空就用账号名">
+                 placeholder="不填则与账号相同">
           <p class="field-msg" id="reg-display-msg" hidden></p>
         </div>
         <div class="field">
@@ -160,18 +160,18 @@
           </p>
         </div>
         <div class="field">
-          <label class="field-label" for="reg-pwd2">再填一次密码</label>
-          <input id="reg-pwd2" type="password" autocomplete="new-password" placeholder="两次填的要一样">
+          <label class="field-label" for="reg-pwd2">确认密码</label>
+          <input id="reg-pwd2" type="password" autocomplete="new-password" placeholder="请再次输入密码">
           <p class="field-msg" id="reg-pwd2-msg" hidden></p>
         </div>
         <div class="field">
           <label class="field-label" for="reg-captcha">验证码</label>
           <div class="captcha-row">
             <input id="reg-captcha" type="text" maxlength="4" autocomplete="off"
-                   spellcheck="false" placeholder="填图上的 4 个字符">
+                   spellcheck="false" placeholder="输入图中的 4 个字符">
             <button class="captcha-btn" id="reg-captcha-btn" type="button"
-                    title="看不清？点一下换一张" aria-label="验证码图片，点一下换一张">
-              <img id="reg-captcha-img" alt="验证码图片，点一下换一张">
+                    title="看不清时可点击更换" aria-label="验证码图片，可点击更换">
+              <img id="reg-captcha-img" alt="验证码图片，可点击更换">
             </button>
           </div>
           <p class="field-msg" id="reg-captcha-msg" hidden></p>
@@ -182,7 +182,7 @@
         </button>
         <!-- 注册的结果是**等批准**，不是直接进来（第一个账号除外：它自己就是管理员）。
              这句要短：登录页只说"接下来会发生什么"，"为什么要批、谁是管理员"收进帮助。 -->
-        <p class="login-hint">注册后要等管理员批准才能登录。</p>
+        <p class="login-hint">注册后需管理员批准方可登录。</p>
       </form>
 
       <!-- 注册结果：**等待批准**（不是"已经进来了"）。
@@ -191,21 +191,21 @@
         <div class="pending-ico" aria-hidden="true">✓</div>
         <h4 class="pending-title">注册成功，等待管理员批准</h4>
         <p class="pending-name" id="reg-pending-name"></p>
-        <p class="login-hint">管理员在「系统设置 → 账号管理」里点一下「批准」，你就能用这个账号登录了。
-          这台机器上第一个注册的账号就是管理员。</p>
-        <p class="login-hint">等批准的时候，可以先点「游客登录」进来看看。</p>
+        <p class="login-hint">管理员在「系统设置 → 账号管理」中批准后，即可使用该账号登录。
+          本机第一个注册的账号自动成为管理员。</p>
+        <p class="login-hint">等待批准期间可使用游客登录。</p>
         <button class="btn" id="btn-reg-pending-back" type="button">返回登录</button>
       </div>
 
       <div class="login-form" id="guest-pane" hidden>
-        <p class="guest-lede">不用填账号密码，本机给你随机取个昵称，直接进来看看。</p>
-        <p class="guest-lede">能提问、能看表格与周报；导入数据、导出报表、改任务需要登录。</p>
+        <p class="guest-lede">无需账号密码，系统将随机分配一个游客名称。</p>
+        <p class="guest-lede">可提问、查看表格与周报；导入数据、导出报表、修改任务需登录后使用。</p>
         <div class="guest-name" id="guest-name">游客xxxxx</div>
         <button class="btn btn-primary login-submit" id="btn-guest" type="button">
           <span class="spinner" id="guest-spinner" hidden></span>
           <span>以游客身份进入</span>
         </button>
-        <p class="login-hint">游客不留身份：名字是本机随机取的，退出后再进来会换一个。</p>
+        <p class="login-hint">游客不留身份：名称由本机随机分配，退出后再次进入将更换。</p>
       </div>
 
       <!-- 登录页**不写**解释实现细节的长句（用户要的是 QQ 那种：几行填完就登）。
@@ -236,10 +236,10 @@
   <div class="guard-card" id="guard-card" role="dialog" aria-modal="true" aria-labelledby="guard-title">
     <div class="guard-big-ico" aria-hidden="true">⚠</div>
     <h3 class="guard-title" id="guard-title">需要您先登录才能使用完整服务</h3>
-    <p class="guard-text" id="guard-text">登录之后就能用这项功能。</p>
+    <p class="guard-text" id="guard-text">登录后即可使用该功能。</p>
     <div class="guard-actions">
       <button class="btn btn-primary" id="guard-login" type="button">去登录</button>
-      <button class="btn" id="guard-cancel" type="button">先不用</button>
+      <button class="btn" id="guard-cancel" type="button">取消</button>
     </div>
   </div>
 </div>
@@ -270,7 +270,7 @@
       <!-- ── 帮助 ─────────────────────────────────────────────────── -->
       <section class="info-pane" id="info-pane-help">
         <h3 class="info-h">一、能问什么</h3>
-        <p class="info-p">用大白话问就行，这七类都接得住（点页面上的示例也能直接问）：</p>
+        <p class="info-p">用大白话提问即可，以下七类问题均支持（也可点击页面上的示例直接提问）：</p>
         <ul class="info-list">
           <li><b>销售汇总</b> —— 2011年11月一共卖了多少？</li>
           <li><b>销售趋势</b> —— 2011年11月的销售趋势，按日看</li>
@@ -280,8 +280,8 @@
           <li><b>客户分析</b> —— 2011年11月销售额最高的10个客户</li>
           <li><b>商品分析</b> —— 2011年11月各商品的退货情况，前10名</li>
         </ul>
-        <p class="info-p">另外还可以直接说「<b>做一份销售周报</b>」——它会出一份结构化报告
-          （环比、逐日趋势、国家与商品结构），可以下载带走。</p>
+        <p class="info-p">另外还可以直接说「<b>做一份销售周报</b>」——系统会生成一份结构化报告
+          （环比、逐日趋势、国家与商品结构），可下载导出。</p>
 
         <h3 class="info-h">二、数据从哪来</h3>
         <dl class="info-kv">
@@ -292,47 +292,47 @@
           <div><dt>国家 / 地区数</dt><dd id="help-countries">—</dd></div>
           <div><dt>金额单位</dt><dd id="help-currency">—</dd></div>
         </dl>
-        <p class="info-p">这几个数字都是<b>现在</b>从数据里读出来的：换一个数据源，它们会跟着变。</p>
+        <p class="info-p">这几个数字都是<b>当前</b>从数据源读取的：更换数据源后，它们会随之变化。</p>
 
         <h3 class="info-h">三、数据里没有什么</h3>
         <p class="info-p">这份数据只有交易本身的信息，<b>没有</b>下面这些：</p>
         <ul class="info-list" id="help-unsupported"></ul>
-        <p class="info-p">问到这里，系统会直接说"数据不支持"，<b>不会拿别的字段顶着用</b> ——
-          比如不会用「国家」当「区域」、不会用「卖得最多」当「最重要的客户」。</p>
+        <p class="info-p">问到这里，系统会直接说明"数据不支持"，<b>不会用别的字段替代</b> ——
+          例如不会用「国家」代替「区域」，也不会用「卖得最多」代替「最重要的客户」。</p>
 
         <h3 class="info-h">四、数字是怎么算出来的</h3>
         <ul class="info-list">
-          <li><b>同一套口径</b>：问答、报表、导出的表格用的是同一套规则，不存在"页面上一个数、导出里另一个数"。</li>
-          <li><b>日期含首尾</b>：问「11月1日到11月30日」，两天都算在里面（整天，不是到当天 0 点为止）。</li>
-          <li><b>剔除三类</b>：取消掉的订单、数量为负的、单价为负的，都不计入销售额。</li>
-          <li><b>客户维度只算有客户编号的成交</b>：有些单子没记客户号（散客、退货、补录），
-            这些不会算进"客户数"和客户排行 —— 每次客户分析的结果里都会写明这次的覆盖率。</li>
-          <li><b>金额单位是人民币「元」</b>：这是声明出来的单位，不是从数据里读到的（文件里没有货币列），数值不做换算。</li>
+          <li><b>同一套口径</b>：问答、报表、导出的表格使用同一套规则，不存在"页面上一个数、导出里另一个数"的情况。</li>
+          <li><b>日期含首尾</b>：提问「11月1日到11月30日」时，首尾两天均计入（按整天计算，而不是到当天 0 点为止）。</li>
+          <li><b>剔除三类</b>：已取消的订单、数量为负、单价为负的记录，均不计入销售额。</li>
+          <li><b>客户维度只统计有客户编号的成交</b>：部分记录未填客户号（散客、退货、补录），
+            不计入"客户数"与客户排行 —— 每次客户分析的结果中都会写明本次的覆盖率。</li>
+          <li><b>金额单位是人民币「元」</b>：该单位是声明值，并非从数据中读取（文件中没有货币列），数值不做换算。</li>
         </ul>
 
         <h3 class="info-h">五、常见问题</h3>
         <dl class="info-faq">
           <div>
             <dt>为什么某天是空的、最后几天数据不全？</dt>
-            <dd>这份数据记到 <span id="help-last-day">—</span> 中午就断了（最后一天只记了半天），
-              所以最后一天的数看着偏小；某天没有成交记录，那天就是空的 ——
-              不会拿相邻日期的数顶上，也不会把空的画成一条线。</dd>
+            <dd>这份数据记录到 <span id="help-last-day">—</span> 中午（最后一天只记录了半天），
+              因此最后一天的数值偏小；某天没有成交记录即为空值 ——
+              不会用相邻日期的数值替代，也不会把空值绘成折线。</dd>
           </div>
           <div>
             <dt>为什么客户数比订单数少？</dt>
-            <dd>客户维度只统计记了客户编号的成交。当前数据源里有一批单子没记客户号，
-              这些单子照样算销售额，但不会算进"客户数" —— 所以客户数小于实际发生过交易的次数，
-              也小于真正买过货的人数。</dd>
+            <dd>客户维度只统计已记录客户编号的成交。当前数据源中有部分记录未填客户号，
+              这些记录仍计入销售额，但不计入"客户数" —— 因此客户数小于实际发生交易的次数，
+              也小于实际购买过商品的人数。</dd>
           </div>
           <div>
             <dt>报表在哪导出？能导出成什么？</dt>
-            <dd>问完之后报告就出来了，旁边有下载入口，可以选 <span id="help-report-formats">—</span>；
-              数据表本身也能导出成表格文件带走。导出的数字与页面上看到的完全一致。</dd>
+            <dd>提问完成后即生成报告，旁边有下载入口，可选择 <span id="help-report-formats">—</span>；
+              数据表本身也可导出为表格文件。导出的数字与页面上看到的完全一致。</dd>
           </div>
           <div>
             <dt>为什么换个数据源，数字就变了？</dt>
-            <dd>数字是<b>现算</b>的：每次提问都按当前数据源重新计算。换了数据源、或者导入了新的表，
-              口径不变但数据变了，结果自然会变 —— 页面上方一直写着当前用的是哪一份数据。</dd>
+            <dd>数字是<b>现算</b>的：每次提问都按当前数据源重新计算。更换数据源、或导入了新的表之后，
+              口径不变但数据变了，结果自然会变 —— 页面上方始终显示当前使用的是哪一份数据。</dd>
           </div>
         </dl>
 
@@ -342,78 +342,78 @@
              全部收进这一节。所以这里的措辞要**经得起看**，不能含糊。 -->
         <h3 class="info-h">六、账号与管理员审批</h3>
         <ul class="info-list">
-          <li><b>第一个账号自动是管理员</b>：这台机器上**第一个**注册的账号，直接就是管理员、
-            注册完就能登录。为什么这么定：如果没人能"批准"，后面来的人就永远进不来。</li>
-          <li><b>之后的账号要等批准</b>：再注册的账号是「等待批准」状态，登录时会明确告诉你
-            「账号正在等待管理员批准」。管理员在「系统设置 → 账号管理」里点一下「批准」就能登录了；
-            不批准（拒绝）的话，登录时说的是「该账号未通过审批」。</li>
-          <li><b>谁能管账号</b>：只有管理员。管理员登录后，「系统设置」里会出现「账号管理」：
-            待批准列表（可以批准 / 拒绝）、已批准列表（可以停用 / 删除）。</li>
-          <li><b>两种"不能登录"分得清</b>：等待批准、未通过审批、密码不对，是<b>三句不同的话</b> ——
-            不会把"还在等批准"说成"账号或密码不对"让人白试密码。</li>
-          <li><b>管理员账号不会被锁在外面</b>：不能拒绝、停用或删除这台机器上唯一的管理员账号 ——
-            否则就没人能再批账号了。</li>
+          <li><b>第一个账号自动是管理员</b>：本机<b>第一个</b>注册的账号即为管理员、
+            注册完可直接登录。这样规定的原因：如果没有人具备批准权限，后续注册的账号将无法登录。</li>
+          <li><b>之后的账号需等待批准</b>：后续注册的账号为「等待批准」状态，登录时会明确提示
+            「账号正在等待管理员批准」。管理员在「系统设置 → 账号管理」中批准后即可登录；
+            若被拒绝，登录时提示「该账号未通过审批」。</li>
+          <li><b>谁能管账号</b>：仅管理员。管理员登录后，「系统设置」中会显示「账号管理」：
+            待批准列表（可批准 / 拒绝）、已批准列表（可停用 / 删除）。</li>
+          <li><b>两种"不能登录"分得清</b>：等待批准、未通过审批、密码不对，是<b>三句不同的提示</b> ——
+            不会把"还在等批准"说成"账号或密码不对"，避免反复尝试密码。</li>
+          <li><b>管理员账号不会被锁在外面</b>：无法拒绝、停用或删除本机唯一的管理员账号 ——
+            否则将没有账号可以再批准新用户。</li>
         </ul>
 
         <h3 class="info-h">七、忘记密码怎么办</h3>
         <p class="info-p">密码只保存成<b>不可还原的校验值</b>，本机没有原文，
-          也没有邮件服务 —— 所以<b>无法用邮件找回</b>，谁也还原不出你原来那串密码。
-          能做的两条路：<b>①</b> 注册新账号（换一个账号名，注册后照样要管理员批准）；
-          <b>②</b> 先用游客身份进来看看。如果你是管理员又忘了密码，那就只能删掉这台机器上的账号文件、
-          重新走一遍"第一个账号"的流程了 —— 这一步会把账号全清掉，做之前先想清楚。</p>
+          也没有邮件服务 —— 所以<b>无法用邮件找回</b>，无法还原出原来的密码。
+          可行的两条路：<b>①</b> 注册新账号（更换账号名，注册后同样需管理员批准）；
+          <b>②</b> 使用游客登录。若管理员忘记密码，只能删除本机账号文件后重新注册、
+          再次走一遍"第一个账号"的流程 —— 这一步会清空全部账号，操作前请确认。</p>
 
         <h3 class="info-h">八、游客能用什么、不能用什么</h3>
         <ul class="info-list">
-          <li><b>能用</b>：提问、看表格、看周报 —— 这些是只读的浏览。</li>
-          <li><b>不能用</b>：导入数据（换数据源）、导出报表、保存或修改任务、账号管理、删除操作。</li>
-          <li><b>怎么看出来</b>：用不了的地方会带一个 ⚠ 记号；点它就会提示「需要您先登录才能使用完整服务」，
-            并给一个「去登录」的按钮。没受限的地方不显示这个记号。</li>
+          <li><b>可使用</b>：提问、查看表格、查看周报 —— 均为只读浏览。</li>
+          <li><b>不可使用</b>：导入数据（更换数据源）、导出报表、保存或修改任务、账号管理、删除操作。</li>
+          <li><b>如何识别</b>：受限功能带一个 ⚠ 记号；点击后提示「需要您先登录才能使用完整服务」，
+            并提供「去登录」按钮。未受限的功能不显示该记号。</li>
         </ul>
       </section>
 
       <!-- ── 隐私 ─────────────────────────────────────────────────── -->
       <section class="info-pane" id="info-pane-privacy" hidden>
         <h3 class="info-h">一、你的数据存在哪</h3>
-        <p class="info-p">全部在这台电脑上，四类各放一处：</p>
+        <p class="info-p">全部保存在这台电脑上，分为四类：</p>
         <ul class="info-list">
           <li><b>账号信息</b>：账号名、显示名、密码的加密摘要、建号时间与上次登录时间。</li>
           <li><b>提问与回答记录</b>：你问过什么、系统算出了什么数、回了什么话（用于翻历史与核对数字）。</li>
           <li><b>你上传的数据文件</b>：导入的表格原样留一份，供之后重复取数。</li>
           <li><b>报表产出</b>：生成的报告与导出文件。</li>
         </ul>
-        <p class="info-p">没有云端备份、没有第三方存储：这台电脑上的东西删了就是删了。</p>
+        <p class="info-p">没有云端备份，也没有第三方存储：本机数据删除后不可恢复。</p>
 
         <h3 class="info-h">二、密码怎么存</h3>
         <p class="info-p">只保存<b>加密摘要</b>，不保存密码原文 —— 摘要不可还原，
-          就算有人把这台电脑上的账号文件整个拷走，也读不出你的密码。
-          登录时是拿你输入的密码重新算一遍再比对，而不是把原文取出来对。
-          这也是为什么<b>忘记密码找不回原文</b>：本机没有、也不该有原文，
+          即使有人把这台电脑上的账号文件整体拷走，也读不出你的密码。
+          登录时是用你输入的密码重新计算后再比对，而不是取出原文核对。
+          这也是<b>忘记密码无法找回原文</b>的原因：本机没有、也不应有原文，
           而且本机没有邮件服务 —— <b>无法用邮件找回</b>。
-          真忘了只有两条路：<b>注册新账号</b>，或者先用<b>游客</b>身份进来。</p>
+          确实忘记时只有两条路：<b>注册新账号</b>，或者使用<b>游客</b>登录。</p>
 
         <h3 class="info-h">三、会不会把数据发到外面去</h3>
-        <p class="info-p"><b>会，但只发一小部分，这里如实说清楚：</b></p>
+        <p class="info-p"><b>会，但只发送一小部分，如实说明如下：</b></p>
         <ul class="info-list">
           <li><b>会发出去</b>：你提的问题原话，以及<b>本机算好的结果</b>（几个数字与它们的说明），
-            发给模型服务用来"理解你在问什么"和"把结论写成一段人话"。</li>
+            发送给模型服务，用于"理解你在问什么"和"把结论写成一段解读"。</li>
           <li><b>不会发出去</b>：你上传的数据文件本身 —— 明细行不会上传，
             模型看到的是本机算完之后的几个结果，不是原始表格。</li>
           <li><b>数字不由模型算</b>：所有金额、行数、排行都是本机程序按固定口径算出来的；
             模型只负责组织语言，它编出来的数字会被核对挡掉。</li>
-          <li><b>不想外发时</b>：页面上会显示模型是否接通；没接通时系统照常算数，
-            只是不再生成那段人话解读。</li>
+          <li><b>不想外发时</b>：页面上会显示模型是否接通；未接通时系统照常计算，
+            只是不再生成那段文字解读。</li>
         </ul>
 
         <h3 class="info-h">四、怎么清掉</h3>
         <ul class="info-list">
-          <li><b>退出登录</b>：清掉"这次是谁"的本机记录，回到登录页（账号本身还在，下次还能登）。</li>
-          <li><b>彻底清除</b>：删掉这台电脑上存数据的那个目录，账号、提问记录、上传的文件、
-            报表产出一次性全没了 —— 本机没有别的副本，删完不可恢复。</li>
+          <li><b>退出登录</b>：清除"这次是谁"的本机记录，回到登录页（账号本身仍在，下次仍可登录）。</li>
+          <li><b>彻底清除</b>：删除这台电脑上存放数据的目录，账号、提问记录、上传的文件、
+            报表产出将一并清除 —— 本机没有其他副本，删除后不可恢复。</li>
         </ul>
-        <p class="info-p">没有做的事也说明白：没有多用户数据隔离（任务、数据源不分属某个账号，
-          这台机器上的账号看到的是同一份数据）、没有云端同步 —— 这是单机自用模式。
-          角色只有一条：管理员能批准新账号；游客身份下会限制导入、导出、改任务与账号管理，
-          登录之后这些都能用。</p>
+        <p class="info-p">尚未实现的能力也一并说明：没有多用户数据隔离（任务、数据源不分属某个账号，
+          本机的账号看到的是同一份数据），也没有云端同步 —— 这是单机自用模式。
+          角色只有一条：管理员可批准新账号；游客身份下导入、导出、修改任务与账号管理受限，
+          登录后均可使用。</p>
       </section>
     </div>
   </aside>
@@ -478,7 +478,7 @@
         <div class="menu user-menu" id="user-menu" hidden>
           <div class="user-menu-head">
             <div class="user-menu-name" id="um-name">未登录</div>
-            <div class="user-menu-kind" id="um-kind">还没进来</div>
+            <div class="user-menu-kind" id="um-kind">未登录</div>
           </div>
           <div class="menu-sep"></div>
           <div class="user-menu-label">我的状态</div>
@@ -536,8 +536,8 @@
       <!-- 区块A · AI 工作台 -->
       <div class="card hero">
         <div class="hero-main">
-          <h1 class="hero-title">你好！我是你的销售报表 Agent</h1>
-          <p class="hero-sub">丢进销售数据 → 告诉我要看什么 → 我用程序算准数字，再解释发生了什么。</p>
+          <h1 class="hero-title">你好，我是你的销售报表 Agent</h1>
+          <p class="hero-sub">导入销售数据 → 说明要看的指标 → 由程序计算准确数字，再解读发生了什么。</p>
           <div class="hero-input">
             <input id="hero-nl-input" type="text" placeholder="例如：2011年11月卖得最好的5个产品" autocomplete="off">
             <button id="hero-nl-btn" class="btn btn-primary">开始分析</button>
@@ -568,7 +568,7 @@
         <div class="empty" id="chat-empty">
           <div class="empty-ico">✦</div>
           <div class="empty-title">还没有提问</div>
-          <div class="empty-hint">在上面任意一个输入框里用大白话提问。回答会分【发生了什么】【主要贡献】【为什么】【建议行动】几段：事实由程序算出来，推断会标注，建议由模型给出。</div>
+          <div class="empty-hint">在任意一个输入框里用大白话提问。回答会分【发生了什么】【主要贡献】【为什么】【建议行动】几段：事实由程序算出，推断会标注，建议由模型给出。</div>
         </div>
 
         <div class="chat-state" id="chat-state" hidden></div>
@@ -822,7 +822,7 @@
         <div class="empty" id="wk-reports-empty">
           <div class="empty-ico">▤</div>
           <div class="empty-title">还没有生成过报告</div>
-          <div class="empty-hint">到「销售总览」的自然语言入口说一句「帮我根据本星期的销售数据做一份销售周报」，或「出一份 2011 年 11 月的月报」——报告里的数字与那五类问答是同一套计算。</div>
+          <div class="empty-hint">在提问框中说一句「帮我根据本星期的销售数据做一份销售周报」，或「出一份 2011 年 11 月的月报」——报告里的数字与那五类问答使用同一套计算。</div>
         </div>
       </div>
       <div class="card">
@@ -873,7 +873,7 @@
         <div class="row">
           <input id="ds-file-input" type="file" accept=".xlsx,.xlsm,.csv">
           <button id="btn-ds-inspect" class="btn btn-primary" data-guard="import">上传并检查</button>
-          <span class="muted-sm" id="ds-import-state">选择 .xlsx / .xlsm / .csv 后点「上传并检查」，先看清内容再决定导入。</span>
+          <span class="muted-sm" id="ds-import-state">选择 .xlsx / .xlsm / .csv 后点击「上传并检查」，确认内容后再导入。</span>
         </div>
 
         <!-- 第 2 步：工作表 / 编码 / 前 N 行预览 / 字段映射（**全部来自后端真实读取**） -->
@@ -884,7 +884,7 @@
             <label class="field">数据源名称<input id="ds-name" type="text" placeholder="例如：2026 年销售数据"></label>
           </div>
           <div class="field">
-            <span class="field-label">前 <b id="ds-preview-count">0</b> 行预览（只读这么多，不把整表塞进浏览器）</span>
+            <span class="field-label">前 <b id="ds-preview-count">0</b> 行预览（只读取这些行，不会把整表载入浏览器）</span>
             <div class="table-wrap">
               <table class="table" id="ds-preview-table"></table>
             </div>
@@ -911,7 +911,7 @@
         <div class="row">
           <input id="file-input" type="file" accept=".xlsx,.xls">
           <button id="btn-upload" class="btn btn-primary" data-guard="import">上传</button>
-          <span class="muted-sm" id="upload-state">选择真实 Excel 文件（.xlsx / .xls）后点上传。</span>
+          <span class="muted-sm" id="upload-state">选择真实 Excel 文件（.xlsx / .xls）后点击「上传」。</span>
         </div>
         <div class="table-wrap" id="upload-result-wrap" hidden>
           <table class="table">
@@ -1044,7 +1044,7 @@
         <div class="row">
           <input id="doc-input" type="file" accept=".docx,.pdf">
           <button id="btn-doc-upload" class="btn btn-primary" data-guard="import">上传并提取</button>
-          <span class="muted-sm" id="doc-upload-state">选择 .docx / .pdf 后点「上传并提取」。</span>
+          <span class="muted-sm" id="doc-upload-state">选择 .docx / .pdf 后点击「上传并提取」。</span>
         </div>
         <div class="table-wrap" id="doc-result-wrap" hidden>
           <table class="table"><tbody id="doc-result"></tbody></table>
@@ -1093,7 +1093,7 @@
         <div class="empty" id="set-health-empty">
           <div class="empty-ico">⚙</div>
           <div class="empty-title">还没读到系统状态</div>
-          <div class="empty-hint">点顶部「设置」或刷新页面重新读取运行状态。</div>
+          <div class="empty-hint">点击顶部「设置」或刷新页面重新读取运行状态。</div>
         </div>
         <div class="table-wrap" id="set-problems-wrap" hidden>
           <div class="field-label">系统上报的问题</div>
@@ -1168,7 +1168,7 @@
       <div class="empty" id="ai-conclusion-empty">
         <div class="empty-ico">✦</div>
         <div class="empty-title">还没有结论</div>
-        <div class="empty-hint">在顶栏的「自然语言入口」提一个问题，这里会显示最近一次回答里由**程序算出**的事实那一段。</div>
+        <div class="empty-hint">在顶栏的提问框输入一个问题，这里会显示最近一次回答中由程序算出的事实部分。</div>
       </div>
       <div id="ai-conclusion-body" hidden>
         <div class="rp-conclusion-q" id="ai-conclusion-question"></div>
@@ -1199,7 +1199,7 @@
 
       <div class="pane" id="rp-pane-circuit" hidden>
         <div class="kv"><span>服务保护</span><b class="warn">尚未开通</b></div>
-        <p class="note">服务出问题时的自动保护还没做；现在遇到问题会把原因如实报出来，不悄悄跳过。</p>
+        <p class="note">服务出问题时的自动保护尚未实现；当前遇到问题会如实报出原因，不会静默跳过。</p>
       </div>
 
       <div class="pane" id="rp-pane-status" hidden>

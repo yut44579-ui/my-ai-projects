@@ -344,7 +344,7 @@ try {
 
   await clickSel("#guard-cancel");
   await sleep(200);
-  check((await visible("#guard-modal")) === false, "点「先不用」→ 弹窗收起");
+  check((await visible("#guard-modal")) === false, "点「取消」→ 弹窗收起");
   await clickSel("#btn-menu");
   await sleep(200);
   const beforeImport = await fetchCount();

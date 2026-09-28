@@ -48,20 +48,20 @@ window.Session = (() => {
   // 每一项：给用户看的功能名 + 点下去时弹窗里补的那半句。
   // 没列在这里的（提问、看表格、看周报、翻历史、看帮助…）游客都能用。
   const RESTRICTED = {
-    import: { label: "导入数据（更换数据源）", why: "导入会把数据源换掉，需要用自己的账号来做。" },
-    export: { label: "导出报表", why: "导出会把报表文件存到你电脑上，需要先登录。" },
-    task: { label: "保存或修改任务", why: "任务是要长期留着的，需要先登录才能建和改。" },
-    accounts: { label: "账号管理", why: "批准、停用、删除账号只有管理员能做。" },
-    delete: { label: "删除操作", why: "删除不可恢复，需要先登录。" },
+    import: { label: "导入数据（更换数据源）", why: "导入数据需要登录后使用。" },
+    export: { label: "导出报表", why: "导出报表需要登录后使用。" },
+    task: { label: "保存或修改任务", why: "保存或修改任务需要登录后使用。" },
+    accounts: { label: "账号管理", why: "账号管理仅管理员可用。" },
+    delete: { label: "删除操作", why: "删除操作需要登录后使用。" },
   };
   const GUEST_BAR_TEXT = "游客模式 · 部分功能受限";
   const GUARD_TITLE = "需要您先登录才能使用完整服务";
 
   // 三栏：账号登录 / 注册 / 游客登录。标题与副标题跟栏目走 —— 切栏时一起换。
   const TABS = {
-    account: { title: "欢迎回来 👋", sub: "登录后即可开始分析" },
-    register: { title: "建一个账号", sub: "填三下就好，注册后等管理员批准" },
-    guest: { title: "游客模式", sub: "不用填账号密码，直接进来看看" },
+    account: { title: "账号登录", sub: "登录后使用完整功能" },
+    register: { title: "注册账号", sub: "填写账号信息完成注册" },
+    guest: { title: "游客登录", sub: "无需账号，部分功能受限" },
   };
   const PANES = { account: "login-form", register: "register-form", guest: "guest-pane" };
 
@@ -96,7 +96,7 @@ window.Session = (() => {
   const AWAY_MINUTES = 10;                              // 默认阈值：10 分钟没操作算"离开"
   const GUEST_LETTERS = "abcdefghjkmnpqrstuvwxyz23456789";   // 去掉容易看错的 0/o/1/l/i
   const TOAST_MS = 3400;                                // 人话提示停留多久
-  const NOT_READY = "个人设置尚未开通。当前能改的只有登录时填的账号与右上角的状态。";
+  const NOT_READY = "个人设置尚未开通。当前可改的只有登录账号与右上角的状态显示。";
 
   const state = {
     who: null,          // {name, kind, displayName}；kind: account | guest；name = 账号名
@@ -235,7 +235,7 @@ window.Session = (() => {
       // 该清的地方（用户主动点图、表单复位）自己清。
     } catch (err) {
       state.captchas[which] = "";
-      setFieldError(slot.input, slot.msg, "验证码图片没取到，点一下右边的图再试一次。");
+      setFieldError(slot.input, slot.msg, "验证码图片加载失败，请点击右侧图片重试。");
     }
   }
 
@@ -260,12 +260,12 @@ window.Session = (() => {
       return true;
     }
     if (code === "captcha_expired") {
-      setFieldError(slot.input, slot.msg, "验证码已过期，已帮你换一张。");
+      setFieldError(slot.input, slot.msg, "验证码已过期，已自动更换一张。");
       loadCaptcha(which);
       return true;
     }
     if (code === "captcha_missing") {
-      setFieldError(slot.input, slot.msg, "请填一下图上的 4 个字符。");
+      setFieldError(slot.input, slot.msg, "请输入图中的 4 个字符。");
       return true;
     }
     if (code === "too_many_attempts") {
@@ -285,7 +285,7 @@ window.Session = (() => {
   //   · **读出来的那半**是当前数据的事实（数据源名 / 范围 / 行数 / 客户数 / 国家数 / 币种 /
   //     不能问的维度 / 报告能导成什么格式）—— 换数据源会跟着变，所以每次打开都重新读一次。
   // 读不到就**显示"暂时读不到"** —— 不摆一个看起来像真数字的东西蒙混过去。
-  const NOT_AVAILABLE = "暂时读不到（服务还没就绪时会这样）";
+  const NOT_AVAILABLE = "暂时无法读取（服务尚未就绪时会出现）";
 
   async function loadHelpFacts() {
     setText("help-source", "读取中…");
@@ -404,12 +404,12 @@ window.Session = (() => {
   // 顶栏那个名字显示的是**显示名**（注册时可以另填，留空就是账号名本身），
   // 账号名只在用户菜单的一行说明里出现 —— 两个不一样时才两个都提一句。
   function kindNote(who) {
-    if (!who) return "还没进来";
-    if (who.kind === "guest") return "游客（本机随机取名，不留身份）";
+    if (!who) return "未登录";
+    if (who.kind === "guest") return "游客（本机随机分配名称，不留身份）";
     const account = who.name;
     return who.displayName && who.displayName !== account
       ? `账号（本机注册的账号：${account}）`
-      : "账号（本机注册的账号，登录时对过密码）";
+      : "账号（本机注册，登录时已校验密码）";
   }
 
   function renderUserArea() {
@@ -475,7 +475,7 @@ window.Session = (() => {
   // 前后端用同一套口径（这里是**提前拦**，真正的判定在后端）。
   function accountShapeMessage(account) {
     if (account.length < 2) return "账号至少 2 个字符（最多 40 个）。";
-    if (account.length > 40) return "账号最多 40 个字符，短一点更好记。";
+    if (account.length > 40) return "账号最多 40 个字符。";
     if (!USERNAME_OK.test(account)) return "账号只能用中文、字母、数字和下划线、点、中划线。";
     return "";
   }
@@ -489,7 +489,7 @@ window.Session = (() => {
     const captchaText = captchaPayload("account").captcha_text;
     const accountMessage = accountShapeMessage(account);
     const pwdMessage = password.length < 6 ? "密码至少 6 位。" : "";
-    const captchaMessage = captchaText.length !== 4 ? "请填图上的 4 个字符。" : "";
+    const captchaMessage = captchaText.length !== 4 ? "请输入图中的 4 个字符。" : "";
     setFieldError("login-name", "login-name-msg", accountMessage);
     setFieldError("login-pwd", "login-pwd-msg", pwdMessage);
     setFieldError("login-captcha", "login-captcha-msg", captchaMessage);
@@ -506,9 +506,9 @@ window.Session = (() => {
     const accountMessage = accountShapeMessage(account);
     const pwdMessage = password.length < 6 ? "密码至少 6 位。" : "";
     // 两次不一致的提示只在"密码本身没问题"时说（否则会同时冒两条，反而看不清先改哪个）
-    const againMessage = (!pwdMessage && again !== password) ? "两次填的密码不一样，再对一遍。" : "";
+    const againMessage = (!pwdMessage && again !== password) ? "两次输入的密码不一致。" : "";
     const displayMessage = display.length > 40 ? "显示名最多 40 个字符。" : "";
-    const captchaMessage = captchaText.length !== 4 ? "请填图上的 4 个字符。" : "";
+    const captchaMessage = captchaText.length !== 4 ? "请输入图中的 4 个字符。" : "";
     setFieldError("reg-name", "reg-name-msg", accountMessage);
     setFieldError("reg-pwd", "reg-pwd-msg", pwdMessage);
     setFieldError("reg-pwd2", "reg-pwd2-msg", againMessage);
@@ -552,7 +552,7 @@ window.Session = (() => {
     box.className = `pwd-strength lv-${level.ratio}`;
     if (fill && fill.style) fill.style.width = `${Math.round(level.ratio / 3 * 100)}%`;
     if (text) text.textContent = `密码强度：${level.label}`
-      + (level.label === "弱" ? "（能注册，只是建议长一点、混着字母数字）" : "");
+      + (level.label === "弱" ? "（可以注册，建议加长并使用字母与数字混合）" : "");
   }
 
   // 账号框失焦：问一次后端"这个名字有没有被注册"，就地给结论。
@@ -578,7 +578,7 @@ window.Session = (() => {
       const answer = await API.accountExists(account);
       state.lastCheckedName = account;
       setFieldError("reg-name", "reg-name-msg",
-        (answer && answer.exists) ? "这个账号已被注册，换一个吧。" : "✓ 可用",
+        (answer && answer.exists) ? "该账号已被注册，请更换。" : "✓ 可用",
         (answer && answer.exists) ? "bad" : "ok");
     } catch (err) {
       state.lastCheckedName = "";
@@ -657,7 +657,7 @@ window.Session = (() => {
       const icon = document.createElement("span");
       icon.className = "guard-ico";
       icon.textContent = "⚠";
-      icon.title = "游客模式：这项功能要登录后才能用";
+      icon.title = "游客模式：该功能需登录后使用";
       icon.setAttribute("aria-hidden", "true");
       el.appendChild(icon);
     } else if (!needed && old) {
@@ -758,8 +758,8 @@ window.Session = (() => {
     enter(who, "account", (account && account.display_name) || who,
       { role: account && account.role, sessionId: account && account.session_id });
     toast(isAdmin()
-      ? `已用管理员账号「${state.who.displayName}」进来。「系统设置 → 账号管理」里可以批准新账号。`
-      : `已用「${state.who.displayName}」进来。`, "ok");
+      ? `已使用管理员账号「${state.who.displayName}」登录。「系统设置 → 账号管理」中可批准新账号。`
+      : `已使用「${state.who.displayName}」登录。`, "ok");
   }
 
   // 注册：★ **成功后不再直接进系统** —— 按后端给的状态分两种结果：
@@ -791,7 +791,7 @@ window.Session = (() => {
       if (handleCaptchaError("register", err)) return;
       const taken = err && err.status === 409;
       const message = taken
-        ? "这个账号已被注册，换一个吧。"
+        ? "该账号已被注册，请更换。"
         : ((err && err.message) || "注册没成功，请稍后再试。");
       setFieldError(taken ? "reg-name" : "reg-pwd", taken ? "reg-name-msg" : "reg-pwd-msg", message);
       // 这一张已经用掉了（一次性的），换一张再让人改别的地方
@@ -814,8 +814,8 @@ window.Session = (() => {
       // 第一个账号（管理员）：注册完就能用，照常进来
       enter(who, "account", (account && account.display_name) || who,
         { role: account && account.role, sessionId: account && account.session_id });
-      toast("这台机器上的第一个账号 —— 你已经是管理员了，现在就能用。"
-        + "别人注册的账号要由你批准才能登录（在「系统设置 → 账号管理」里）。", "ok");
+      toast("这是本机第一个账号，已自动成为管理员，可立即使用。"
+        + "其他账号需经你批准后才能登录（在「系统设置 → 账号管理」中）。", "ok");
       return;
     }
     // 等待批准：不进来，只把结果说清楚（三句话：接下来会怎样、谁能批、现在能干什么）
@@ -860,8 +860,8 @@ window.Session = (() => {
     if (button) button.disabled = false;
     hide(spinner);
     enter(name, "guest");
-    toast(`已以「${name}」进入。这个名字是本机随机取的，只用于展示与记录；`
-      + "游客不留身份，退出后再进来会换一个新的。", "ok");
+    toast(`已以「${name}」进入。该名称由本机随机分配，仅用于展示与记录；`
+      + "游客不留身份，退出后再次进入将更换名称。", "ok");
   }
 
   // 三栏切换：账号登录 / 注册 / 游客登录。
@@ -929,7 +929,7 @@ window.Session = (() => {
     if (sessionId && typeof API !== "undefined" && API.authLogout) {
       API.authLogout(sessionId).catch(() => {});
     }
-    if (!wasGuest) toast("已退出登录，本机那条登录记录也清掉了。想再进来，重新登一次就行。");
+    if (!wasGuest) toast("已退出登录，本机登录记录已清除。需要时可重新登录。");
   }
 
   function closeUserMenu() {
@@ -983,7 +983,7 @@ window.Session = (() => {
       const countries = fmtCount(profile.country_count);
       if (!rows || !customers || !countries) {      // 数字不全就不摆一排"—"充数
         hide($("login-facts"));
-        setText("login-facts-note", "数据概况暂时读不到（服务还没就绪时会这样），不影响登录。");
+        setText("login-facts-note", "数据概况暂时无法读取（服务尚未就绪时会出现），不影响登录。");
         return;
       }
       show($("login-facts"));
@@ -991,11 +991,11 @@ window.Session = (() => {
       setText("fact-customers", customers);
       setText("fact-countries", countries);
       setText("login-facts-note", profile.first_day && profile.last_day
-        ? `数据范围 ${profile.first_day} ~ ${profile.last_day}　·　三个数字都从当前数据源读出来，换数据源会跟着变`
-        : "三个数字都从当前数据源读出来，换数据源会跟着变");
+        ? `数据范围 ${profile.first_day} ~ ${profile.last_day}　·　三个数字均从当前数据源读取，更换数据源后会随之变化`
+        : "三个数字均从当前数据源读取，更换数据源后会随之变化");
     }).catch(() => {
       hide($("login-facts"));
-      setText("login-facts-note", "数据概况暂时读不到（服务还没就绪时会这样），不影响登录。");
+      setText("login-facts-note", "数据概况暂时无法读取（服务尚未就绪时会出现），不影响登录。");
     });
     return factsPromise;
   }
@@ -1053,8 +1053,8 @@ window.Session = (() => {
     //   两样都不是这一轮该顺手做掉的东西；所以这里只给可行的两条路。）
     const forgot = $("link-forgot");
     if (forgot) forgot.addEventListener("click", () => toast(
-      "这台机器上没法找回原来的密码：密码只存成不可还原的校验值，谁也还原不出原文。"
-      + "可以注册一个新账号，或先用游客身份进来。"
+      "本机无法找回原密码：密码仅保存为不可还原的校验值，无法还原出原文。"
+      + "可注册新账号，或使用游客登录。"
     ));
 
     // 帮助 / 隐私：打开同一只右侧抽屉（不是"尚未开通"的提示条）。
@@ -1125,7 +1125,7 @@ window.Session = (() => {
         const again = $("reg-pwd2");
         if (again && again.value) {
           setFieldError("reg-pwd2", "reg-pwd2-msg",
-            again.value === regPwd.value ? "" : "两次填的密码不一样，再对一遍。");
+            again.value === regPwd.value ? "" : "两次输入的密码不一致。");
         }
       });
     }
@@ -1133,7 +1133,7 @@ window.Session = (() => {
     if (regPwd2) regPwd2.addEventListener("input", () => {
       const first = $("reg-pwd");
       setFieldError("reg-pwd2", "reg-pwd2-msg",
-        (first && first.value === regPwd2.value) ? "" : "两次填的密码不一样，再对一遍。");
+        (first && first.value === regPwd2.value) ? "" : "两次输入的密码不一致。");
     });
   }
 
@@ -1188,8 +1188,8 @@ window.Session = (() => {
         closeUserMenu();
         if (!state.who) return;              // 没登录就没有"我的状态"可谈，别让菜单把状态点亮
         setStatus(name, "manual");
-        toast(`状态已改成「${STATUS_TEXT[name]}」。这是本机显示的状态，`
-          + "下一次登录、提问或长时间没操作时会自动更新。");
+        toast(`状态已设为「${STATUS_TEXT[name]}」。该状态仅在本机显示，`
+          + "将在下次登录、提问或长时间无操作时自动更新。");
       });
     });
     const settings = $("um-settings");

@@ -298,20 +298,20 @@
   // 顺带把页面上其它"读取中…"的壳一起换成同一句人话 —— 那些句子是**首屏静态壳**，
   // 不换的话用户会以为系统卡住了（实际只是这一轮没读到）。
   function renderDatasourceUnknown() {
-    setText("datasource-label", "数据源：暂时读不到，可刷新页面重试");
+    setText("datasource-label", "数据源：暂时无法读取，可刷新页面重试");
     const dot = $("datasource-dot");
     if (dot) dot.className = "dot bad";
     const chip = $("datasource-chip");
-    if (chip) chip.title = "这次没读到数据源信息：服务可能还没就绪，刷新页面会重新读取。";
+    if (chip) chip.title = "本次未读取到数据源信息：服务可能尚未就绪，刷新页面会重新读取。";
     const rows = [
-      ["fact-data", "数据源：暂时读不到"],
-      ["fact-template", "报表模板：暂时读不到"],
-      ["fact-state", "数据状态：暂时读不到"],
-      ["fact-code", "数据校验：暂时读不到"],
-      ["rp-service", "暂时读不到"],
-      ["rp-state-readable", "暂时读不到"],
-      ["rp-counts", "暂时读不到"],
-      ["rp-snapshot", "暂时读不到"],
+      ["fact-data", "数据源：暂时无法读取"],
+      ["fact-template", "报表模板：暂时无法读取"],
+      ["fact-state", "数据状态：暂时无法读取"],
+      ["fact-code", "数据校验：暂时无法读取"],
+      ["rp-service", "暂时无法读取"],
+      ["rp-state-readable", "暂时无法读取"],
+      ["rp-counts", "暂时无法读取"],
+      ["rp-snapshot", "暂时无法读取"],
     ];
     rows.forEach(([id, message]) => setText(id, message));
   }
@@ -622,7 +622,7 @@
       hide(svg);
       show(empty);
       if (rows.length === 1) {
-        setText("trend-caption", "只有 1 次成功执行，画不出走势；数据来源：历史执行记录");
+        setText("trend-caption", "仅有 1 次成功执行，无法绘制走势；数据来源：历史执行记录");
       }
       return;
     }
@@ -1051,7 +1051,7 @@
       save.className = "btn btn-sm";
       save.type = "button";
       save.textContent = "下载报告";
-      save.title = "默认下载 Word；要 Excel 或 Markdown 就在报告面板上换";
+      save.title = "默认下载 Word；如需 Excel 或 Markdown，请在报告面板中切换";
       guardMark(save, "export");
       save.addEventListener("click", () => downloadConversationReport(item.conversation_id, save));
       row.appendChild(save);
@@ -1993,7 +1993,7 @@
     renderNlNote();
     // 三个企业化开关：禁用的原因是"能力还没做"，把归口 TASK 写在 title 上（不摆假的状态标签）
     const switches = [
-      ["sec-rbac", "用户与权限尚未实现：现在只有「单人使用」这一种用法"],
+      ["sec-rbac", "用户与权限尚未实现：当前仅支持单人使用"],
       ["sec-acl", "按名单放行 / 拦截访问尚未实现"],
       ["sec-circuit", "服务出问题时的自动保护尚未实现"],
     ];

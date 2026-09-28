@@ -90,7 +90,7 @@ def test_受限弹窗_文案与按钮都是用户要的那套():
     assert 'id="guard-backdrop"' in text, "弹窗少了可以点掉的背景层"
     # 弹窗是**弹窗**，不是整页盖死的遮罩：它带 role=dialog，可以被关掉
     assert 'role="dialog"' in text, "弹窗没有对话框语义"
-    assert 'id="guard-cancel"' in text, "弹窗少了一条「先不用」的退路"
+    assert 'id="guard-cancel"' in text, "弹窗少了一条「取消」的退路"
 
 
 def test_受限记号只出现在受限入口上():

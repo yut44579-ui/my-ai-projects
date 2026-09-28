@@ -397,7 +397,7 @@ check(captchaImgSrc().startsWith("data:image/svg+xml"),
 check(el("reg-captcha-img").src.startsWith("data:image/svg+xml"), "注册页同样有一张图");
 check(el("login-captcha").getAttribute("maxlength") === undefined
   || html.includes('id="login-captcha" type="text" maxlength="4"'), "验证码输入框限 4 位");
-check(html.includes('alt="验证码图片，点一下换一张"'), "验证码图有 alt（读屏能念）");
+check(html.includes('alt="验证码图片，可点击更换"'), "验证码图有 alt（读屏能念）");
 
 // 点图换一张：编号要换成新的，输入框里旧的字符要清掉
 const beforeReload = captchaIssued.length;
@@ -647,7 +647,7 @@ el("reg-pwd2").value = "abc12346";
 const beforeRegister = registeredLog.length;
 fire(el("register-form"), "submit");
 await flush();
-check(el("reg-pwd2-msg").hidden === false && el("reg-pwd2-msg").textContent.includes("不一样"),
+check(el("reg-pwd2-msg").hidden === false && el("reg-pwd2-msg").textContent.includes("不一致"),
   "两次不一致：就地人话", `「${el("reg-pwd2-msg").textContent}」`);
 check(registeredLog.length === beforeRegister && el("login-gate").hidden === false,
   "不一致就不发注册请求、不放行");

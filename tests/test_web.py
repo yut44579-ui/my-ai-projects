@@ -645,7 +645,7 @@ def test_顶栏数据源不许永远停在读取中() -> None:
     assert "function renderDatasourceChip()" in js
     # ② 这一轮没读到 → 人话 + 说清能做什么（不是继续挂着"读取中…"）
     assert "function renderDatasourceUnknown()" in js
-    assert "暂时读不到，可刷新页面重试" in js
+    assert "暂时无法读取，可刷新页面重试" in js
     assert "if (!state.health) renderDatasourceUnknown();" in js
     # 首屏那几个静态壳（数据源 / 模板 / 状态 / 校验）也要一起落地
     for anchor in ("fact-data", "fact-template", "fact-state", "fact-code"):

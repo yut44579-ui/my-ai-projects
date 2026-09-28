@@ -338,6 +338,29 @@ def test_销售表按国家与既有的国家分布同源():
     assert body["sort"] == "sales_amount" and body["order"] == "desc"
 
 
+@pytest.mark.parametrize("dimension,label", [("day", "期间"), ("week", "周"), ("country", "国家")])
+def test_销售表第一列的列名跟着维度走(dimension, label):
+    """第一列是**维度轴**：列名必须与维度一致（实测抓到过写死成「期间」的一版 ——
+    按国家看时那一格是 United Kingdom，列名却写着「期间」）。
+
+    key 恒为 dimension_value（前端按它取数），这里一并钉住。
+    """
+    body = _get("sales", start=MONTH[0], end=MONTH[1], dimension=dimension,
+                metric="order_count", page_size=3)
+    first = body["columns"][0]
+    assert first["key"] == "dimension_value", "第一列的 key 被改掉了（前端按这个 key 取数）"
+    assert first["label"] == label, f"维度 {dimension} 的第一列列名不是「{label}」"
+    # 只换列名：列的顺序与其余列名一个都不许动
+    assert [column["key"] for column in body["columns"]] == \
+        [column["key"] for column in queries.SALES_COLUMNS]
+    assert [column["label"] for column in body["columns"][1:]] == \
+        [column["label"] for column in queries.SALES_COLUMNS[1:]]
+    # 导出的表头用的是同一份列定义（页面上看到的列名 = 导出文件里的列名）
+    assert body["columns"] == queries.fetch_table(
+        "sales", dimension=dimension, metric="order_count", export=True, page_size=3
+    )["columns"]
+
+
 @pytest.mark.parametrize("metric", ["sales_amount", "order_count", "customer_count", "avg_order_amount"])
 def test_切换指标会真的改变返回的数据(metric):
     day = _get("sales", start=MONTH[0], end=MONTH[1], dimension="day", metric=metric, page_size=3)
