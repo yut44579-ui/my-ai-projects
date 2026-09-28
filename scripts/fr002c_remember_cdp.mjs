@@ -25,7 +25,8 @@
 // 截图落在 outputs/_cdp_shots/：那一行「已记住账号…清除」的样子 + 重开页面回填的样子。
 
 const BASE = process.argv[2] || "http://127.0.0.1:8536";
-const PORT = 9336;
+// 调试端口每次换一个：上一次跑崩掉时留下的 TIME_WAIT / 半死的浏览器不会把这一次连累掉
+const PORT = 9300 + Math.floor(Math.random() * 300);
 const EDGE_CANDIDATES = [
   String.raw`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
   String.raw`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
@@ -99,7 +100,7 @@ function check(ok, label, extra = "") {
 let ws;
 try {
   let targets = null;
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 120; i++) {
     try {
       const r = await fetch(`http://127.0.0.1:${PORT}/json/list`);
       targets = await r.json();
@@ -444,6 +445,77 @@ try {
   check(await evalJs(`document.getElementById("guest-pane").hidden === false
     && document.getElementById("login-form").hidden === true`),
     "游客那一栏照旧能进（无回归）");
+
+  // ── ⑨ 那一行会不会把登录卡片挤破（小窗口 / 手机竖屏）────────────────────
+  // 登录页原本是**铺满视口**且不用滚动的（见 scripts/stepb_login_cdp.mjs）。本轮在卡片里
+  // 多塞了一行「已记住账号…清除」，所以要把"有这一行 / 没这一行"两种形态都量一遍：
+  // 只要求一件事 —— **登录按钮完整落在视口里**（要多滚一下才够得着就是退步）。
+  console.log("\n=== ⑨ 加了那一行之后，登录按钮在窄窗口里还够得着吗 ===");
+  const GEOM = `(() => {
+    const btnEl = document.getElementById("btn-login");
+    const btn = btnEl.getBoundingClientRect();
+    const card = document.querySelector(".login-card").getBoundingClientRect();
+    const note = document.getElementById("remember-note");
+    const gate = document.getElementById("login-gate");
+    const overflowY = getComputedStyle(gate).overflowY;
+    // 把人能做的动作替它做一遍：把登录页滚到底，看登录按钮是不是**完整**露出来
+    gate.scrollTop = gate.scrollHeight;
+    const after = btnEl.getBoundingClientRect();
+    const reached = after.top >= 0 && after.bottom <= window.innerHeight + 1;
+    gate.scrollTop = 0;
+    return {
+      noteShown: !note.hidden,
+      cardH: Math.round(card.height),
+      btnBottom: Math.round(btn.bottom),
+      vh: window.innerHeight, vw: window.innerWidth,
+      scrollable: overflowY === "auto" || overflowY === "scroll",
+      reachedByScrolling: reached,
+      docScrollWidth: document.documentElement.scrollWidth,
+    };
+  })()`;
+  for (const [w, h] of [[1440, 900], [820, 660], [375, 720]]) {
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: w, height: h, deviceScaleFactor: 1, mobile: false,
+    });
+    // 先量"没那一行"（清掉记录 → reload）
+    await evalJs(`localStorage.removeItem("sra.remembered-name")`);
+    await send("Page.reload", { ignoreCache: false });
+    await sleep(1800);
+    const without = await evalJs(GEOM);
+    // 再量"有那一行"（种一条记录 → reload）
+    await evalJs(`localStorage.setItem("sra.remembered-name", ${JSON.stringify(ACCOUNT)})`);
+    await send("Page.reload", { ignoreCache: false });
+    await sleep(1800);
+    const withNote = await evalJs(GEOM);
+    console.log(`   ── ${w}x${h}：卡片 ${without.cardH}px → ${withNote.cardH}px`
+      + `（+${withNote.cardH - without.cardH}）`
+      + ` / 登录按钮底边 ${without.btnBottom} → ${withNote.btnBottom}（视口高 ${withNote.vh}）`);
+    check(withNote.noteShown && !without.noteShown,
+      `${w}x${h} 那一行按预期出现 / 收起`);
+    check(withNote.docScrollWidth <= withNote.vw + 1,
+      `${w}x${h} 没有横向溢出`, `doc=${withNote.docScrollWidth} ≤ ${withNote.vw}`);
+    check(withNote.cardH - without.cardH <= 40,
+      `${w}x${h} 那一行只加了几十像素，没把卡片撑变形`,
+      `+${withNote.cardH - without.cardH}px`);
+    if (without.btnBottom <= without.vh) {
+      // 这个尺寸本来就一屏放得下 → 加了那一行也必须还放得下
+      check(withNote.btnBottom <= withNote.vh,
+        `${w}x${h} 加了那一行，登录按钮依然一屏可见（本来就放得下）`,
+        `按钮底边 ${withNote.btnBottom} ≤ ${withNote.vh}`);
+    } else {
+      // ⚠️ 这个尺寸**本来就放不下**（与本次改动无关，是加那一行之前就有的）：
+      //    退一步只要求"滚一下够得着"，并且把两个数字都摆出来，不假装它没发生
+      console.log(`   ⚠️ ${w}x${h} 登录卡片本来就高于视口`
+        + `（无那一行时按钮底边 ${without.btnBottom} > ${without.vh}）—— 与本次改动无关`);
+      check(withNote.reachedByScrolling,
+        `${w}x${h} 滚到底之后登录按钮完整可见（本来就够不着的尺寸，别退步）`,
+        `按钮底边 ${withNote.btnBottom}，滚到底够得着=「${withNote.reachedByScrolling}」`);
+    }
+  }
+  await send("Emulation.setDeviceMetricsOverride", {
+    width: 1440, height: 900, deviceScaleFactor: 1, mobile: false,
+  });
+  await evalJs(`localStorage.removeItem("sra.remembered-name")`);
 
   check(consoleErrors.length === 0, "整个过程没有 JS 报错", consoleErrors.slice(0, 2).join(" | "));
   console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);
