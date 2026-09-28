@@ -64,6 +64,12 @@ window.Session = (() => {
     guest: { title: "游客登录", sub: "无需账号，部分功能受限" },
   };
   const PANES = { account: "login-form", register: "register-form", guest: "guest-pane" };
+  // 两张**附加**卡（FR-001A）：
+  //   reset  —— 忘记密码的四步流程
+  //   change —— 用临时密码登录之后"必须先改密"的那一屏
+  // 它们不进 PANES：上面那三栏底下有标签按钮，这两张没有 —— 它们是被"推进去"的，
+  // 不是与"登录/注册/游客"并列的第三个选项。
+  const EXTRA_PANES = { reset: "reset-pane", change: "pwd-change-form" };
 
   // 两个表单各有**自己的一张**验证码（各换各的，互不影响）：
   // value 是这张图的编号，提交时连同用户填的字符一起发出去。
@@ -72,6 +78,9 @@ window.Session = (() => {
                msg: "login-captcha-msg", button: "login-captcha-btn" },
     register: { input: "reg-captcha", img: "reg-captcha-img",
                 msg: "reg-captcha-msg", button: "reg-captcha-btn" },
+    // 忘记密码第①步自己一张（与登录/注册那两张互不影响：它们各换各的）
+    reset: { input: "reset-captcha", img: "reset-captcha-img",
+             msg: "reset-captcha-msg", button: "reset-captcha-btn" },
   };
 
   // 帮助 / 隐私：同一只抽屉，按 kind 换标题与内容
@@ -101,13 +110,20 @@ window.Session = (() => {
   const state = {
     who: null,          // {name, kind, displayName}；kind: account | guest；name = 账号名
     lastCheckedName: "",  // 已经问过后端"有没有被注册"的那个账号名（避免同一个名字反复问）
-    captchas: { account: "", register: "" },   // 当前两张验证码图的编号（每个表单一张）
+    captchas: { account: "", register: "", reset: "" },   // 当前三张验证码图的编号（每个表单一张）
     status: "offline",
     manual: false,      // 用户手动选过状态（先听用户的，等下次自动事件再接管）
     lastActive: 0,
     toastUntil: 0,
     pending: null,      // 未登录时 app.js 交给我们的"登录后要干的事"
     guestName: "",
+    // 忘记密码流程里的两张一次性凭证 —— **只在内存里，刷新即丢**（丢了就回第①步重来，
+    // 与后端"这两个东西只在内存、重启即失效"是同一条 fail-closed 约定）。
+    //   第①步 → resetToken + challengeId（第②步要带同一个 challengeId 才能通过交叉绑定）
+    //   第②步 → ticket（第③步只用它 + 新密码，页面无从指定"改谁的密码"）
+    reset: { step: 1, resetToken: "", challengeId: "", ticket: "", username: "" },
+    // 临时密码登录后，在"改密"这一步之前先把这条会话与本机身份记在这里（改成了才真进去）
+    pendingChange: null,
   };
 
   let factsPromise = null;
@@ -755,6 +771,14 @@ window.Session = (() => {
     if (button) button.disabled = false;
     hide(spinner);
     const who = (account && account.username) || checked.name;
+    // ★ 临时密码登录：**先改密才算真的进来**（后端那条会话此刻只准改密码与退出登录，
+    //   这里只是把人引到改密那一屏；页面不做任何"准不准"的判断）。
+    if (account && account.must_change_password) {
+      setStatus("online", "login");
+      beginPasswordChange(account, who);
+      toast("这是用临时密码登录的。请先设置新密码，之后才能使用其它功能。");
+      return;
+    }
     enter(who, "account", (account && account.display_name) || who,
       { role: account && account.role, sessionId: account && account.session_id });
     toast(isAdmin()
@@ -864,13 +888,287 @@ window.Session = (() => {
       + "游客不留身份，退出后再次进入将更换名称。", "ok");
   }
 
+  // ══════════════════════════════════════════════════════════════════════
+  // 忘记密码：单页四步（① 账号+验证码 ② 恢复码 ③ 新密码 ④ 完成）
+  // ══════════════════════════════════════════════════════════════════════
+  // ★ 三层权限在**后端**是分开的（验证码只允许进流程 / 恢复码证明所有权 / 票据只允许改密），
+  //   页面这四步只是把这三层如实地摆出来：
+  //     · 第①步永远只说同一句话（"如果账户信息有效且满足恢复条件，将继续下一步"）——
+  //       页面**不判断**账号在不在、有没有恢复码，也没本事判断（后端不告诉它）；
+  //     · 第②步要把第①步的那个 challengeId 一起带上（后端要校验两者是同一张挑战）；
+  //     · 第③步只有 ticket 与新密码 —— 页面无从指定改谁的密码。
+  const RESET_STEPS = 4;
+
+  // 恢复码的规整：大写 + 去掉空格、连字符等一切分隔符。
+  // ★ 服务端**也**会做同样一遍（那才是有效的那一遍，这里是为了让用户当场看懂自己输的像不像）。
+  function normalizeRecoveryCode(raw) {
+    return String(raw || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+  }
+
+  function resetGoStep(step) {
+    const wanted = Math.min(Math.max(Number(step) || 1, 1), RESET_STEPS);
+    state.reset.step = wanted;
+    for (let index = 1; index <= RESET_STEPS; index += 1) {
+      const pane = $(`reset-step-${index}`);
+      if (pane) { if (index === wanted) show(pane); else hide(pane); }
+      const dot = $(`reset-dot-${index}`);
+      if (dot) dot.classList.toggle("is-on", index <= wanted);
+    }
+    setText("login-title", "找回密码");
+    setText("login-sub", wanted === RESET_STEPS ? "完成" : `第 ${wanted} 步 / 共 3 步`);
+    // "返回登录"在第④步换成"返回登录"按钮（那张卡里自己有一个），这里只隐藏重复的那个
+    const back = $("btn-reset-back");
+    if (back) back.hidden = wanted === RESET_STEPS;
+    const note = $("reset-note-1");
+    if (note) note.hidden = wanted !== 1;
+    if (wanted === 1) loadCaptcha("reset");
+    if (wanted === 2) {
+      const input = $("reset-code");
+      if (input && input.focus) input.focus();
+    }
+    if (wanted === 3) {
+      const input = $("reset-pwd");
+      if (input && input.focus) input.focus();
+    }
+  }
+
+  // 「忘记密码？」：进这个流程（不再是弹一句"本机没法找回"）。
+  function openReset() {
+    state.reset = { step: 1, resetToken: "", challengeId: "", ticket: "", username: "" };
+    switchTab("reset");                       // 五张卡里只留这一张（见 PANES/EXTRA_PANES）
+    resetGoStep(1);
+    const name = $("reset-name");
+    if (name && !name.value) name.value = ($("login-name") || {}).value || "";
+    if (name && name.focus) name.focus();
+  }
+
+  function closeReset() {
+    state.reset = { step: 1, resetToken: "", challengeId: "", ticket: "", username: "" };
+    switchTab("account");
+  }
+
+  // 第①步：账号 + 验证码 → reset_token。
+  // 无论账号在不在、有没有恢复码，后端回的**形状与话都一样**，页面也就照着同一句话显示。
+  async function submitResetStep1() {
+    const name = (($("reset-name") || {}).value || "").trim();
+    const captcha = captchaPayload("reset");
+    setFieldError("reset-name", "reset-name-msg", "");
+    setFieldError("reset-captcha", "reset-captcha-msg", "");
+    if (!name) { setFieldError("reset-name", "reset-name-msg", "请填写账号。"); return; }
+    if (!captcha.captcha_text) {
+      setFieldError("reset-captcha", "reset-captcha-msg", "请输入图中的 4 个字符。");
+      return;
+    }
+    const button = $("btn-reset-step1");
+    if (button) button.disabled = true;
+    try {
+      const data = await API.resetRequest({
+        username: name,
+        captcha: captcha.captcha_text,
+        challenge_id: captcha.captcha_id,
+        challenge_proof: captcha.captcha_text,
+      });
+      state.reset.resetToken = (data && data.reset_token) || "";
+      state.reset.challengeId = captcha.captcha_id;
+      state.reset.username = name;
+      resetGoStep(2);
+    } catch (err) {
+      if (handleCaptchaError("reset", err)) return;   // 验证码那三种错就地提示 + 换一张
+      setFieldError("reset-captcha", "reset-captcha-msg",
+        (err && err.message) || "这一步没成功，请稍后再试。");
+      loadCaptcha("reset");
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  // 第②步：恢复码 → ticket。
+  async function submitResetStep2() {
+    const raw = ($("reset-code") || {}).value || "";
+    const code = normalizeRecoveryCode(raw);
+    setFieldError("reset-code", "reset-code-msg", "");
+    if (!code) { setFieldError("reset-code", "reset-code-msg", "请填写恢复码。"); return; }
+    if (code.length !== 20) {
+      // 这一条只是**体验**上的提醒（20 位是公开的格式，说了不算泄露什么）：
+      // 真正说了算的是服务端 —— 少一位、抄错一位，后端一律回"恢复码不对或已失效"。
+      setFieldError("reset-code", "reset-code-msg",
+        `恢复码是 20 位，你填了 ${code.length} 位，请检查是否少抄或多抄了字符。`);
+      return;
+    }
+    const button = $("btn-reset-step2");
+    if (button) button.disabled = true;
+    try {
+      const data = await API.resetVerify({
+        reset_token: state.reset.resetToken,
+        recovery_code: code,
+        challenge_id: state.reset.challengeId,       // ★ 必须与第①步那张挑战是同一个
+      });
+      state.reset.ticket = (data && data.ticket) || "";
+      resetGoStep(3);
+    } catch (err) {
+      const message = (err && err.message) || "这一步没成功，请稍后再试。";
+      if (restartableReset(err)) {                   // token/挑战失效：回第①步重来
+        setFieldError("reset-captcha", "reset-captcha-msg", message);
+        state.reset.resetToken = "";
+        resetGoStep(1);
+        return;
+      }
+      setFieldError("reset-code", "reset-code-msg", message);
+      const input = $("reset-code");
+      if (input && input.focus) input.focus();
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  // 哪种失败意味着"得从第①步重来"：一次性凭证不在册了（过期 / 用过 / 挑战对不上）。
+  function restartableReset(err) {
+    const code = (err && err.code) || "";
+    return code === "reset_token_invalid" || code === "challenge_invalid";
+  }
+
+  // 第③步：票据 + 新密码 → 改密。
+  async function submitResetStep3() {
+    const first = ($("reset-pwd") || {}).value || "";
+    const second = ($("reset-pwd2") || {}).value || "";
+    setFieldError("reset-pwd", "reset-pwd-msg", "");
+    setFieldError("reset-pwd2", "reset-pwd2-msg", "");
+    if (first.length < 6) {
+      setFieldError("reset-pwd", "reset-pwd-msg", "新密码至少 6 位。");
+      return;
+    }
+    if (first !== second) {
+      setFieldError("reset-pwd2", "reset-pwd2-msg", "两次输入的密码不一样，请重新确认。");
+      return;
+    }
+    const button = $("btn-reset-step3");
+    if (button) button.disabled = true;
+    try {
+      // ★ 请求体里**只有** ticket 与 new_password（后端也只读这两个）。
+      //   改的是哪个账号，由票据内部决定 —— 页面根本不知道、也不需要知道。
+      const data = await API.resetCommit({ ticket: state.reset.ticket, new_password: first });
+      setText("reset-done-title", `「${(data && data.username) || state.reset.username}」的密码已更新`);
+      setText("reset-done-note", "请用新密码登录。旧的登录状态已全部失效。");
+      resetGoStep(4);
+    } catch (err) {
+      const message = (err && err.message) || "这一步没成功，请稍后再试。";
+      if ((err && err.code) === "ticket_invalid") {
+        setFieldError("reset-captcha", "reset-captcha-msg", message);
+        state.reset.ticket = "";
+        resetGoStep(1);
+        return;
+      }
+      setFieldError("reset-pwd", "reset-pwd-msg", message);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 临时密码登录后：先设置新密码，才能进系统
+  // ══════════════════════════════════════════════════════════════════════
+  // ★ 这一步**不是**页面说了算：后端把这条会话标记成"只准改密码与退出登录"，
+  //   其它接口一律 403（见 app/api.py 的 must_change_guard）。
+  //   页面做的是"把人引到这里"，不是"决定他能不能做别的"。
+  function beginPasswordChange(account, name) {
+    state.pendingChange = {
+      name: (account && account.username) || name,
+      displayName: (account && account.display_name) || name,
+      role: (account && account.role) || "user",
+      sessionId: (account && account.session_id) || "",
+    };
+    // 身份收回去：改密成功之前不算"进来了"（进系统那一步在 submitPasswordChange 里）。
+    // 这一步同时解决"刷新页面"：本机那条记录被清掉，回来看到的是登录页 + 改密那一屏。
+    clearWho();
+    state.who = null;
+    closeUserMenu();
+    if (document.body) document.body.classList.add("is-locked");
+    show($("login-gate"));
+    renderUserArea();
+    renderPaneUser();
+    renderGuestMode();
+    applyGuards();
+    switchTab("change");
+    setText("pwd-change-who",
+      `「${state.pendingChange.displayName}」是用临时密码登录的。请先设置一个新密码，之后才能使用其它功能。`);
+    ["pc-old", "pc-new", "pc-new2"].forEach((id) => {
+      const input = $(id);
+      if (input) input.value = "";
+      setFieldError(id, `${id}-msg`, "");
+    });
+    const input = $("pc-old");
+    if (input && input.focus) input.focus();
+    if (typeof document !== "undefined" && document.dispatchEvent) {
+      document.dispatchEvent(new CustomEvent("sra:identity", { detail: identity() }));
+    }
+  }
+
+  // 刷新页面之后问后端一句"我这条会话现在被允许做什么"。
+  // ★ 判断始终在**后端**：前端只是看清它的回答 —— 后端说"必须先改密"（403 + 那个错误码），
+  //   就把人放回改密那一屏；后端说别的话（没登录 / 不是管理员）都不影响正常使用。
+  // 为什么必须问：这条会话的 must_change 状态只在服务端内存里，本机记录里没有它，
+  //   刷新一下前端就不知道了 —— 而"不知道"不该变成"看起来一切正常但每个请求都被拒"。
+  function checkSessionState() {
+    const who = state.who;
+    if (!who || who.kind !== "account" || !who.sessionId) return;
+    if (typeof API === "undefined" || !API.listAccounts) return;
+    API.listAccounts(who.sessionId).catch((err) => {
+      if (!err || err.code !== "must_change_password") return;
+      beginPasswordChange({ username: who.name, display_name: who.displayName,
+                            role: who.role, session_id: who.sessionId }, who.name);
+      toast("这个账号是用临时密码登录的。请先设置新密码，之后才能使用其它功能。");
+    });
+  }
+
+  async function submitPasswordChange() {
+    const pending = state.pendingChange;
+    if (!pending) { switchTab("account"); return; }
+    const oldPwd = ($("pc-old") || {}).value || "";
+    const first = ($("pc-new") || {}).value || "";
+    const second = ($("pc-new2") || {}).value || "";
+    ["pc-old", "pc-new", "pc-new2"].forEach((id) => setFieldError(id, `${id}-msg`, ""));
+    if (!oldPwd) { setFieldError("pc-old", "pc-old-msg", "请填写临时密码。"); return; }
+    if (first.length < 6) { setFieldError("pc-new", "pc-new-msg", "新密码至少 6 位。"); return; }
+    if (first !== second) {
+      setFieldError("pc-new2", "pc-new2-msg", "两次输入的密码不一样，请重新确认。");
+      return;
+    }
+    const button = $("btn-pwd-change");
+    if (button) button.disabled = true;
+    try {
+      const answer = await API.changePassword({
+        old_password: oldPwd,
+        new_password: first,
+        session_id: pending.sessionId,
+      });
+      state.pendingChange = null;
+      // ★ 密码变了 = 认证状态重建：旧会话已经作废，这里换上后端刚发的**新**会话
+      enter(pending.name, "account", pending.displayName,
+        { role: pending.role, sessionId: (answer && answer.session_id) || "" });
+      toast("密码已更新，已用新密码重新登录。", "ok");
+    } catch (err) {
+      const message = (err && err.message) || "改密没成功，请稍后再试。";
+      if ((err && err.status) === 401) {             // 会话没了（服务重启过）：回登录页
+        state.pendingChange = null;
+        switchTab("account");
+        setFieldError("login-pwd", "login-pwd-msg", message);
+        return;
+      }
+      setFieldError((err && err.code === "bad_credentials") ? "pc-old" : "pc-new",
+        (err && err.code === "bad_credentials") ? "pc-old-msg" : "pc-new-msg", message);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   // 三栏切换：账号登录 / 注册 / 游客登录。
   // 「注册」做成第三个标签（而不是只留着底部那个链接）：注册与登录是**并列**的两件事 ——
   // 第一次来的人要先注册，把它藏在底部小字里会让人以为"必须先有账号才能用"；
   // 底部的「注册账号」链接保留，点它等于切到这一栏（老位置、老习惯不掉）。
   function switchTab(kind) {
-    const wanted = PANES[kind] ? kind : "account";
-    Object.entries(PANES).forEach(([key, paneId]) => {
+    const all = { ...PANES, ...EXTRA_PANES };
+    const wanted = all[kind] ? kind : "account";
+    Object.entries(all).forEach(([key, paneId]) => {
       const tab = $(`ltab-${key}`);
       if (tab) tab.classList.toggle("is-on", key === wanted);
       const pane = $(paneId);
@@ -879,8 +1177,13 @@ window.Session = (() => {
     // 注册那张"等待批准"的结果卡：切栏时一律收起来（回到填表状态）。
     // 不收的话，切走再回来看到的还是上一次的结论，人会以为刚填的也提交了。
     hideRegisterPending();
-    setText("login-title", TABS[wanted].title);
-    setText("login-sub", TABS[wanted].sub);
+    const titles = {
+      ...TABS,
+      reset: { title: "找回密码", sub: "第 1 步 / 共 3 步" },
+      change: { title: "设置新密码", sub: "临时密码登录后必须先改密" },
+    };
+    setText("login-title", titles[wanted].title);
+    setText("login-sub", titles[wanted].sub);
   }
 
   // 眼睛图标两态：睁眼（明文藏着，点了就显示）↔ 闭眼带斜线（明文显示中，点了藏回去）。
@@ -960,6 +1263,17 @@ window.Session = (() => {
     setFieldError("login-captcha", "login-captcha-msg", "");
     loadCaptcha("account");
     loadCaptcha("register");
+    // 忘记密码 / 改密那两张卡也清干净，并把它们手里的**一次性凭证**丢掉
+    // （reset_token 与 ticket 都只在内存里，丢了就回第①步重来 —— 与后端同一条 fail-closed 约定）
+    state.reset = { step: 1, resetToken: "", challengeId: "", ticket: "", username: "" };
+    state.pendingChange = null;
+    ["reset-name", "reset-captcha", "reset-code", "reset-pwd", "reset-pwd2",
+     "pc-old", "pc-new", "pc-new2"].forEach((id) => {
+      const input = $(id);
+      if (input) input.value = "";
+      setFieldError(id, `${id}-msg`, "");
+    });
+    hide($("set-recovery-box"));
     hide($("reg-strength"));
     state.lastCheckedName = "";
     const loginButton = $("btn-login");
@@ -1048,14 +1362,34 @@ window.Session = (() => {
       if (input && input.focus) input.focus();
     });
 
-    // 「忘记密码？」——**本机模式没法找回**，就如实说，不假装能发邮件重置。
-    // （本机重置要么"谁坐在键盘前都能改别人的密码"、要么得先有一套恢复凭据，
-    //   两样都不是这一轮该顺手做掉的东西；所以这里只给可行的两条路。）
+    // 「忘记密码？」——进四步找回流程（不再是弹一句"本机没法找回"）。
+    // 本机仍然**无法还原原密码**（只存不可还原的摘要，也没有邮件服务），
+    // 但现在有了确实能走通的一条路：用登录后自己生成的**恢复码**重置一个新密码。
+    // 没有恢复码的账号走管理员临时密码那条（见帮助「七、忘记密码怎么办」）。
     const forgot = $("link-forgot");
-    if (forgot) forgot.addEventListener("click", () => toast(
-      "本机无法找回原密码：密码仅保存为不可还原的校验值，无法还原出原文。"
-      + "可注册新账号，或使用游客登录。"
-    ));
+    if (forgot) forgot.addEventListener("click", () => openReset());
+    // 找回流程里的四个按钮 + 一个返回
+    const resetBindings = [
+      ["btn-reset-step1", submitResetStep1],
+      ["btn-reset-step2", submitResetStep2],
+      ["btn-reset-step3", submitResetStep3],
+      ["btn-reset-done", () => closeReset()],
+      ["btn-reset-back", () => closeReset()],
+      ["btn-pwd-change", submitPasswordChange],
+    ];
+    resetBindings.forEach(([id, handler]) => {
+      const button = $(id);
+      if (button) button.addEventListener("click", handler);
+    });
+    // 恢复码输入框：失焦时把规整后的样子写回去（用户能当场看出自己抄得对不对）。
+    // ★ 服务端还会再规整一遍 —— 那才是有效的那一遍（只在前端做等于没做）。
+    const codeInput = $("reset-code");
+    if (codeInput) codeInput.addEventListener("blur", () => {
+      const normalized = normalizeRecoveryCode(codeInput.value);
+      if (normalized && normalized !== codeInput.value) {
+        codeInput.value = normalized.replace(/(.{4})(?=.)/g, "$1-");
+      }
+    });
 
     // 帮助 / 隐私：打开同一只右侧抽屉（不是"尚未开通"的提示条）。
     // 登录页底部两个入口 + 顶栏 ☰ 菜单里两个入口，打开的是**同一只抽屉**（内容只有一份）。
@@ -1262,6 +1596,7 @@ window.Session = (() => {
     loadAccountHint();                          // 一个账号都没有 → 亮出"先注册一个"
     loadCaptcha("account");                     // 两张验证码图各取一张（登录 / 注册）
     loadCaptcha("register");
+    checkSessionState();                        // 刷新回来先问一句"这条会话现在准做什么"
     setInterval(tick, 1000);
   }
 

@@ -963,6 +963,31 @@ body.is-locked .app { display: none; }
 }
 .login-hint { font-size: 11px; color: var(--text-3); margin: 0; line-height: 1.7; }
 
+/* ── 忘记密码：四步进度条 + 恢复码显示（FR-001A）─────────────────────────
+   进度条是"我现在走到哪一步"的唯一提示（四步里前两步是匿名的，用户容易迷路）。
+   颜色只用既有的主色 token，不引新色值。 */
+.reset-steps {
+  display: flex; gap: 6px; margin: 0; padding: 0; list-style: none;
+}
+.reset-step {
+  flex: 1 1 0; text-align: center; font-size: 11px; color: var(--text-3);
+  padding: 5px 0; background: var(--bg-inset);
+  border: 1px solid var(--border); border-radius: var(--radius-ctrl);
+}
+.reset-step.is-on { color: var(--text-1); border-color: var(--td-brand-color); background: var(--primary-light); }
+.reset-lede { font-size: 12px; color: var(--text-2); margin: 0; line-height: 1.7; }
+.reset-pane > div[hidden] { display: none; }   /* 三张步骤卡各自 hidden 时不许被 flex 撑开 */
+/* 恢复码：等宽字体 + 拉开字距 —— 这是给人**抄**的，不是给人读的 */
+.recovery-box {
+  margin-top: 12px; padding: 12px; background: var(--bg-inset);
+  border: 1px solid var(--border); border-radius: var(--td-radius-medium);
+}
+.recovery-box[hidden] { display: none; }
+.recovery-code {
+  font-family: Consolas, Menlo, monospace; font-size: 15px; letter-spacing: 1px;
+  color: var(--text-1); padding: 8px 0 4px; word-break: break-all;
+}
+
 /* ════ 帮助 / 隐私 抽屉 ════════════════════════════════════════════════
    从右边滑出，盖在登录页**之上**（它不在 .app 里，所以登录时也能看）。
    为什么是抽屉不是居中弹窗：帮助与隐私都是"读一段、对照着看"的内容，

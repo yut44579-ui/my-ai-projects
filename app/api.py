@@ -68,7 +68,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import api_auth, api_chat, api_datasets, api_documents, prewarm, state
+from app import accounts, api_auth, api_chat, api_datasets, api_documents, prewarm, state
 from app.engine import executor, loader, renderer
 from app.engine import metrics as engine_metrics
 from app.spec.models import (
@@ -1547,6 +1547,46 @@ app.include_router(api_datasets.router)
 # 密码只以"不可还原的校验值"落 state/accounts.json（实现与边界见 app/accounts.py）。
 # 位置同样必须在 mount("/") **之前**。
 app.include_router(api_auth.router)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 中间件：临时密码登录的会话**只准改密码与退出登录**（FR-001A · 评审 D7/D8/E5）
+# ════════════════════════════════════════════════════════════════════════
+# 为什么这件事必须落在这里，而不是让每个端点自己判：
+#   评审要的是一条**服务端**的统一闸门 ——
+#       session 已认证 → must_change_password?
+#                          ├─ 否 → 正常
+#                          └─ 是 → 只放行 /api/auth/password/change 与 /api/auth/logout
+#                                  ，**其余业务 API 一律 403**
+#   判漏一处就是一条越权路径，所以判一次、判在所有人之前（中间件跑在路由之前）。
+#
+# ★ 为什么这样不算"改了既有端点的行为"（评审 E 的边界）：
+#   这个闸门**只在请求带着一个 `must_change` 会话编号时**才可能拦人；而这样的会话
+#   只可能由本 TASK 新加的"临时密码登录"产生。既有 540 条测试与 12 个 Legacy 端点
+#   的请求一个都不带它 —— 在那些场景下这段代码等于不存在（只是多读一个请求头）。
+#
+# ★ 前端**不是**这道闸门：页面当然也会把人引到改密那一步（那是体验），
+#   但用 curl 直接打业务接口同样会被这里拦住（评审 F：安全控制不许放前端）。
+_MUST_CHANGE_ALLOWED = ("/api/auth/password/change", "/api/auth/logout")
+
+
+@app.middleware("http")
+async def must_change_guard(request: Request, call_next):
+    """带 `X-Session-Id` 且那条会话处于 must_change 时，除两条白名单外一律 403。"""
+    session_id = request.headers.get("x-session-id")
+    if session_id and request.url.path.startswith("/api/"):
+        info = accounts.session_info(session_id)
+        if info and info["must_change"] and request.url.path not in _MUST_CHANGE_ALLOWED:
+            return JSONResponse(
+                status_code=403,
+                content=_error_payload(
+                    403,
+                    "这个账号是用临时密码登录的，必须先在「修改密码」里设置新密码，之后才能使用其它功能。",
+                    code="must_change_password",
+                    message="这个账号是用临时密码登录的，必须先在「修改密码」里设置新密码，之后才能使用其它功能。",
+                ),
+            )
+    return await call_next(request)
 
 
 # ════════════════════════════════════════════════════════════════════════

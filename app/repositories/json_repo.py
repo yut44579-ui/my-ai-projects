@@ -10,6 +10,8 @@ TASK-009 迁 SQLite 时，新增 `sql_repo.py` 实现 base.py 里同样的接口
 
 from __future__ import annotations
 
+import hmac
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -295,3 +297,80 @@ class JsonAccountRepository(_JsonRepositoryBase, AccountRepository):
         return self._collection.remove_first(
             lambda record: str(record.get("username") or "").strip().casefold() == wanted
         )
+
+    # ── 密码恢复（FR-001A）：下面四个都靠 `update_first` 的进程内锁做到"原子" ────
+    def _matches(self, username: str):
+        """账号名匹配的口径**只写一次**（与 get / set_status / remove 同一套）。"""
+        wanted = (username or "").strip().casefold()
+        return lambda record: str(record.get("username") or "").strip().casefold() == wanted
+
+    def update_fields(self, username: str, fields: dict) -> dict | None:
+        """原子写几个字段（值为 None = 删掉这个键）。
+
+        为什么"删键"而不是"写成 null"：账号记录的字段集是有人逐个数过的
+        （`test_密码绝不明落盘` 那条测试就锁死了 12 个字段）——
+        一次没用过的临时密码不该在记录里留下一串 null 字段当垃圾。
+        """
+        if not (username or "").strip():
+            return None
+
+        def mutate(record: dict) -> bool:
+            changed = False
+            for key, value in fields.items():
+                if value is None:
+                    if key in record:
+                        record.pop(key, None)
+                        changed = True
+                elif record.get(key) != value:
+                    record[key] = value
+                    changed = True
+            return changed                                # 一个都没变 → 不写盘（不刷 mtime）
+
+        return self._collection.update_first(self._matches(username), mutate)
+
+    def consume_recovery_code(self, username: str, code_hash: str, used_at: str) -> bool:
+        """原子地"比对 + 消费"恢复码（评审 ④：检查与消费必须是同一个临界区）。
+
+        比对用 `hmac.compare_digest`（定长）：不因为"第几个字符开始不一样"提前返回。
+        对不上时**一个字节都不改** —— 输错恢复码绝不能把正确的那个毁掉（评审 Q4-4）。
+        """
+        if not (username or "").strip() or not code_hash:
+            return False
+        outcome = {"matched": False}
+
+        def mutate(record: dict) -> bool:
+            current = str(record.get("recovery_code_hash") or "")
+            if not current or not hmac.compare_digest(current, code_hash):
+                return False                              # 对不上：不写盘（正确的码原样留着）
+            record.pop("recovery_code_hash", None)        # 用掉即作废：清掉，不是留个标记
+            record["recovery_code_used_at"] = used_at
+            outcome["matched"] = True
+            return True
+
+        self._collection.update_first(self._matches(username), mutate)
+        return outcome["matched"]
+
+    def consume_temp_password(self, username: str, used_at: str) -> bool:
+        """原子地消费一次临时密码（评审 ⑥：并发多个登录里只允许一个成功）。
+
+        过期的临时密码直接当"没有"处理（顺手清掉，不留过期货）。
+        """
+        if not (username or "").strip():
+            return False
+        outcome = {"matched": False}
+        now = time.time()
+
+        def mutate(record: dict) -> bool:
+            if not record.get("temp_pwd_hash"):
+                return False
+            expires = float(record.get("temp_pwd_expires_at") or 0)
+            if expires <= now:
+                return False                              # 过期了：不消费（由上层当"没这个密码"）
+            if record.get("temp_pwd_used_at"):
+                return False                              # 已经被用掉：并发里的第二个必须失败
+            record["temp_pwd_used_at"] = used_at
+            outcome["matched"] = True
+            return True
+
+        self._collection.update_first(self._matches(username), mutate)
+        return outcome["matched"]

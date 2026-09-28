@@ -215,6 +215,37 @@ class AccountRepository(ABC):
         —— 那是业务判断，不是存储层该管的事。
         """
 
+    # ── 密码恢复（FR-001A）：整段"读-改-写"必须原子 ─────────────────────
+    # 下面四个方法存在的唯一理由，是把**并发**挡在存储层这一道锁里。
+    # 上层（recovery.py）拿到的是"成功 / 失败"这个结论，而不是"先查一下、再改一下"
+    # 两步 —— 两步之间被别的线程插进来，就是评审点名的 TOCTOU（④）与轮换竞争（③）。
+
+    @abstractmethod
+    def update_fields(self, username: str, fields: dict) -> dict | None:
+        """**原子地**把 `fields` 里的键写进那条账号记录（值给 None = 删掉该键）。
+
+        为什么不是"读出来改一改再写回去"：那样两个并发的"生成恢复码"会互相覆盖，
+        最后可能出现"旧码还有效 + 新码也有效"（评审 ⑥③）。这里整个读-改-写在一把锁里完成。
+        返回更新后的记录（账号不存在返回 None）。
+        """
+
+    @abstractmethod
+    def consume_recovery_code(self, username: str, code_hash: str, used_at: str) -> bool:
+        """**原子地**"比对 + 消费"恢复码：对了就当场作废并返回 True，否则一个字节都不改。
+
+        `code_hash` 由上层算好（本层不碰明文、也不知道那是什么东西的摘要）。
+        比对必须用定长比较（`hmac.compare_digest`），且**读-比对-写**三件事不可分割
+        —— 否则同一个恢复码的两个并发请求会双双通过检查（评审 ④ TOCTOU）。
+        """
+
+    @abstractmethod
+    def consume_temp_password(self, username: str, used_at: str) -> bool:
+        """**原子地**消费一次临时密码：没被用过、也没过期才置"已用"并返回 True。
+
+        评审 ⑥ 冻结的语义：临时密码在**第一次成功登录时立即消费**；
+        并发的多个登录请求里，只有一个能拿到 True（其余必须失败）。
+        """
+
 
 class DatasetRepository(ABC):
     """数据集登记表（`state/datasets.json`）：STEP A 引入的**数据源身份**。

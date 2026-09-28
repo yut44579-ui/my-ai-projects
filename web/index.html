@@ -208,6 +208,105 @@
         <p class="login-hint">游客不留身份：名称由本机随机分配，退出后再次进入将更换。</p>
       </div>
 
+      <!-- ── 忘记密码：单页四步（① 账号+验证码 ② 恢复码 ③ 新密码 ④ 完成）──────
+           评审冻结的形态：**一个页面里的四个步骤**，不做四个弹窗。
+           ★ 第①步**绝不**显示"账号不存在"或"该账号没有恢复码" —— 一律同一句话：
+             「如果账户信息有效且满足恢复条件，将继续下一步。」
+             （能区分就等于给了一个"这个账号在不在"的探测口。）
+           ★ 三步各自的权限是分开的：验证码只允许"进入流程"、恢复码才证明"这是你的账号"、
+             一次性票据只允许"改密码" —— 合并任何两步都会留下越权路径，所以界面上也是四步。
+           每一步的问与答都由后端决定，页面只负责"显示状态 + 递凭证"。 -->
+      <div class="login-form reset-pane" id="reset-pane" hidden>
+        <ol class="reset-steps">
+          <li class="reset-step is-on" id="reset-dot-1">账号</li>
+          <li class="reset-step" id="reset-dot-2">恢复码</li>
+          <li class="reset-step" id="reset-dot-3">新密码</li>
+          <li class="reset-step" id="reset-dot-4">完成</li>
+        </ol>
+
+        <div id="reset-step-1">
+          <div class="field">
+            <label class="field-label" for="reset-name">账号</label>
+            <input id="reset-name" type="text" maxlength="40" autocomplete="username"
+                   placeholder="要找回的账号">
+            <p class="field-msg" id="reset-name-msg" hidden></p>
+          </div>
+          <div class="field">
+            <label class="field-label" for="reset-captcha">验证码</label>
+            <div class="captcha-row">
+              <input id="reset-captcha" type="text" maxlength="4" autocomplete="off"
+                     spellcheck="false" placeholder="输入图中的 4 个字符">
+              <button class="captcha-btn" id="reset-captcha-btn" type="button"
+                      title="看不清时可点击更换" aria-label="验证码图片，可点击更换">
+                <img id="reset-captcha-img" alt="验证码图片，可点击更换">
+              </button>
+            </div>
+            <p class="field-msg" id="reset-captcha-msg" hidden></p>
+          </div>
+          <button class="btn btn-primary login-submit" id="btn-reset-step1" type="button">下一步</button>
+        </div>
+
+        <div id="reset-step-2" hidden>
+          <p class="reset-lede">请输入你的恢复码（20 位，空格与连字符可省略）。</p>
+          <div class="field">
+            <label class="field-label" for="reset-code">恢复码</label>
+            <input id="reset-code" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="例如 J7KD-X4PM-Q8TW-2NFC-9H3M">
+            <p class="field-msg" id="reset-code-msg" hidden></p>
+          </div>
+          <p class="login-hint">没有恢复码？本机无法自助补发，请联系管理员发一张临时密码。</p>
+          <button class="btn btn-primary login-submit" id="btn-reset-step2" type="button">验证恢复码</button>
+        </div>
+
+        <div id="reset-step-3" hidden>
+          <div class="field">
+            <label class="field-label" for="reset-pwd">新密码</label>
+            <input id="reset-pwd" type="password" autocomplete="new-password" placeholder="至少 6 位">
+            <p class="field-msg" id="reset-pwd-msg" hidden></p>
+          </div>
+          <div class="field">
+            <label class="field-label" for="reset-pwd2">确认新密码</label>
+            <input id="reset-pwd2" type="password" autocomplete="new-password" placeholder="请再次输入新密码">
+            <p class="field-msg" id="reset-pwd2-msg" hidden></p>
+          </div>
+          <button class="btn btn-primary login-submit" id="btn-reset-step3" type="button">设置新密码</button>
+        </div>
+
+        <div id="reset-step-4" hidden>
+          <div class="pending-ico" aria-hidden="true">✓</div>
+          <h4 class="pending-title" id="reset-done-title">密码已更新</h4>
+          <p class="login-hint" id="reset-done-note">请用新密码登录。</p>
+          <button class="btn" id="btn-reset-done" type="button">返回登录</button>
+        </div>
+
+        <p class="login-hint" id="reset-note-1">忘记密码时用恢复码重置。恢复码要在登录后自己生成。</p>
+        <button class="link-btn" id="btn-reset-back" type="button">返回登录</button>
+      </div>
+
+      <!-- ── 临时密码登录后必须先改密 ─────────────────────────────────────
+           这条**不是**前端说了算：后端把这条会话标记成"只准改密码与退出登录"，
+           其它接口一律 403（见 app/api.py 的 must_change_guard）。页面只是把人引到这一步。 -->
+      <div class="login-form" id="pwd-change-form" hidden>
+        <p class="login-hint" id="pwd-change-who"></p>
+        <div class="field">
+          <label class="field-label" for="pc-old">临时密码</label>
+          <input id="pc-old" type="password" autocomplete="current-password" placeholder="管理员给你的那串临时密码">
+          <p class="field-msg" id="pc-old-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="pc-new">新密码</label>
+          <input id="pc-new" type="password" autocomplete="new-password" placeholder="至少 6 位">
+          <p class="field-msg" id="pc-new-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="pc-new2">确认新密码</label>
+          <input id="pc-new2" type="password" autocomplete="new-password" placeholder="请再次输入新密码">
+          <p class="field-msg" id="pc-new2-msg" hidden></p>
+        </div>
+        <button class="btn btn-primary login-submit" id="btn-pwd-change" type="button">设置新密码并继续</button>
+        <p class="login-hint">临时密码只能登录一次。设置新密码后，用它登录会失效。</p>
+      </div>
+
       <!-- 登录页**不写**解释实现细节的长句（用户要的是 QQ 那种：几行填完就登）。
            需要解释的事（密码怎么存、忘记密码怎么办、注册为什么要等管理员批）都收进「帮助」抽屉，
            点一下就能看；登录页只留一行到哪去找。 -->
@@ -358,9 +457,23 @@
         <h3 class="info-h">七、忘记密码怎么办</h3>
         <p class="info-p">密码只保存成<b>不可还原的校验值</b>，本机没有原文，
           也没有邮件服务 —— 所以<b>无法用邮件找回</b>，无法还原出原来的密码。
-          可行的两条路：<b>①</b> 注册新账号（更换账号名，注册后同样需管理员批准）；
-          <b>②</b> 使用游客登录。若管理员忘记密码，只能删除本机账号文件后重新注册、
-          再次走一遍"第一个账号"的流程 —— 这一步会清空全部账号，操作前请确认。</p>
+          忘记密码时可以这样做：</p>
+        <ul class="info-list">
+          <li><b>① 用恢复码自助重置</b>（推荐，登录时就能自己办）：登录后到
+            「系统设置 → 账号安全」<b>生成恢复码</b>并抄下来保存。
+            忘记密码时点登录页的「忘记密码？」，依次填<b>账号 + 验证码 → 恢复码 → 新密码</b>
+            即可。恢复码只显示一次、且只存不可还原的摘要 —— 生成后请立刻抄走。
+            重新生成会让旧的那串<b>立刻失效</b>（换新不换旧，避免两串同时有效）。</li>
+          <li><b>② 找管理员发临时密码</b>（没有恢复码时唯一的路）：管理员在
+            「系统设置 → 账号管理」里给账号发一张<b>一次性临时密码</b>。
+            用它在登录页登录后，系统会要求你<b>先设置新密码</b> ——
+            在改密之前，其它功能一律不可用（这条由服务端拦住，不是页面上的提示）。
+            临时密码只能登录一次、30 分钟内有效。</li>
+          <li><b>③ 注册新账号</b>（更换账号名，注册后同样需管理员批准）；或<b>使用游客登录</b>。</li>
+        </ul>
+        <p class="info-p">若管理员自己忘记密码，只能删除本机账号文件后重新注册、
+          再次走一遍"第一个账号"的流程 —— 这一步会清空全部账号，操作前请确认。
+          本机<b>没有</b>邮件找回、手机验证码、密保问题这几种方式，也没有"管理员查看原密码"这种能力。</p>
 
         <h3 class="info-h">八、游客能用什么、不能用什么</h3>
         <ul class="info-list">
@@ -1106,6 +1219,26 @@
           <table class="table"><tbody id="set-storage-body"></tbody></table>
         </div>
       </div>
+      <!-- ── 账号安全（**登录的用户**看得到，游客看不到）────────────────────
+           这里只做一件事：生成自己的恢复码。它是"忘记密码还能自己回来"的唯一自助凭证。
+           ★ 明文**只显示这一次**（后端只存哈希，关掉就再也拿不回来），页面上一句真话写死。 -->
+      <div class="card" id="set-security-card" hidden>
+        <div class="card-head">
+          <h2>账号安全</h2>
+          <span class="muted-sm">忘记密码时靠恢复码自己找回</span>
+        </div>
+        <p class="note">
+          生成一串恢复码并抄在纸上。忘记密码时用它重置密码；重新生成会让旧的那串<b>立刻失效</b>。
+        </p>
+        <button class="btn btn-primary" id="btn-make-recovery" type="button">生成恢复码</button>
+        <div class="recovery-box" id="set-recovery-box" hidden>
+          <div class="field-label">你的恢复码 —— 只显示这一次</div>
+          <div class="recovery-code" id="set-recovery-code"></div>
+          <p class="field-msg" id="set-recovery-msg" hidden></p>
+          <p class="note">关闭或刷新后无法再次查看。请立刻抄下来，放在只有你能拿到的地方。</p>
+        </div>
+      </div>
+
       <!-- ── 账号管理（**只有管理员看得到**）───────────────────────────────
            谁看得到：登录的账号角色是管理员 —— 也就是**这台机器上第一个注册的账号**
            （第一个注册的自动成为管理员，否则没人能按下"批准"，系统当场死锁）。

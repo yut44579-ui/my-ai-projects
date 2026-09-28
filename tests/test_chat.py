@@ -906,6 +906,17 @@ def test_AC09_新端点与既有端点并存():
         "/api/auth/accounts",
         "/api/auth/accounts/{username}/review",
         "/api/auth/accounts/{username}",
+        # FR-001A 密码恢复闭环新增的 6 条：忘记密码三步（匿名）+ 生成恢复码（登录）
+        # + 管理员发临时密码（仅 admin）+ 改密码（登录）。
+        # 评审把端点冻结在这 6 条上（不许合并 reset/verify 与 reset/commit），
+        # 整个装在 app/api_auth.py + app/recovery.py 里，仍是 /api/auth 前缀 ——
+        # 既有端点语义一个字没动（唯一例外：login 多了一条"临时密码 → 必须先改密"分支）。
+        "/api/auth/reset/request",
+        "/api/auth/reset/verify",
+        "/api/auth/reset/commit",
+        "/api/auth/recovery-code",
+        "/api/auth/accounts/{username}/temp-password",
+        "/api/auth/password/change",
     }
     assert auth_paths <= paths
 

@@ -369,6 +369,7 @@
     // 账号管理那张卡**先画**：它不依赖 health（就算运行状态没读回来，
     // "谁能看账号管理"也该照实显示），所以放在下面那个 early return 之前。
     renderAccountAdmin();
+    renderAccountSecurity();
     const health = state.health;
     const body = $("set-health-body");
     if (!health || !body) return;
@@ -462,6 +463,49 @@
   function bindSettings() {
     const locked = $("btn-accounts-locked");
     if (locked) locked.addEventListener("click", () => allow("accounts"));
+    const makeRecovery = $("btn-make-recovery");
+    if (makeRecovery) makeRecovery.addEventListener("click", makeRecoveryCode);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // 账号安全（系统设置页里那张卡）：生成自己的恢复码
+  // ══════════════════════════════════════════════════════════════════════
+  // 恢复码是"忘记密码还能自己回来"的唯一自助凭证（没有它就只能找管理员发临时密码）。
+  // 明文**只返回一次**（后端只存不可还原的摘要），所以这里必须当场把它显示给用户抄走。
+  function renderAccountSecurity() {
+    const card = $("set-security-card");
+    const identity = (typeof Session !== "undefined" && Session.identity)
+      ? Session.identity() : {};
+    // 只有**登录的账号**（含管理员）看得到；游客看不到这张卡（他本来就没什么可恢复的）
+    const logged = Boolean(identity.loggedIn) && !identity.guest;
+    if (card) card.hidden = !logged;
+    if (!logged) {
+      hide($("set-recovery-box"));
+      setText("set-recovery-code", "");
+    }
+  }
+
+  async function makeRecoveryCode() {
+    const button = $("btn-make-recovery");
+    const note = $("set-recovery-msg");
+    const sessionId = (typeof Session !== "undefined" && Session.sessionId)
+      ? Session.sessionId() : "";
+    if (button) button.disabled = true;
+    try {
+      const data = await API.makeRecoveryCode(sessionId);
+      setText("set-recovery-code", (data && data.recovery_code) || "");
+      if (note) {
+        note.textContent = (data && data.message) || "请立刻抄下来保存。";
+        note.hidden = false;
+      }
+      show($("set-recovery-box"));
+      toastLine("新的恢复码已生成。旧的那串立即失效，请只保存现在这一串。");
+    } catch (err) {
+      // 后端拒绝的原话直接给用户看（会话失效 / 必须先改密码 / 账号不存在），不翻译
+      window.alert(err.message);
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   // 拉一次账号表（**只有管理员会走到这里**；后端会再验一遍会话与角色）
@@ -518,6 +562,11 @@
           mark.textContent = "管理员账号不可停用 / 删除";
           actions.appendChild(mark);
         } else {
+          // 「临时密码」：对方忘记密码、手上又没有恢复码时，用这张一次性凭证救他回来。
+          // 只在**状态正常**时给按钮（后端也会拒未批准的账号，前端不显示是为了别让人白点）。
+          if (item.status === "active") {
+            actions.appendChild(accountAction("临时密码", "temp", item, "btn btn-sm"));
+          }
           actions.appendChild(accountAction(
             item.status === "active" ? "停用" : "恢复",
             item.status === "active" ? "disable" : "enable",
@@ -550,7 +599,14 @@
         ? Session.sessionId() : "";
       button.disabled = true;
       try {
-        if (action === "delete") {
+        if (action === "temp") {
+          const answer = await API.tempPassword(name, sessionId);
+          // ★ 明文**只返回这一次**（后端只存摘要），所以这里必须弹出来让人当场抄走。
+          //   `alert` 而不是页面上的小字：这件事漏看了就得再要一张。
+          window.alert(`「${name}」的临时密码：\n\n${(answer && answer.temp_password) || ""}\n\n`
+            + `${(answer && answer.message) || ""}`);
+          toastLine(`已为「${name}」生成一次性临时密码（30 分钟内有效，只能登录一次）。`);
+        } else if (action === "delete") {
           await API.deleteAccount(name, sessionId);
           toastLine(`账号「${name}」已删除。`);
         } else {
@@ -2974,6 +3030,7 @@
     // 事件由 session.js 在 enter / logout 时发出 —— 两处不用互相 import。
     document.addEventListener("sra:identity", () => {
       renderAccountAdmin();
+      renderAccountSecurity();
     });
   });
 })();

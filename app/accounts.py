@@ -98,7 +98,11 @@ STATUS_ERROR_CODE = {
 # 没有签名也没有权限范围 —— 它只回答"这台机器上这次登录的是谁"。
 # 前端把它和"这次是谁"一起记在本机（退出登录时一并清掉）。
 SESSION_BYTES = 24
-_sessions: dict[str, tuple[str, float]] = {}      # session_id -> (账号名, 建立时间戳)
+# session_id -> (账号名, 建立时间戳, 是不是"临时密码登录、必须先改密")
+# 第三个元素是 FR-001A 加的：临时密码登录建立的会话**只准改密码与退出登录**，
+# 别的接口一律 403（评审 D7/D8）。它跟着会话走、不落盘 —— 服务重启会话全没，
+# 那条"必须先改密"的状态也就一起没了，fail-closed。
+_sessions: dict[str, tuple[str, float, bool]] = {}
 _session_lock = threading.Lock()
 
 # ── 账号 / 密码的长度与字符口径（与前端表单上的提示语同一套数字）─────────────
@@ -275,13 +279,83 @@ def secret_matches(record: dict, password: str) -> bool:
 
 
 # ════════════════════════════════════════════════════════════════════════
+# 临时密码（FR-001A：管理员人工恢复时发的那张一次性凭证）
+# ════════════════════════════════════════════════════════════════════════
+# 冻结口径（评审 Q5 + 裁决第 12 条）：
+#   · 12 位（不是 8 位 —— 它是管理员发的高权限恢复凭证，没有理由做得更短）
+#   · 用 secrets 生成，绝不用 random
+#   · 30 分钟过期
+#   · **只存哈希**（与正式密码同一套 PBKDF2 + 随机盐，复用上面的 derive/make_secret 思路）
+#   · **首次成功登录立即消费**（single-use，见 login 的③）
+#   · 明文只在签发那一次返回给管理员，不进日志、不进记录、不进响应 debug
+TEMP_PWD_LENGTH = 12
+TEMP_PWD_TTL_SECONDS = 1800       # 30 分钟
+# 易读字符集：去掉 0/O/o、1/l/I 这些抄下来会认错的 —— 这东西是给人**念**或者**抄**的
+TEMP_PWD_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+TEMP_PWD_FIELDS = ("temp_pwd_algo", "temp_pwd_salt", "temp_pwd_hash",
+                   "temp_pwd_iterations", "temp_pwd_expires_at", "temp_pwd_used_at")
+
+
+def make_temp_password() -> str:
+    """生成一串 12 位临时密码（用 `secrets`，不是 `random`）。"""
+    return "".join(secrets.choice(TEMP_PWD_ALPHABET) for _ in range(TEMP_PWD_LENGTH))
+
+
+def temp_secret(password: str, *, now: float) -> dict:
+    """给临时密码配一套（算法 / 盐 / 校验值 / 迭代次数 / 过期时刻）。
+
+    返回的键直接并进账号记录 —— 里面**没有明文**。与 `make_secret` 同一套摘要，
+    不另造一种"临时密码专用算法"（少一套算法就少一处能写错的地方）。
+    """
+    salt = secrets.token_bytes(PWD_SALT_BYTES)
+    return {
+        "temp_pwd_algo": PWD_ALGO,
+        "temp_pwd_salt": salt.hex(),
+        "temp_pwd_hash": derive(password, salt, PWD_ITERATIONS),
+        "temp_pwd_iterations": PWD_ITERATIONS,
+        "temp_pwd_expires_at": now + TEMP_PWD_TTL_SECONDS,
+        "temp_pwd_used_at": None,           # 还没被用过
+    }
+
+
+def temp_password_matches(record: dict, password: str, *, allow_used: bool = False) -> bool:
+    """拿明文跟记录里的**临时密码**校验值对一下（对不上/没有/过期/已用 → False）。
+
+    `allow_used=True` 只有一个调用点：临时密码登录进来的那条会话走 `/password/change`
+    时，"原密码"填的就是那串临时密码 —— 它已经被消费掉了（`temp_pwd_used_at` 有值），
+    但核对它的哈希是这个流程唯一能自证的方式（登录已经证明了持有人拿得到它）。
+    别的任何地方都不许打开这个开关。
+    """
+    if not record.get("temp_pwd_hash"):
+        return False
+    if record.get("temp_pwd_used_at") and not allow_used:
+        return False
+    try:
+        expires = float(record.get("temp_pwd_expires_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    if expires <= time.time():
+        return False                                   # 过期：当作没有这个密码
+    probe = {
+        "pwd_algo": record.get("temp_pwd_algo"),
+        "pwd_salt": record.get("temp_pwd_salt"),
+        "pwd_hash": record.get("temp_pwd_hash"),
+        "pwd_iterations": record.get("temp_pwd_iterations"),
+    }
+    return secret_matches(probe, password)
+
+
+# ════════════════════════════════════════════════════════════════════════
 # 本机会话（登录时发号；退出/重启即失效）
 # ════════════════════════════════════════════════════════════════════════
-def open_session(username: str) -> str:
-    """给这次登录发一个会话编号（新的登录不会踢掉旧的：同一台机器上多开几个页面很正常）。"""
+def open_session(username: str, *, must_change: bool = False) -> str:
+    """给这次登录发一个会话编号（新的登录不会踢掉旧的：同一台机器上多开几个页面很正常）。
+
+    `must_change=True` 只由**临时密码登录**那条路用（FR-001A）：见 `session_info`。
+    """
     session_id = secrets.token_hex(SESSION_BYTES)
     with _session_lock:
-        _sessions[session_id] = (username, time.time())
+        _sessions[session_id] = (username, time.time(), bool(must_change))
     return session_id
 
 
@@ -292,6 +366,40 @@ def resolve_session(session_id: str | None) -> str | None:
     with _session_lock:
         found = _sessions.get(str(session_id))
     return found[0] if found else None
+
+
+def session_info(session_id: str | None) -> dict | None:
+    """按会话编号取**这条会话的全部事实**（账号名 + 要不要先改密）。
+
+    为什么单开一个函数而不是把 `resolve_session` 改成返回字典：那个函数的调用点
+    到处都是（既要能少改就少改），而"这条会话有没有 must_change"只有守卫在乎。
+    """
+    if not session_id:
+        return None
+    with _session_lock:
+        found = _sessions.get(str(session_id))
+    if not found:
+        return None
+    return {"username": found[0], "created_at": found[1], "must_change": bool(found[2])}
+
+
+def close_sessions_for(username: str) -> int:
+    """把一个账号的**全部**会话作废，返回作废了几条。
+
+    什么时候必须调（评审 15/16 两条冻结项）：
+        · 密码改成功了 —— 密码变了 = 认证状态重建，旧会话一律不作数；
+        · 走恢复码把密码重置了 —— 同理，而且要防"别人正拿着旧会话"。
+    匹配口径与账号表一致（大小写不敏感、去首尾空白）。
+    """
+    wanted = normalize_username(username).casefold()
+    if not wanted:
+        return 0
+    with _session_lock:
+        doomed = [key for key, value in _sessions.items()
+                  if str(value[0] or "").strip().casefold() == wanted]
+        for key in doomed:
+            _sessions.pop(key, None)
+    return len(doomed)
 
 
 def close_session(session_id: str | None) -> bool:
@@ -312,6 +420,52 @@ def reset_sessions() -> None:
     """清空全部会话（测试隔离用；服务重启本来就会清）。"""
     with _session_lock:
         _sessions.clear()
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 会话守卫（FR-001A：把"谁在调"与"他现在被允许调什么"收在一处）
+# ════════════════════════════════════════════════════════════════════════
+# 评审（D7/D8/E5）要的是一条**服务端**的统一闸门：
+#
+#     session 已认证
+#          ↓
+#     must_change_password?
+#          ├─ 否 → 正常
+#          └─ 是 → 只放行 /api/auth/password/change 与 /api/auth/logout，其余一律 403
+#
+# 为什么必须在这里、而不是各个端点自己判：判漏一处就是一条越权路径。
+# 前端不许参与这个判断（评审 F：JS 不许判 must_change / admin / ticket）——
+# 页面只负责"把状态显示出来 + 把凭证递过来"，能不能做由这里说了算。
+def require_session(session_id: str | None) -> dict:
+    """要求一条有效会话，返回 `{account, session}`（账号记录 + 这条会话的事实）。
+
+    失败两种（前端要能分辨"重新登录"和"你得先改密码"）：
+        session_invalid      没登录 / 会话失效（服务重启过）→ 401
+        must_change_password 临时密码登录进来的，还没改密 → 403（见 require_session_any）
+    """
+    return require_session_any(session_id, allow_must_change=False)
+
+
+def require_session_any(session_id: str | None, *, allow_must_change: bool) -> dict:
+    """`require_session` 的实现。
+
+    `allow_must_change=True` 只给两条路用：`/api/auth/password/change`（不改密就永远出不去）
+    与 `/api/auth/logout`（连退都不让退就等于把用户锁死在半路上）。
+    """
+    info = session_info(session_id)
+    if info is None:
+        raise AccountError("session_invalid", "这个操作需要重新登录。")
+    if info["must_change"] and not allow_must_change:
+        raise AccountError(
+            "must_change_password",
+            "这个账号是用临时密码登录的，必须先在「修改密码」里设置新密码，之后才能使用其它功能。",
+        )
+    record = state.get_account(info["username"])
+    if record is None:
+        # 会话还在、账号没了（管理员把账号删了）→ 会话作废，不算"服务器坏了"
+        close_session(session_id)
+        raise AccountError("session_invalid", "这个操作需要重新登录。")
+    return {"account": record, "session": info}
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -380,13 +534,12 @@ def require_admin(session_id: str | None) -> dict:
     """管理动作的守卫：会话 → 账号 → 必须是管理员。返回那个管理员账号。
 
     三种失败分开给话（前端要能分辨"你该重新登录"和"你没这个权限"）：
-        session_invalid → 没登录 / 会话失效（服务重启过）
-        not_admin       → 登录了，但不是管理员
+        session_invalid      → 没登录 / 会话失效（服务重启过）
+        must_change_password → 临时密码登录进来的、还没改密（FR-001A：先改密，别的都免谈）
+        not_admin            → 登录了，但不是管理员
     """
-    username = resolve_session(session_id)
-    if not username:
-        raise AccountError("session_invalid", "管理操作需要重新登录。")
-    record = state.get_account(username)
+    guarded = require_session(session_id)          # 会话 + must_change 两道闸门先过
+    record = guarded["account"]
     if not is_admin(record):
         raise AccountError("not_admin", "只有管理员能管理账号。")
     return record
@@ -461,6 +614,13 @@ def login(username: str, password: str) -> dict:
 
     连着错满 MAX_ATTEMPTS 次之后进冷却：这时抛的是另一条错误（"尝试次数过多"），
     这是**故意让人看出区别**的 —— 用户得知道"再等一会儿"，而不是继续对着正确的密码怀疑自己。
+
+    ★ FR-001A 加的一条支路（评审允许的唯一一处 login 改动）：
+      管理员发的**临时密码**也能登录，但它建立的是"必须先改密"的会话 ——
+      返回里的 `must_change_password=true`，之后除 `/password/change` 与 `/logout`
+      以外一律 403（守卫在 `require_session`，不在前端）。
+      临时密码在**这次成功登录时当场消费**（评审 ⑥ 与裁决第 12 条）：
+      并发来十个登录请求也只有一个能成功，其余一律当"密码不对"。
     """
     name = normalize_username(username)
     remaining = lock_remaining(name)
@@ -473,7 +633,12 @@ def login(username: str, password: str) -> dict:
         derive(password or "", b"\x00" * PWD_SALT_BYTES, PWD_ITERATIONS)
         note_failure(name)
         raise AccountError("bad_credentials", "账号或密码不对。")
-    if not secret_matches(record, password or ""):
+    # ① 先看**正式密码**（绝大多数登录走这条）
+    real_ok = secret_matches(record, password or "")
+    # ② 正式密码不对时才看临时密码 —— 这里只"看一眼"，**不消费**：
+    #    万一这个账号状态不允许登录（停用/未审批），临时密码不该被白白用掉。
+    temp_ok = (not real_ok) and temp_password_matches(record, password or "")
+    if not (real_ok or temp_ok):
         note_failure(name)
         raise AccountError("bad_credentials", "账号或密码不对。")
     # 密码对上了，**再看这个账号能不能登录**。
@@ -484,11 +649,54 @@ def login(username: str, password: str) -> dict:
         note_failure(name)
         raise AccountError(STATUS_ERROR_CODE.get(status, "account_disabled"),
                            STATUS_MESSAGE.get(status, "这个账号当前无法登录。"))
+    if temp_ok:
+        # ③ 原子消费：并发的第二个请求拿不到（评审 ⑥）
+        stored_name = record.get("username") or name
+        if not state.consume_account_temp_password(stored_name, state.now_iso()):
+            note_failure(name)
+            raise AccountError("bad_credentials", "账号或密码不对。")
     clear_failures(name)
-    updated = state.touch_account_login(record.get("username") or name, state.now_iso())
+    stored_name = record.get("username") or name
+    updated = state.touch_account_login(stored_name, state.now_iso())
     account = public(updated or record)
-    account["session_id"] = open_session(record.get("username") or name)   # 本机会话（见文件开头边界）
+    account["session_id"] = open_session(stored_name, must_change=temp_ok)  # 本机会话（见文件开头边界）
+    # 这条**只对本次登录的调用方**有意义（"你这张会话现在只准改密码"），
+    # 不是账号的属性，所以不进 PUBLIC_FIELDS、也不落盘。
+    account["must_change_password"] = bool(temp_ok)
     return account
+
+
+def change_password(username: str, old_password: str, new_password: str, *,
+                    allow_temp_old: bool = False) -> str:
+    """改密码：核对原密码 → 落新校验值 → 作废该账号**全部**旧会话 → 发一条**新**会话。
+
+    冻结口径（评审 15：改密成功 = 认证状态重建）：
+        · 旧会话一律作废（`close_sessions_for`）——包括正在用的这一条；
+        · 换新盐、新校验值、重新按当前迭代次数算（`make_secret`）；
+        · 顺带清掉临时密码那套字段：它已经完成使命，留着只是多一份可被攻击的哈希；
+        · 返回**新会话编号**（前端要拿它接着用，否则用户改完密码就被自己踢下线了）。
+
+    `allow_temp_old=True` 只由"临时密码登录 → 强制改密"那条路打开：那时用户手里的
+    "原密码"就是那串临时密码（见 `temp_password_matches` 的说明）。
+    """
+    name = normalize_username(username)
+    record = state.get_account(name) if name else None
+    if record is None:
+        raise AccountError("account_not_found", "找不到这个账号。")
+    matched = secret_matches(record, old_password or "")
+    if not matched and allow_temp_old:
+        matched = temp_password_matches(record, old_password or "", allow_used=True)
+    if not matched:
+        raise AccountError("bad_credentials", "原密码不对。")
+    validated = validate_password(new_password)
+    stored_name = record.get("username") or name
+    # 一次写盘：新校验值 + 把临时密码那一套字段删干净（值为 None = 删键）
+    state.update_account_fields(stored_name, {
+        **make_secret(validated),
+        **{field: None for field in TEMP_PWD_FIELDS},
+    })
+    close_sessions_for(stored_name)                   # ★ 旧会话全部作废（含当前这条）
+    return open_session(stored_name)                  # ★ 发一条新的正常会话
 
 
 def exists(username: str) -> bool:
@@ -518,16 +726,25 @@ __all__ = [
     "STATUS_PENDING",
     "STATUS_REJECTED",
     "STATUS_TEXT",
+    "TEMP_PWD_FIELDS",
+    "TEMP_PWD_LENGTH",
+    "TEMP_PWD_TTL_SECONDS",
     "admin_count",
+    "change_password",
     "close_session",
+    "close_sessions_for",
     "is_admin",
     "list_accounts",
+    "make_temp_password",
     "open_session",
     "require_admin",
+    "require_session",
+    "require_session_any",
     "reset_sessions",
     "resolve_session",
     "review",
     "session_count",
+    "session_info",
     "DISPLAY_MAX",
     "MAX_ATTEMPTS",
     "PASSWORD_MAX",
@@ -550,6 +767,8 @@ __all__ = [
     "register",
     "reset_failures",
     "secret_matches",
+    "temp_password_matches",
+    "temp_secret",
     "validate_password",
     "validate_username",
 ]

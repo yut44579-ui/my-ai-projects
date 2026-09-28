@@ -442,6 +442,25 @@ def list_accounts() -> list[dict]:
     return repositories.accounts().all()
 
 
+# ── 密码恢复（FR-001A）用的三个"必须原子"的动作 ────────────────────────────
+# 与上面几个同一条约定：**存什么**由 app/accounts.py 与 app/recovery.py 决定，
+# 这里只把动作转给仓库。之所以要单独开这三个（而不是让上层"读出来改一改再写回去"），
+# 是因为它们全都是**并发下会出事**的动作 —— 见 base.py 里各自的说明。
+def update_account_fields(username: str, fields: dict) -> dict | None:
+    """原子地改账号记录里的几个字段（值为 None = 删掉该键）。"""
+    return repositories.accounts().update_fields(username, fields)
+
+
+def consume_account_recovery_code(username: str, code_hash: str, used_at: str) -> bool:
+    """原子地"比对 + 消费"恢复码：对上了才作废并返回 True。"""
+    return repositories.accounts().consume_recovery_code(username, code_hash, used_at)
+
+
+def consume_account_temp_password(username: str, used_at: str) -> bool:
+    """原子地消费一次临时密码（并发登录里只允许一个成功）。"""
+    return repositories.accounts().consume_temp_password(username, used_at)
+
+
 # ════════════════════════════════════════════════════════════════════════
 # 健康检查概览
 # ════════════════════════════════════════════════════════════════════════

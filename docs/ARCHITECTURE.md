@@ -30,7 +30,7 @@
 | 真实数据表 | 客户 / 产品 / 销售 / 原始数据四类业务表，分页、排序、按区间取数、导出 |
 | 周报 / 月报 | 按区间生成，可导出 Word / Excel / Markdown 三种真文件 |
 | 数据管理 | 数据源上传、登记、检查（`inspect`）、导入（`import`） |
-| 账号能力 | 注册 / 登录 / 管理员审批（通过·拒绝·停用·恢复）/ 游客模式 |
+| 账号能力 | 注册 / 登录 / 管理员审批（通过·拒绝·停用·恢复）/ 游客模式 / **密码恢复**（恢复码自助重置 + 管理员一次性临时密码） |
 | 确定性报表 | 按 Report Spec 区间算数 → openpyxl 原地改模板 → 下载真实 xlsx |
 | 文档输入 | Word / PDF 上传 → 真实文本提取 + 规则化摘要 |
 
@@ -102,8 +102,10 @@
 | `app/api_datasets.py` | 数据集与业务表端点：`/api/datasets*`、`/api/tables/{table}`（含 export） | ✅ 当前 |
 | `app/api_documents.py` | 文档端点：`/api/documents/*`（文本提取 / 摘要 / 下载） | ✅ 当前 |
 | `app/api_auth.py` | 账号端点：注册 / 登录 / 登出 / 查重 / 账号列表 / 审批 / 删除 / 验证码 | ✅ 当前 |
-| `app/accounts.py` | 账号：PBKDF2 校验值存储、状态机、管理员审批、**内存会话** | ✅ 当前 |
+| `app/accounts.py` | 账号：PBKDF2 校验值存储、状态机、管理员审批、**内存会话**（含"临时密码登录 → 必须先改密"的会话标记与守卫） | ✅ 当前 |
 | `app/captcha.py` | 图形验证码（本机生成，零新依赖） | ✅ 当前 |
+| `app/challenge.py` | 「挑战」抽象层（FR-001A）：只认 `challenge_id`/`challenge_proof`，当前实现 = 图形验证码；FR-001B 的滑块接同一个口子 | ✅ 当前 |
+| `app/recovery.py` | 密码恢复（FR-001A）：恢复码 / 一次性 reset_token / 一次性 ticket / 管理员临时密码，**全部只存哈希**；三层授权（challenge ≠ 所有权、票据只允许改密）都在这里 | ✅ 当前 |
 | `app/state.py` | 运行状态读写：上传 / 执行 / 任务记录（无数据库，纯 JSON 文件） | ✅ 当前 |
 | `app/prewarm.py` | 冷启动预热：服务启动时在后台线程把数据集读进进程缓存（不阻塞就绪） | ✅ 当前 |
 | `app/ai/intent.py` | 大白话 → **Intent JSON**（调用 LLM） | ✅ 当前 |

@@ -31,10 +31,28 @@ const API = (() => {
     }
   }
 
+  // 本机会话编号顺便带在请求头上（**不是**用来自证权限的令牌）。
+  // 带上它的唯一目的：后端有一条"临时密码登录的会话只准改密码与退出登录"的服务端闸门
+  // （见 app/api.py 的 must_change_guard），它需要知道**这次请求是谁发的**才能拦。
+  // 最终授权始终由后端决定 —— 前端带或不带这个头，都改不了"能不能做"。
+  function sessionHeaders() {
+    try {
+      const who = (typeof Session !== "undefined" && Session.identity) ? Session.identity() : null;
+      const id = who && who.sessionId;
+      return id ? { "X-Session-Id": id } : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
   async function request(path, options = {}) {
     let response;
+    const withSession = {
+      ...options,
+      headers: { ...sessionHeaders(), ...((options && options.headers) || {}) },
+    };
     try {
-      response = await fetch(path, options);
+      response = await fetch(path, withSession);
     } catch (err) {
       // 「压根连不上」与「这次请求超时了」要分开说 —— 用户能采取的动作不一样
       // （前者得去起服务，后者只要等一等再试）
@@ -297,7 +315,28 @@ const API = (() => {
     // （一个账号都没有 = 首次使用，登录页据此给出"先注册一个"的引导）
     accountExists: (username) => request(`/api/auth/accounts/exists${query({ username })}`),
     // 图形验证码：拿一张新图（连同它的编号）。点一下图就再调一次这个 —— 换图不走缓存。
+    // 恢复流程第①步用的是**同一张图**（后端把"答对过"记成一张通过的挑战，
+    // 见 app/challenge.py）—— 页面上因此只有一套验证码逻辑，没有第二份实现。
     captcha: () => request("/api/auth/captcha"),
+
+    // ── 密码恢复（FR-001A：忘记密码 → 真能重置）─────────────────────────
+    // 三步都在后端：第①步只换一张 reset_token（不回答"账号在不在"），
+    // 第②步用恢复码换一次性票据，第③步用票据改密码。
+    // ★ 第③步的请求体里**只有** ticket 与 new_password —— 前端无从指定"改谁的密码"，
+    //   那是票据内部的事（后端也不读任何多余的字段）。
+    resetRequest: (payload) => request("/api/auth/reset/request", json(payload)),
+    resetVerify: (payload) => request("/api/auth/reset/verify", json(payload)),
+    resetCommit: (payload) => request("/api/auth/reset/commit", json(payload)),
+    // 生成 / 轮换自己的恢复码：给谁生成由**会话**决定（入参里没有账号名）。
+    // 返回里的明文只出现这一次，页面必须当场让用户抄走。
+    makeRecoveryCode: (sessionId) => request("/api/auth/recovery-code", json({ session_id: sessionId })),
+    // 管理员给普通账号发一次性临时密码（仅管理员；明文也只返回这一次）
+    tempPassword: (username, sessionId) => request(
+      `/api/auth/accounts/${encodeURIComponent(username)}/temp-password`,
+      json({ session_id: sessionId })),
+    // 改密码：登录用户改自己的；临时密码登录进来的那条会话**只能走这里**。
+    // 成功后返回一条**新**会话编号（密码变了 = 认证状态重建），页面要换上它接着用。
+    changePassword: (payload) => request("/api/auth/password/change", json(payload)),
 
     // 下载地址一律用**后端返回的相对 URL**（download_url）拼当前源，前端不自己拼路径
     downloadUrl: (relative) => new URL(relative, window.location.origin).href,

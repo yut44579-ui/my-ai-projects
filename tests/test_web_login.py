@@ -346,9 +346,23 @@ def test_B05_B11_只做形态校验且不碰密码() -> None:
     js = read("session.js")
     assert "account.length < 2" in js and "account.length > 40" in js
     assert "password.length < 6" in js
-    for banned in ("sha256", "SHA256", "hash(", "crypto", "btoa", "token", "Token",
+    for banned in ("sha256", "SHA256", "hash(", "crypto", "btoa",
                    "sessionStorage", "cookie", "fetch("):
         assert banned not in js, f"session.js 里出现了不该有的东西：{banned}"
+    # ★ FR-001A 起的唯一一处放宽（评审冻结的三层授权决定了前端必须**提交凭证**）：
+    #   忘记密码流程里有两样**不透明的一次性值**要由页面转手递回后端 ——
+    #   `reset_token`（第①步 → 第②步）与 `ticket`（第②步 → 第③步）。
+    #   它们进了内存、用完即废，页面拿它们做不了任何判断（"能不能改密码"由后端说了算）。
+    #   放宽的同时把口子收得更紧：只允许这几种写法出现，别的"令牌"字样照样算越界；
+    #   而且它们**不许被存起来**（sessionStorage / cookie / localStorage 仍然全禁）。
+    allowed = {"token", "reset_token", "resetToken", "state.reset.resetToken",
+               "data.reset_token", "reset_token_invalid"}
+    for word in sorted(set(re.findall(r"[A-Za-z_.]*[Tt]oken[A-Za-z_.]*", js))):
+        assert word in allowed, f"session.js 里出现了没申报的令牌字样：{word}"
+    for ticket_word in sorted(set(re.findall(r"[A-Za-z_.]*[Tt]icket[A-Za-z_.]*", js))):
+        assert ticket_word in {"ticket", "state.reset.ticket", "data.ticket",
+                               "ticket_invalid"}, \
+            f"session.js 里出现了没申报的票据字样：{ticket_word}"
     assert "sra.remembered-name" in js and "rememberName" in js
     # 本机那条记录只写三个字段：账号名、入口类型、显示名 —— 逐字锁住（不是"扫一眼没有密码"）
     stored = re.search(r"function writeWho\(who\)\s*\{(.*?)\n  \}", js, re.S)
@@ -401,10 +415,14 @@ def test_B05_登录页每个入口点了都有反应_且不留假按钮() -> Non
         注册账号 → 真的切到注册表单（不留"尚未开通"）
         帮助     → 真的打开帮助抽屉
         隐私     → 真的打开隐私抽屉
-        忘记密码 → 如实说本机找不回（不是"尚未开通"，也不假装能发邮件）
+        忘记密码 → 真的进找回流程（FR-001A 起它不再是"弹一句找不回"）
         个人设置 → 仍然"尚未开通"（这一栏确实还没做，就如实说）
 
     底线是同一条：**要么真能用，要么如实说没做**；不许出现点不动的死按钮。
+
+    ★ FR-001A 改写了「忘记密码」这一条：上一版它只弹一句"本机无法找回原密码"，
+      本版起点它是**进入四步找回流程**（账号+验证码 → 恢复码 → 新密码 → 完成）。
+      其它三条入口的判据一个字没动。
     """
     html, js = read("index.html"), read("session.js")
     for label in ("忘记密码", "注册账号", "帮助", "隐私"):
@@ -415,13 +433,20 @@ def test_B05_登录页每个入口点了都有反应_且不留假按钮() -> Non
     # 帮助 / 隐私：真打开抽屉，不是提示条
     assert "帮助文档还没提供" not in js and "隐私说明还没提供" not in js
     assert "openInfo" in js
-    # 忘记密码：说真话，且不承诺发邮件
+    # 忘记密码：点一下**进流程**（四步卡真的在页面上、四步的按钮也都绑了事件）
     forgot = re.search(r'const forgot = \$\("link-forgot"\);(.*?)\);', js, re.S)
     assert forgot, "找不到「忘记密码」的处理"
-    assert "无法找回" in forgot.group(1), "「忘记密码」没说清本机找不回"
-    assert "注册新账号" in forgot.group(1) and "游客" in forgot.group(1),         "「忘记密码」没给出能走的两条路"
-    for fake in ("发送邮件", "重置邮件", "验证码"):
-        assert fake not in forgot.group(1), f"「忘记密码」在承诺做不到的事：{fake}"
+    assert "openReset" in forgot.group(1), "「忘记密码」没有进找回流程"
+    assert "function openReset()" in js, "找不到找回流程的入口函数"
+    for step_id in ("reset-step-1", "reset-step-2", "reset-step-3", "reset-step-4"):
+        assert f'id="{step_id}"' in html, f"找回流程缺了 {step_id}"
+    for button_id in ("btn-reset-step1", "btn-reset-step2", "btn-reset-step3", "btn-reset-done"):
+        assert f'id="{button_id}"' in html and f'"{button_id}"' in js, \
+            f"{button_id} 没接上（会变成点不动的死按钮）"
+    # 本机仍然**找不回原密码**，也仍然不承诺任何"发出去的东西"——
+    # 这件真话不许因为流程做出来了就悄悄删掉（它写在帮助里，见 test_help_privacy）
+    for fake in ("发送邮件", "重置邮件", "短信"):
+        assert fake not in js and fake not in html, f"页面在承诺做不到的事：{fake}"
     # 个人设置：确实没做，就如实说"尚未开通"
     assert "尚未开通" in js and "NOT_READY" in js
     assert "toast" in js and 'id="toast"' in html, "缺少人话提示的落点"
