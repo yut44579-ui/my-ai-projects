@@ -183,6 +183,22 @@ def test_B8_2_相对说法没被用上时也要说() -> None:
     assert "全区间 2010-12-01 ~ 2011-12-09" in notice
 
 
+def test_B8_2_取了整个日历月也要说清楚缺哪几天() -> None:
+    """★ 实测补上的一种窗口：整月 12-01 ~ 12-31（没按最后一天截断）也必须说。
+
+    同一句「这个月」，解析可能落在"截断到 12-09"或"整个 12 月"两条窗口上
+    （真浏览器走查里两种都实测到了）。只解释前一种，后一种就成了"系统取了一段数据
+    却什么都不说" —— 用户看到 12-31 会以为那个月的数据是全的。
+    """
+    notice = service._relative_time_notice(
+        "这个月卖了多少？", _params("2011-12-01", "2011-12-31"), PROFILE
+    )
+    assert "「这个月」" in notice
+    assert "按日历月取了 2011-12-01 ~ 2011-12-31" in notice
+    assert "数据只到 2011-12-09" in notice
+    assert "后面的 22 天没有数据" in notice and "不完整" in notice
+
+
 def test_B8_2_没有相对说法就不多嘴() -> None:
     assert service._relative_time_notice("2011年11月卖了多少？", _params("2011-11-01", "2011-11-30"), PROFILE) == ""
     assert service._relative_time_notice("这个月卖了多少？", {}, PROFILE) == ""
