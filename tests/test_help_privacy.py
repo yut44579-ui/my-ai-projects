@@ -41,16 +41,26 @@ WEB_DIR = PROJECT_ROOT / "web"
 BANNED = ("/api/", "TASK-", "哈希", "salt", "pbkdf2", "sha256", "schema", "Repository",
           "端点", "鉴权", "RBAC", "captcha", "SVG", "token", "未启用")
 
-# 帮助里那 7 类示例（原文必须与页面上一字不差），以及它该落到哪个计算上
+# 帮助里那 6 类示例（原文必须与页面上一字不差），以及它该落到哪个计算上
+#
+# ★ FR-007 起，帮助示例**不再列「国家分布」**：用户明确要求界面上不要出现"国家"这种维度
+#   （"不要有国家这种""各个地区的就行了"）。所以那一行改成**地区口径**的条件说明
+#   （见下面的 REGION_LINE）：它依赖数据源里真的有地区列，随数据源而变，
+#   没法拿内置数据集原样跑一遍 —— 所以它不在下面的"真的能算"参数表里，
+#   而是由 test_H07 单独钉住"这句话说的条件与真实能力一致"。
+#   注意：**后端的按国家拆分能力一行没删**（那是既定裁决），只是不在用户指南里宣传。
 HELP_EXAMPLES = (
     ("销售汇总", "2011年11月一共卖了多少？", "sales_summary"),
     ("销售趋势", "2011年11月的销售趋势，按日看", "sales_trend"),
     ("产品排行", "2011年11月卖得最好的5个产品", "top_products"),
     ("两区间比较", "2011年11月和2011年10月的销售额哪个高？", "sales_compare"),
-    ("国家分布", "2011年11月销售额最高的10个国家", "sales_breakdown_by_country"),
     ("客户分析", "2011年11月销售额最高的10个客户", "customer_analysis"),
     ("商品分析", "2011年11月各商品的退货情况，前10名", "product_analysis"),
 )
+
+# 帮助里那一行"地区分布"（逐字断言，与页面一字不差）：**必须写明前提条件**
+REGION_LINE_LABEL = "地区分布"
+REGION_LINE_CONDITION = "导入带地区列的数据后"
 
 # 帮助里说"问不了"的维度（问题必须真的被拒）
 REFUSED_QUESTIONS = (
@@ -144,7 +154,7 @@ def test_H01_帮助五个部分齐全():
         assert part in text, f"帮助少了「{part}」"
 
 
-def test_H01_帮助里七类问题与至少四条常见问题都在():
+def test_H01_帮助里六类问题与至少四条常见问题都在():
     text = visible_text(drawer_html())
     for label, question, _tool in HELP_EXAMPLES:
         assert label in text, f"帮助少了「{label}」这一类"
@@ -264,6 +274,29 @@ def test_H06_帮助里写的每一类问题真的能算(label: str, question: st
         f"帮助里的「{label}」示例没被接住：status={payload.get('status')} 「{question}」"
     actual = (payload.get("tool") or {}).get("name")
     assert actual == tool, f"「{question}」落到了 {actual}，帮助里写的是 {label}"
+
+
+def test_H07_地区那一行写明了前提条件且不出现国家维度():
+    """★ FR-007 规格变更：帮助里的「国家分布」示例换成「地区分布」，并且**说清前提**。
+
+    为什么单独一条：这一行的可用性随数据源而变（数据源真有地区列才用得了），
+    所以它没法像上面六类那样拿内置数据集跑一遍 —— 但**话必须是真的**：
+      · 逐字断言（严格相等，不放宽成正则模糊匹配）；
+      · 必须写明"导入带地区列的数据后"这个前提，且如实说当前数据没有地区列；
+      · 这一行里**不许出现「国家」**（用户明确要求界面上不要国家维度）。
+    """
+    line = ""
+    for paragraph in drawer_html().split("<p class=\"info-p\">"):
+        if REGION_LINE_LABEL in paragraph:
+            line = visible_text(paragraph.split("</p>")[0])
+            break
+    assert line, "帮助里没有「地区分布」那一行"
+    assert REGION_LINE_LABEL in line and REGION_LINE_CONDITION in line, line
+    assert "地区列" in line and "当前" in line, f"没说清何时可用：{line}"
+    assert "国家" not in line, f"这一行里还写着国家维度：{line}"
+    # 与真实能力一致：当前数据源没有地区列 → 问地区/省份确实会被拒（不是"嘴上说有"）
+    refused = client.post("/api/chat", json={"question": "2011年11月各省份的销售额", "use_llm": False}).json()
+    assert refused["status"] == "unsupported", refused["status"]
 
 
 def test_H06_帮助里说不能问的维度真的都被拒():

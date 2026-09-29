@@ -255,23 +255,43 @@ def _ask(question: str, *, use_llm: bool = False) -> dict:
     return response.json()
 
 
+# ════════════════════════════════════════════════════════════════════════
+# ★ FR-007：LLM 写的段落（【为什么】/【建议行动】）与数字闸门只出现在**分析档**
+#
+# 施工指令把"要一个确定的值"这类问题归为单值档（direct）：答案本身完整、不依赖模型，
+# 所以那一档**不问模型、也没有那两段**（问了反而会给一个确定的值硬加一段推断）。
+# 下面几个用例原本拿"一周一共卖了多少"来验"模型写的东西过不过闸"—— 那件事现在
+# 只在分析档发生，所以统一改用**分析档问题**（11月 vs 10月）。
+# ★ 断言一个字没有放宽：换的是问题落到哪一档，不是"判据松一点"。
+LLM_QUESTION = "2011年11月和10月的销售额对比"
+LLM_INTENT_JSON = (
+    '{"intent":"sales_compare","params":{"comparison_type":"custom",'
+    '"current_start":"2011-11-01","current_end":"2011-11-30",'
+    '"previous_start":"2011-10-01","previous_end":"2011-10-31",'
+    '"attribution_dimension":null},"assumptions":[],"confidence":0.9}'
+)
+
+
 def test_AC01_三个问题各命中一个Intent且数字与直接调metrics一致(no_llm):
     cases = [
-        ("2011年11月21日到11月27日一共卖了多少？", "sales_summary", "sales_amount"),
-        ("2011-11-21 到 2011-11-27 的销售趋势", "sales_trend", "total_amount"),
-        ("2011-11-21 到 2011-11-27 卖得最好的5个产品", "top_products", "total_amount"),
+        # FR-007：单值问题（"一共卖了多少"）走 direct 档 —— 答案不依赖模型，
+        # 所以状态是 ok；另外两条属于分析档，没接模型时**如实标注** degraded。
+        ("2011年11月21日到11月27日一共卖了多少？", "sales_summary", "sales_amount", "ok"),
+        ("2011-11-21 到 2011-11-27 的销售趋势", "sales_trend", "total_amount", "degraded"),
+        ("2011-11-21 到 2011-11-27 卖得最好的5个产品", "top_products", "total_amount", "degraded"),
     ]
     direct = _executor_amount(*D16_WEEK_RANGE)
 
-    for question, expected_intent, key in cases:
+    for question, expected_intent, key, expected_status in cases:
         record = _ask(question)
         assert record["intent"]["intent"] == expected_intent, (question, record["intent"])
         assert record["tool"]["name"] == expected_intent
-        assert record["status"] == "degraded"          # 未接 LLM 时如实标注
+        assert record["status"] == expected_status, question
         assert record["facts"][key] == direct, question
-        # 【发生了什么】是代码写的，且里面的数字必须能在 facts 里找到
+        # 第一段是代码写的，且里面的数字必须能在 facts 里找到
         what = record["answer"]["sections"][0]
         assert what["source"] == "code"
+        assert what["key"] in ("what", "answer"), what["key"]
         assert record["answer"]["guard"]["passed"] is True
 
 
@@ -445,15 +465,15 @@ def _llm_returns(text: str, monkeypatch, *, intent_json: str | None = None):
 
 
 def test_AC04_LLM写的数字必须能在事实里找到出处_合规时放行(monkeypatch):
-    # 引用一个**事实里确实有**的数字（销售额，写成中文数字更保险，但这里故意写成一个存在的数）
-    facts_amount = executor.compute_sales_amount(*D16_WEEK_RANGE)["amount"]
+    # 引用一个**事实里确实有**的数字（本期的销售额，写成中文数字更保险，但这里故意写成一个存在的数）
+    facts_amount = _executor_amount(*NOV)
     _llm_returns(
-        f"【为什么】\n这一周有效行占比较高，需求集中在少数几个单品上（区间金额 {facts_amount:,.2f} 元）。\n"
+        f"【为什么】\n本期比上一期多卖了 {facts_amount:,.2f} 元，需求集中在少数几个单品上。\n"
         f"【建议行动】\n- 关注头部单品\n- 复核取消单",
-        monkeypatch,
+        monkeypatch, intent_json=LLM_INTENT_JSON,
     )
-    record = _ask("2011年11月21日到11月27日一共卖了多少", use_llm=True)
-    assert record["facts"]["sales_amount"] == facts_amount     # 算的确实是问的那一周
+    record = _ask(LLM_QUESTION, use_llm=True)
+    assert record["facts"]["current"]["sales_amount"] == facts_amount     # 算的确实是比的那一期
     assert record["status"] == "ok"
     guard = record["answer"]["guard"]
     assert guard["passed"] is True and guard["checked"] is True
@@ -465,10 +485,10 @@ def test_AC04_LLM自己编数字整段作废(monkeypatch):
     _llm_returns(
         "【为什么】\n因为华南区贡献了 999999.99 元的销售额。\n"
         "【建议行动】\n- 加大投放 999999.99",
-        monkeypatch,
+        monkeypatch, intent_json=LLM_INTENT_JSON,
     )
-    record = _ask("2011年11月21日到11月27日一共卖了多少", use_llm=True)
-    assert record["facts"]["sales_amount"] == _executor_amount(*D16_WEEK_RANGE)
+    record = _ask(LLM_QUESTION, use_llm=True)
+    assert record["facts"]["current"]["sales_amount"] == _executor_amount(*NOV)
 
     assert record["status"] == "degraded"                  # 降到代码回答
     guard = record["answer"]["guard"]
@@ -536,8 +556,8 @@ def test_AC04_LLM写错币种整段作废(monkeypatch):
         "【建议行动】\n- 关注头部单品\n- 复核取消单",
         monkeypatch,
     )
-    record = _ask("2011年11月21日到11月27日一共卖了多少", use_llm=True)
-    assert record["facts"]["sales_amount"] == _executor_amount(*D16_WEEK_RANGE)   # 数字照样是对的
+    record = _ask(LLM_QUESTION, use_llm=True)
+    assert record["facts"]["current"]["sales_amount"] == _executor_amount(*NOV)   # 数字照样是对的
 
     assert record["status"] == "degraded"
     guard = record["answer"]["guard"]
@@ -571,7 +591,7 @@ def test_AC05_没有key时降级且明确标注未接LLM(monkeypatch):
     # ⚠️ 这里必须 use_llm=True：`_ask` 的默认值是 False，而 use_llm=False 会在
     #    intent.parse 的第一步就短路掉，**根本走不到"没配 key"那条分支** ——
     #    这个测试的名字说的是"没有 key 时降级"，那就得真让程序去检查 key。
-    record = _ask("2011年11月21日到11月27日一共卖了多少", use_llm=True)
+    record = _ask(LLM_QUESTION, use_llm=True)
     assert record["status"] == "degraded"
     assert record["llm"]["used"] is False
     assert record["llm"]["answer_source"] == "code"
@@ -581,7 +601,7 @@ def test_AC05_没有key时降级且明确标注未接LLM(monkeypatch):
     assert "未接 LLM" not in record["notice"]
     assert "DEEPSEEK_API_KEY" not in record["notice"]
     # 事实仍然是真的（降级 ≠ 乱算）
-    assert record["facts"]["sales_amount"] == _executor_amount(*D16_WEEK_RANGE)
+    assert record["facts"]["current"]["sales_amount"] == _executor_amount(*NOV)
     why = record["answer"]["sections"][1]
     # 段落里给的是**人话的原因**（llm.user_facing_error），不是异常原文；
     # 而且不再重复 notice 里那句「本次没有可用的模型」（同一句话说两遍很蠢）。
@@ -600,7 +620,7 @@ def test_关闭模型与没有模型是两回事():
     SDK 装得好好的、key 也配着，只是这次没让它上场。用户看到那句话会去查环境，
     而真正的原因是他自己（或测试）把开关关了。
     """
-    record = _ask("2011年11月21日到11月27日一共卖了多少", use_llm=False)
+    record = _ask(LLM_QUESTION, use_llm=False)
     assert record["llm"]["used"] is False
     assert record["llm"]["error"]["code"] == "llm_disabled"
     assert "未就绪" not in record["notice"]
@@ -617,12 +637,12 @@ def test_AC05_LLM调用失败也不编答案(monkeypatch):
         raise llm.LLMError("llm_call_failed", "DeepSeek 调用失败（TimeoutError）：连接超时")
 
     monkeypatch.setattr(llm, "chat", _boom)
-    record = _ask("2011年11月21日到11月27日一共卖了多少", use_llm=True)
+    record = _ask(LLM_QUESTION, use_llm=True)
 
     assert record["status"] == "degraded"
     assert record["llm"]["used"] is False
     assert record["llm"]["error"]["code"] == "llm_call_failed"
-    assert record["facts"]["sales_amount"] == _executor_amount(*D16_WEEK_RANGE)
+    assert record["facts"]["current"]["sales_amount"] == _executor_amount(*NOV)
     assert record["answer"]["sections"][1]["source"] == "code"
     # 异常原文（类名 / 服务商名 / 连接细节）**只在后台记录里**，不上界面
     assert record["llm"]["error"]["message"] == "DeepSeek 调用失败（TimeoutError）：连接超时"

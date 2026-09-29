@@ -7,6 +7,8 @@
       ↓
     app/api_chat.py             HTTP 端点（薄壳：收问题、回记录）
       ↓
+    app/ai/routing.py           ★ FR-007 路由（纯代码）：这句问题**想做什么**
+      ↓
     app/ai/service.py           编排：解析 → 校验 → 调工具 → 组织回答 → 落盘
       ↓  ┌──────────────────────────────┬───────────────────────────────┐
          ↓                              ↓
@@ -34,6 +36,9 @@
 
 from __future__ import annotations
 
-from app.ai import answer, intent, llm, service, tools
+from app.ai import answer, arithmetic, general, intent, llm, routing, service, tools
 
-__all__ = ["answer", "intent", "llm", "service", "tools"]
+# ★ FR-007 的三个非销售模块与销售链路**平级**：
+#   routing（路由，纯代码）/ arithmetic（受限 AST 计算器）/ general（系统帮助 + 概念问答）
+#   —— 它们都在调销售工具**之前**结束分支，且 general 不 import tools（见 D24）。
+__all__ = ["answer", "arithmetic", "general", "intent", "llm", "routing", "service", "tools"]

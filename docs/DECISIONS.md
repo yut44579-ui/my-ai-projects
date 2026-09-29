@@ -364,3 +364,47 @@ Hermes 裁决：**全部同意**。
   ② 「按国家」这个维度**没删**（只禁止它冒充地区），要删得单独评审；
   ③ 导入进度不是流式的（大文件时前端只有一个"正在导入"）；④ 单次导入的文件数上限
   是按体积/条目数硬限的，没有做并发导入。
+
+## D24 · FR-007 响应路由解耦：**Intent → response_mode → 渲染**，非销售三类在销售工具之前结束分支（2026-09-29）
+
+**背景（实测复现，不是设想）**：施工前原样问进去 —— 「我放的周报在哪里」被当成销售分析算了 14 行表；
+「1+1等于多少？」被当成销售汇总算了 7 行表；「什么是毛利率？」直接 unsupported。
+根因不在模型，而在链路：既有 8 个 intent **全是销售类**，关键词闸门里 `多少` 这种高频词一出现就往销售上靠，
+回答渲染层又无条件先拼一段"算出来的事实"——任何问题都会被拖进销售流水线。
+
+- **选**：新增**路由层**（`app/ai/routing.py`，纯代码、不碰数据）作为进门第一件事，方向固定为
+  `question → intent 分类 → intent 专属处理 → response_mode → 渲染`。
+  **禁止反向**（`question → response_mode → 猜该调哪个销售工具`）。
+- **冻结的 6 Intent × 4 mode**：`sales_analysis→analysis`｜`data_lookup→direct`｜`general_qa→general`｜
+  `arithmetic→direct`｜`report_generation→report`｜`system_help→help`；分类不出来 → `clarify`。
+- **分类顺序冻结**：`SYSTEM_HELP → ARITHMETIC → GENERAL_QA → REPORT_GENERATION → DATA_LOOKUP →
+  SALES_ANALYSIS → clarify`。顺序本身就是规格：业务关键词先匹配，"1+1等于多少"里的 `多少`
+  就会把问题吞进销售链路 —— 那正是要修的洞。**分类失败默认澄清，绝不默认 sales_summary**。
+- **关键词判据重做**：`多少` 只是**必要条件之一**，不是判据。`data_lookup` 要求
+  「单值语义 + 业务实体 + 时间/维度」三件同时成立，且不含任何分析/排行/明细信号；
+  时间词（今天/本月）与疑问词（多少/哪些）**都不算销售信号**（否则"今天天气怎么样"会落成销售分析）。
+- **数学走受限 AST 计算器**（`app/ai/arithmetic.py`）：白名单节点（Constant/UnaryOp/BinOp + - * / % **）、
+  自己递归求值，**不用 eval/exec**；另加长度/位数/括号深度/幂指数/数量级/除零六道闸（`10**100000000`
+  在**求值之前**就被拒）。**不做**通用数学引擎（无 SymPy/函数/单位换算）。
+- **隔离靠代码调用图，不靠提示词**：`general.py` **不 import** `tools/executor/loader/engine`；
+  `service.ask()` 在调任何销售工具**之前**就为三类非销售问题结束分支。测试把
+  `tools.run_tool / tools.dataset_profile / loader.load_raw / executor.compute_sales_amount`
+  全换成炸弹，跑非销售问题，全绿。
+- **契约字段（接口响应 = 落盘记录，只有一套字段名）**：`response_mode`（怎么答）、
+  `routing.{intent,response_mode,reason,confidence,source}`（为什么这么分）、
+  `answer.source ∈ deterministic|llm|system`（这段字谁写的）、`sales_data_accessed`（这次有没有读销售数据）。
+  非销售分支的记录**没有数据画像**（`data_profile: null`）—— 没读过就不写，写进去就是假话。
+- **分段约束**：`direct→[answer]`、`help→[help]`、`general→[answer]`，三档**后端就不生成**旧
+  `SECTION_WHAT`（GO 条件 6）；`analysis` 沿用 TASK-004/005/010 已冻结的四段契约
+  （`what/contribution/why/actions`，即规格里 answer/facts/trend/attribution 的具体形态），
+  **本 TASK 不重命名**（重命名会同时破坏前端、导出文件与既有验收）。
+- **单值档不问模型**：问的是确定性事实，答案完整且唯一；让模型再写一段【为什么】等于给一个值硬加推断
+  （评审 D 条件禁止）。所以那一档的 `notice` 承载口径说明，正文只有一行。
+- **否**：① 不把 `data_lookup` 做成"问多少就 direct"（那只是把老问题换个名字）；
+  ② 不引入任何新框架/向量库/agent 框架；③ 不动 `app/engine/**` 与 12 个 Legacy 端点；
+  ④ 不动认证逻辑；⑤ 不改 `number_guard / currency_guard / _BANNED_DIMENSIONS` 的语义；
+  ⑥ 界面上不出现意图名/档位名/工具名/耗时/JSON（后台记录里有，界面上没有）。
+- **连带规格变更（已同步三处，不是"改测试让测试通过"）**：帮助页「国家分布」示例换成**地区口径并写明前提**
+  （用户明确要求界面不出现国家维度；**后端按国家拆的能力一行没删**），
+  `tests/test_help_privacy.py`（逐字断言跟着新文案）+ `web/index.html` + `scripts/session_check.mjs`
+  + 两个既有 e2e 脚本里的同类清单同步更新。

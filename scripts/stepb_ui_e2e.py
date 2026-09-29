@@ -502,9 +502,11 @@ def main() -> int:
             help_text = help_box.get("text") or ""
             for part in ("能问什么", "数据从哪来", "数据里没有什么", "数字是怎么算出来的", "常见问题"):
                 check(part in help_text, f"帮助里有「{part}」这一部分")
-            for label in ("销售汇总", "销售趋势", "产品排行", "两区间比较", "国家分布",
-                          "客户分析", "商品分析"):
-                check(label in help_text, f"能问的七类里有「{label}」")
+            # FR-007：帮助示例不再列「国家分布」（用户要求界面不出现国家维度），
+            # 那一行改成地区口径的条件说明
+            for label in ("销售汇总", "销售趋势", "产品排行", "两区间比较",
+                          "客户分析", "商品分析", "地区分布"):
+                check(label in help_text, f"能问的几类里有「{label}」")
             check("做一份销售周报" in help_text, "帮助里提了周报")
             for keyword in ("最后几天", "客户数", "导出", "数据源"):
                 check(keyword in help_text, f"常见问题里有问到「{keyword}」")

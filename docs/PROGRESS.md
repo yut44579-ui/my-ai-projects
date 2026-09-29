@@ -304,3 +304,29 @@ POST /api/exports/reveal    在资源管理器里定位**刚刚生成的那个�
 * 导入**没有流式进度**，大文件时前端只有一句"正在导入"。
 * 一份 PPT 里的**图片/图表**不解析（只取文本框与表格）。
 * `state/` 与 `data/app.db` 全程未被触碰（实测：走查与全量测试跑完，两者 mtime 仍是 03:26 / 03:50）。
+
+## 2026-09-29 · FR-007 响应路由解耦（response_mode）+ 非销售分支隔离
+
+**做了什么**：给问答链路加了一层**路由**（进门第一件事，纯代码不碰数据），把"用户想做什么"
+判成 6 个意图之一，再决定"怎么回答"（5 个渲染档 + clarify 兜底）。三类非销售问题
+（系统帮助 / 纯算术 / 概念问答）在**调用任何销售工具之前**就结束分支。
+
+**新文件**：`app/ai/routing.py`（路由与冻结映射表）、`app/ai/arithmetic.py`（受限 AST 计算器）、
+`app/ai/general.py`（系统帮助文案 + 概念问答，**不 import tools/executor/loader**）。
+**改动文件**：`app/ai/service.py`（路由前置 + 单值档 + 契约字段）、`app/ai/answer.py`
+（三档新渲染 `compose_flat` + `render_direct_text` + `answer.source`）、`web/index.html`（帮助示例去国家维度）、
+`tests/test_help_privacy.py`、`scripts/session_check.mjs`、`scripts/stepb_{login_cdp.mjs,ui_e2e.py}`（同类清单同步）。
+
+**新测试**：`tests/test_fr007_{routing,arithmetic,isolation,modes}.py`（100 条）。
+
+**实测**（施工指令 §八 A–G）：
+- A 算术：「1+1等于多少？」→ `arithmetic/direct`，答案 `1 + 1 = 2`，**没碰销售工具**；
+  `10**100000000` / `1/0` / `__import__("os")` / `open("x")` 全部安全拒绝（`eval/exec` 打了桩也没炸）；
+  六道闸门逐条实测（长度/位数/括号深度/幂指数/数量级/除零）。
+- B 闲聊「你好」→ `general`，无工具无事实无指标表无 SECTION_WHAT。
+- C「什么是毛利率」→ `general_qa/general`，`run_tool/dataset_profile/loader/executor` 调用次数**全 0**。
+- D「本期销售额是多少？」→ `data_lookup/direct`，**单值**（事实表只有 1 行），无贡献/为什么/建议/趋势。
+- E「11月 vs 10月」→ `analysis`，事实+归因照旧；数字闸门/币种闸门/维度闸门三条继续生效。
+- F「帮我生成上周周报」→ `report`，六节结构齐全（摘要/核心指标/趋势/结构/异常 + 建议）。
+- G 反向矩阵：11 句正常销售问题无一误判；7 句非销售问题无一进入销售链路。
+- 真浏览器模式矩阵：`scripts/fr007_modes_cdp.mjs`（7 句话 × 分档/工具/形态 + 界面无实现细节）。

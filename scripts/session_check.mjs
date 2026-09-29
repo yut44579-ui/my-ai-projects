@@ -764,9 +764,12 @@ check(el("info-drawer").hidden === false && el("info-pane-help").hidden === fals
 check(el("info-pane-privacy").hidden === true, "另一栏没有同时冒出来");
 check(el("info-title").textContent === "帮助", "标题跟着换", `「${el("info-title").textContent}」`);
 check(el("toast").textContent.includes("尚未开通") === false, "不再是「尚未开通」那条提示");
-for (const label of ["销售汇总", "销售趋势", "产品排行", "两区间比较", "国家分布", "客户分析", "商品分析"]) {
+// FR-007：帮助示例**不再列「国家分布」**（用户要求界面上不出现国家维度），
+// 那一行改成**地区口径**的条件说明（依赖数据源真的有地区列）。列的是页面上的原文标签。
+for (const label of ["销售汇总", "销售趋势", "产品排行", "两区间比较", "客户分析", "商品分析", "地区分布"]) {
   check(html.includes(`<b>${label}</b>`), `帮助里「${label}」这一类在页面上`);
 }
+check(html.includes("导入带地区列的数据后"), "「地区分布」那一行写明了前提条件（不是无条件宣称）");
 check(el("help-rows").textContent === "541,909", "帮助里的行数是**从后端读的**",
   `「${el("help-rows").textContent}」`);
 check(el("help-source").textContent.includes("Online Retail.xlsx"), "数据源名也是读出来的",

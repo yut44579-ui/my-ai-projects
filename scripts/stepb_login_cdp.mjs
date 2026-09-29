@@ -915,8 +915,9 @@ try {
   for (const word of ["最后几天", "客户数", "导出", "数据源"]) {
     check(help.body.includes(word), `常见问题里有「${word}」那一条`);
   }
-  for (const label of ["销售汇总", "销售趋势", "产品排行", "两区间比较", "国家分布", "客户分析", "商品分析"]) {
-    check(help.body.includes(label), `能问的七类里有「${label}」`);
+  // FR-007：帮助示例不再列「国家分布」（用户要求界面不出现国家维度），改成地区口径的条件说明
+  for (const label of ["销售汇总", "销售趋势", "产品排行", "两区间比较", "客户分析", "商品分析", "地区分布"]) {
+    check(help.body.includes(label), `能问的几类里有「${label}」`);
   }
 
   await evalJs(`document.getElementById("link-privacy").click()`);

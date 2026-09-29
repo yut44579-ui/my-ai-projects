@@ -44,13 +44,28 @@ SECTION_WHAT = "what"
 SECTION_CONTRIBUTION = "contribution"
 SECTION_WHY = "why"
 SECTION_ACTIONS = "actions"
+# ── FR-007：新增的两档渲染用它自己的段名 ─────────────────────────────────
+# direct（单值）与 help（使用帮助）**不生成** SECTION_WHAT —— 这是评审 GO 条件 6：
+# 旧的四段结构是"销售分析"的回答形态，硬套到"1+1等于多少"上就会出现
+# 一段名为【发生了什么】、内容却与销售毫无关系的东西。后端就不生成，不是前端藏起来。
+SECTION_ANSWER = "answer"
+SECTION_HELP = "help"
 
 SECTION_TITLES = {
     SECTION_WHAT: "【发生了什么】",
     SECTION_CONTRIBUTION: "【主要贡献】",
     SECTION_WHY: "【为什么】",
     SECTION_ACTIONS: "【建议行动】",
+    SECTION_ANSWER: "【回答】",
+    SECTION_HELP: "【使用帮助】",
 }
+
+# 回答**来源**的契约词汇（施工指令 §五：deterministic | llm | system）。
+# 注意与 `section["source"]`（code | llm，前端会把它显示成"程序生成/模型生成"）不是一回事：
+# 这一层是给**机器/审计**看的（接口与落盘记录），不在界面上出现任何一处。
+SOURCE_DETERMINISTIC = "deterministic"
+SOURCE_LLM = "llm"
+SOURCE_SYSTEM = "system"
 
 # 数字 token：允许千分位逗号与小数点（`1,234.56` / `12` / `3.5`）。
 # 前面加 `(?<![A-Za-z])` 是为了**不让 "D16" 里的 16 被当成一个数字** ——
@@ -619,7 +634,7 @@ def parse_llm_sections(raw: str) -> tuple[str, str]:
 def _section(key: str, text: str, source: str, **extra: Any) -> dict[str, Any]:
     body = {
         "key": key,
-        "title": SECTION_TITLES[key],
+        "title": extra.pop("title", None) or SECTION_TITLES[key],
         "text": text,
         "source": source,                 # code | llm
     }
@@ -684,6 +699,123 @@ def _dropped_section_reason(report: dict[str, Any]) -> str:
         "（模型这一段里出现了" + "、".join(problems) +
         "，已按「LLM 只负责组织语言、事实以确定性结果为准」的规则整段作废。）"
     )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# FR-007：三档**新**渲染（direct / help / general）
+#
+# 它们与上面那套四段结构的关系：不共用。旧四段是"销售分析"的回答形态
+# （事实 → 贡献 → 推断 → 建议），套到"1+1等于多少"或"怎么导出数据"上会立刻变形：
+# 一段叫【发生了什么】的正文里写着帮助说明，读起来像是系统出了故障。
+# 所以新档只出一段，段名由 mode 决定（answer / help），并且**后端就不生成** SECTION_WHAT。
+# ════════════════════════════════════════════════════════════════════════
+def _flat_guard_report() -> dict[str, Any]:
+    """非销售档的闸门报告：**没有 LLM 段落要核**，如实说明"这次没做数字核对"。
+
+    `applicable: False` 是给审计看的：不是"核过了、通过"，而是"这一档根本没有模型写的数字"。
+    直接复用 passed=True 会让"没核"与"核过且干净"在记录里长得一样 —— 那是自欺。
+    """
+    return {
+        "policy": GUARD_POLICY,
+        "allowed_count": 0,
+        "checked": False,
+        "passed": True,
+        "applicable": False,
+        "by_section": {},
+        "violations": [],
+        "currency_words": [],
+    }
+
+
+def compose_flat(
+    *,
+    key: str,
+    text: str,
+    source: str,
+    title: str | None = None,
+) -> dict[str, Any]:
+    """direct / help / general 三档的**唯一**渲染入口：一段，且不带旧 SECTION_WHAT。
+
+    `source` 是接口契约里的 deterministic | llm | system（给机器看）；
+    分段自己的 `source` 只有 code | llm 两种取值（前端会把它显示成"程序生成/模型生成"）。
+    """
+    section_source = SOURCE_LLM if source == SOURCE_LLM else "code"
+    section = _section(key, text, section_source, title=title)
+    return {
+        "sections": [section],
+        "text": text,
+        "guard": _flat_guard_report(),
+        "export": None,
+        "source": source,
+    }
+
+
+# ── direct 档：单值（DATA_LOOKUP）──────────────────────────────────────
+# 问的是哪个指标，就给哪个指标**一个值** —— 不给整张指标表（评审 A/D 条件）。
+# 标签/单位/格式全部取自工具自己的 display 行（**不在这里另写一套口径**），
+# 事实值取自 facts，两者本来就是同一份确定性结果。
+# 顺序有讲究：**先认金额类**，再认订单/客户/件数。
+# 否则「订单金额是多少」会被"订单"两个字抓到订单数上去（问的是钱，答的是单数）。
+_DIRECT_METRICS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("客单价", "平均单价", "平均订单金额"), "avg_order_amount"),
+    (("销售额", "营业额", "营收", "金额", "卖了多少", "卖了多少钱"), "sales_amount"),
+    (("客户数", "客户数量", "多少客户", "多少位客户"), "customer_count"),
+    (("销量", "销售量", "件数", "多少件"), "valid_qty_sum"),
+    (("订单数", "订单量", "多少单", "多少笔", "几单", "几笔", "订单"), "order_count"),
+)
+
+
+def direct_metric(question: str) -> str:
+    """用户问的是哪个指标（问不出来就按销售额 —— 这是最常问的那一个）。"""
+    text = question or ""
+    for words, key in _DIRECT_METRICS:
+        if any(word in text for word in words):
+            return key
+    return "sales_amount"
+
+
+def direct_display(result: dict[str, Any] | None, question: str) -> list[dict[str, Any]]:
+    """单值档只保留**被问的那一行**展示项（其余仍在 facts 里，供审计与复核）。
+
+    为什么要动 display：前端把 `tool.display` 整表画成"事实表"，不动它就会出现
+    "问了销售额、页面上却列着 7 行指标" —— 那正是评审禁止的「完整指标表」。
+    """
+    rows = list((result or {}).get("display") or [])
+    if not rows:
+        return []
+    prefix = _DIRECT_LABEL_PREFIX.get(direct_metric(question), "")
+    for row in rows:
+        if prefix and str(row.get("label") or "").startswith(prefix):
+            return [row]
+    return [rows[0]]
+
+
+# 指标 key → display 行的标签前缀（行的标签比 key 长，如"订单数（去重发票号）"）
+_DIRECT_LABEL_PREFIX: dict[str, str] = {
+    "sales_amount": "销售额",
+    "order_count": "订单数",
+    "customer_count": "客户数",
+    "avg_order_amount": "客单价",
+    "valid_qty_sum": "有效商品件数",
+}
+
+
+def render_direct_text(result: dict[str, Any] | None, question: str) -> str:
+    """单值档的正文：**一句话，一个数**（带时间段与单位，不带指标表、不带推断）。"""
+    display = direct_display(result, question)
+    if not display:
+        return "本次没有算出可展示的结果。"
+    row = display[0]
+    params = (result or {}).get("params") or {}
+    start, end = params.get("start"), params.get("end")
+    period = f"{start} ~ {end} " if start and end else ""
+    value = format_value(row.get("value"), str(row.get("format") or "auto"))
+    unit = str(row.get("unit") or "")
+    label = str(row.get("label") or "结果").split("（")[0]
+    # 正文**只有一行**：时间段 + 被问的指标 + 值。
+    # 口径说明不在正文里 —— 它由 service 放进这条记录的 notice（页面上就贴在正文上方），
+    # 理由是正文要保持"单值"这一件事本身干净：混进一句说明，它就不再是"一个值"了。
+    return f"{period}{label}：{value}{unit}。"
 
 
 def compose(
@@ -835,27 +967,44 @@ def compose(
             profile=profile,
         )
 
-    return {"sections": sections, "text": text, "guard": guard_report, "export": export}
+    # `source`（FR-007 契约）：这一段回答整体是谁写的 ——
+    # 有模型参与且过闸 = llm；其余（代码降级/数据不足/不支持）= deterministic。
+    return {
+        "sections": sections,
+        "text": text,
+        "guard": guard_report,
+        "export": export,
+        "source": SOURCE_LLM if llm_used else SOURCE_DETERMINISTIC,
+    }
 
 
 __all__ = [
     "GUARD_POLICY",
     "LLM_SYSTEM_PROMPT",
     "SECTION_ACTIONS",
+    "SECTION_ANSWER",
     "SECTION_CONTRIBUTION",
+    "SECTION_HELP",
     "SECTION_TITLES",
     "SECTION_WHAT",
     "SECTION_WHY",
+    "SOURCE_DETERMINISTIC",
+    "SOURCE_LLM",
+    "SOURCE_SYSTEM",
     "build_llm_prompt",
     "build_report_export",
     "collect_allowed_numbers",
     "comparison_label",
     "compose",
+    "compose_flat",
     "currency_guard",
+    "direct_display",
+    "direct_metric",
     "format_value",
     "number_guard",
     "parse_llm_sections",
     "render_contribution_text",
+    "render_direct_text",
     "render_facts_text",
     "render_llm_facts",
     "render_report_document",
