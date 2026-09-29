@@ -42,6 +42,7 @@ from app.ai import (
     doc_qa,
     general,
     intent as intent_module,
+    joint,
     llm,
     region_source,
     report,
@@ -405,6 +406,44 @@ def _answer_non_sales(question: str, *, route: routing.Route, use_llm: bool) -> 
     )
 
 
+def _answer_joint(question: str, *, route: routing.Route, use_llm: bool) -> dict[str, Any]:
+    """★ FR-010-C：资料 + 销售数据的**联合分析**（三段硬分离）。
+
+    与别的分支最大的不同：它**两边都读** —— 资料那一半走 `doc_index`（复用 B 的检索与出处），
+    数据那一半走 `tools.*`（复用既有的确定性计算）。所以这条记录的
+    `sales_data_accessed` 是 True、也有数据画像：**如实写**（这条回答确实用过销售数据）。
+
+    status 的两档：三段都给了 = ok；缺了某一半（没有资料 / 要成本侧的结论而数据里没有）
+    = unsupported —— 与"数据里没有这个维度"同一档，都是"我诚实地告诉我给不了"。
+    """
+    profile = tools.dataset_profile()
+    analysis = joint.analyze(
+        question, use_llm=use_llm, profile=profile, boundary_note=_boundary_note(profile)
+    )
+    payload = answer.compose_sections(
+        sections=list(analysis.sections),
+        sources=list(analysis.findings),
+        guard=analysis.guard,
+        # 第三段是模型写的（且过了数字闸门）→ 整条回答的来源标 llm；
+        # 否则整条都是确定性的（资料引用 + 算出来的数字 + 代码按事实拼的建议）。
+        source=answer.SOURCE_LLM if analysis.llm_used else answer.SOURCE_DETERMINISTIC,
+    )
+    return _record(
+        question=question,
+        status=STATUS_OK if analysis.kind == joint.KIND_ANSWER else STATUS_UNSUPPORTED,
+        profile=profile,
+        parse_info={"source": "routing", "fallback": None, "llm_error": analysis.llm_error},
+        params=(analysis.result or {}).get("params"),
+        result=analysis.result,
+        answer_payload=payload,
+        notice=analysis.notice,
+        llm_used=analysis.llm_used,
+        llm_error=analysis.llm_error,
+        route=route,
+        sales_data_accessed=True,
+    )
+
+
 def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
     """回答一个问题，返回落盘的记录。
 
@@ -421,6 +460,12 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
     # ── 非销售分支：不读数据、不调销售工具（评审 GO 条件 4/6 + §六安全边界③④）──
     if route.intent in routing.NON_SALES_INTENTS:
         return _answer_non_sales(question, route=route, use_llm=use_llm)
+
+    # ── FR-010-C 联合分析：**两边都读**（资料 + 销售数据），三段分开说 ──────────
+    # 它排在非销售分支之后、销售链路之前：既不会被"没听懂"那条路吞掉，
+    # 也不会掉进"用关键词猜一个销售 intent"的解析里（联合分析要的是两段事实，不是一个指标）。
+    if route.intent == routing.INTENT_JOINT_ANALYSIS:
+        return _answer_joint(question, route=route, use_llm=use_llm)
 
     # ── 澄清兜底（FR-010-A4/A5）：**同样不读销售数据** ──────────────────────
     # 走到这里说明这句话既不是销售问题，也不是算术/概念/系统类 —— 没有任何工具能回答它。

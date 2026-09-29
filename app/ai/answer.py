@@ -760,6 +760,52 @@ def _flat_guard_report() -> dict[str, Any]:
     }
 
 
+def code_section(
+    key: str,
+    text: str,
+    *,
+    title: str | None = None,
+    source: str = "code",
+    **extra: Any,
+) -> dict[str, Any]:
+    """**一段**回答内容（给"多段的确定性回答"用 —— 目前是 FR-010-C 的联合分析）。
+
+    为什么不让调用方自己拼 dict：分段的形状（key / title / text / source / inferred…）
+    是接口契约的一部分，前端和历史记录都按它读。调用方各拼一份，早晚有一处少个字段。
+
+    `source` 是**分段自己的**来源（code | llm，前端显示成"程序生成/模型生成"），
+    与 `compose_flat(..., source=)` 那个 deterministic | llm | system 不是一层。
+    """
+    return _section(key, text, source, title=title, **extra)
+
+
+def compose_sections(
+    *,
+    sections: list[dict[str, Any]],
+    sources: list[dict[str, Any]] | None = None,
+    guard: dict[str, Any] | None = None,
+    source: str = SOURCE_DETERMINISTIC,
+) -> dict[str, Any]:
+    """**N 段的确定性回答**（出口形状与 `compose_flat` 完全一致，只是不止一段）。
+
+    与 `compose()`（销售分析的四段）的区别不在段数，而在"谁写的"：
+    这里的每一段都是**代码写的**（或由代码组织好的引用），只有需要模型参与的那一段
+    （联合分析的第三段）才可能是 llm，并且那一段的文本已经由调用方**过完数字闸门**。
+
+    `guard`（闸门报告）由调用方给：没有模型参与时传 None —— 这时用
+    `_flat_guard_report()`（`applicable: False`），如实表示"这一档没有模型写的数字要核"。
+    """
+    return {
+        "sections": list(sections),
+        "text": "\n\n".join(f"{item['title']}\n{item['text']}" for item in sections),
+        "guard": guard or _flat_guard_report(),
+        "export": None,
+        "source": source,
+        "dashboard": None,
+        "sources": sources,
+    }
+
+
 def compose_flat(
     *,
     key: str,
@@ -1050,10 +1096,12 @@ __all__ = [
     "SOURCE_SYSTEM",
     "build_llm_prompt",
     "build_report_export",
+    "code_section",
     "collect_allowed_numbers",
     "comparison_label",
     "compose",
     "compose_flat",
+    "compose_sections",
     "currency_guard",
     "direct_display",
     "direct_metric",

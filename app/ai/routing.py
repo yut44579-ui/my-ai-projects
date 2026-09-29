@@ -20,13 +20,20 @@ FR-007 施工前，把这三句话原样问进去：
     ✗ 禁止：question → response_mode → 去猜该调哪个销售工具
 
 `response_mode` 是"怎么回答"（渲染档位），**不是**"该调什么工具"。所以它永远排在
-intent 之后：先由本模块判出 6 个 intent 之一，再由 service 走对应的处理分支。
+intent 之后：先由本模块判出 intent 之一，再由 service 走对应的处理分支。
+（FR-007 时是 6 个 + 澄清兜底；FR-010-C 追加了第 8 个 `joint_analysis`，理由见下面那一节。）
 
 ════════════════════════════════════════════════════════════════════════
 【分类顺序冻结（顺序本身就是规格）】
 ════════════════════════════════════════════════════════════════════════
-    SYSTEM_HELP → CAPABILITY → ARITHMETIC → GENERAL_QA → REPORT_GENERATION
-                → DATA_LOOKUP → SALES_ANALYSIS → clarify
+    JOINT(DOC+DATA) → SYSTEM_HELP → CAPABILITY → ARITHMETIC → GENERAL_QA
+                    → REPORT_GENERATION → DATA_LOOKUP → SALES_ANALYSIS → clarify
+
+★ FR-010-C 把 **JOINT（资料+销售数据联合分析）** 加在**最前面**，理由是它"两边都要读"：
+  它既可能带着"资料"（会被 SYSTEM_HELP/DOC 抢走），也可能带着"分析/趋势"（会被
+  SALES_ANALYSIS 抢走）—— 排在任何一个后面，它都会被那一档吃掉，而吃掉的结果是
+  **答了另一个问题**（拿使用说明或一份销售表去回答"资料怎么说"）。它的判据自己是
+  严的（必须点了一份资料，且要一个"跟数据放一起看"的产出），所以排最前不会误伤。
 
 为什么系统类/数学/概念要**排在销售前面**：业务关键词一旦先匹配，"1+1等于多少"这种句子
 里的 `多少` 就会把问题吞进销售链路 —— 这正是 FR-007 要修的那个洞。
@@ -64,7 +71,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.ai import arithmetic, doc_qa, system_info
+from app.ai import arithmetic, doc_qa, joint, system_info
 from app.ai.report import report_period
 
 # ════════════════════════════════════════════════════════════════════════
@@ -76,6 +83,13 @@ INTENT_GENERAL_QA = "general_qa"
 INTENT_ARITHMETIC = "arithmetic"
 INTENT_REPORT_GENERATION = "report_generation"
 INTENT_SYSTEM_HELP = "system_help"
+# ★ FR-010-C 追加的第 8 个意图：**资料 + 销售数据一起看**（联合分析）。
+#   为什么它必须是一个新 intent、而不是塞进 system_help（B 的资料问答就是塞在那儿的）：
+#   它**要读销售数据**（第二段就是确定性算出来的数字），而 system_help 那一档
+#   在代码调用图上被钉死为"一次都不碰销售数据"（见 NON_SALES_INTENTS 与
+#   tests/test_fr007_isolation.py）。把一个会读数据的档塞进"不读数据的档"里，
+#   那个档的分类与隔离就变成了一句假话 —— 宁可多一个意图，也不撒这个谎。
+INTENT_JOINT_ANALYSIS = "joint_analysis"
 # 「无法确定」不是第 7 个意图，而是分类失败的兜底档（施工指令 §三）
 INTENT_CLARIFY = "clarify"
 
@@ -86,6 +100,8 @@ ALL_INTENTS: tuple[str, ...] = (
     INTENT_ARITHMETIC,
     INTENT_REPORT_GENERATION,
     INTENT_SYSTEM_HELP,
+    # ★ FR-010-C 追加（**只能往后追加**：前七个的顺序是既有的，动它就是动别人的合同）
+    INTENT_JOINT_ANALYSIS,
     INTENT_CLARIFY,
 )
 
@@ -94,11 +110,22 @@ MODE_DIRECT = "direct"
 MODE_GENERAL = "general"
 MODE_REPORT = "report"
 MODE_HELP = "help"
+# ★ FR-010-C 追加的第 6 档：**三段式**（资料事实 / 数据事实 / 推断与建议）。
+#   为什么不复用 analysis 档：analysis 的四段是"事实由代码写、推断由模型写"的**销售分析**
+#   形态（【发生了什么】【主要贡献】【为什么】【建议行动】），它的第一段永远是销售事实 ——
+#   联合分析的第一段是**资料原文摘录**，第二段才是数据。硬套进 analysis 档，
+#   用户看到的第一个标题就会是"发生了什么"，而底下写的是一份资料的引用（名不副实）。
+MODE_JOINT = "joint"
 MODE_CLARIFY = "clarify"
 
-ALL_MODES: tuple[str, ...] = (MODE_ANALYSIS, MODE_DIRECT, MODE_GENERAL, MODE_REPORT, MODE_HELP, MODE_CLARIFY)
+ALL_MODES: tuple[str, ...] = (
+    MODE_ANALYSIS, MODE_DIRECT, MODE_GENERAL, MODE_REPORT, MODE_HELP,
+    MODE_JOINT,                       # FR-010-C 追加（同样**只能往后追加**）
+    MODE_CLARIFY,
+)
 
 # ★ 冻结映射（施工指令 §三）。**不许加**：多一个 intent 就多一条要维护的分支。
+#   FR-010-C 是**唯一一次**追加（理由见上面的 INTENT_JOINT_ANALYSIS），且只往后加一项。
 MODE_BY_INTENT: dict[str, str] = {
     INTENT_SALES_ANALYSIS: MODE_ANALYSIS,
     INTENT_DATA_LOOKUP: MODE_DIRECT,
@@ -106,6 +133,7 @@ MODE_BY_INTENT: dict[str, str] = {
     INTENT_ARITHMETIC: MODE_DIRECT,
     INTENT_REPORT_GENERATION: MODE_REPORT,
     INTENT_SYSTEM_HELP: MODE_HELP,
+    INTENT_JOINT_ANALYSIS: MODE_JOINT,
     INTENT_CLARIFY: MODE_CLARIFY,
 }
 
@@ -129,14 +157,19 @@ SECTIONS_BY_MODE: dict[str, tuple[str, ...]] = {
     MODE_DIRECT: ("answer",),
     MODE_HELP: ("help",),
     MODE_GENERAL: ("answer",),
+    # FR-010-C：三段**顺序即规格**（资料事实 → 数据事实 → 推断与建议）。
+    # 段名与 `app.ai.joint.SECTION_ORDER` **逐字一致**（那边是正文拼装处，这里是路由契约）。
+    MODE_JOINT: ("doc_facts", "data_facts", "analysis"),
     MODE_ANALYSIS: ("what", "contribution", "why", "actions"),
     MODE_REPORT: ("what", "why", "actions"),
     MODE_CLARIFY: ("what", "why", "actions"),
 }
 
-# ★ GO 条件 6 的机器可读形式：这三档**后端就不生成**旧 SECTION_WHAT，
+# ★ GO 条件 6 的机器可读形式：这几档**后端就不生成**旧 SECTION_WHAT，
 #   而不是"生成了但前端藏起来"。测试直接拿这个元组去断言。
-MODES_WITHOUT_SECTION_WHAT: tuple[str, ...] = (MODE_DIRECT, MODE_HELP, MODE_GENERAL)
+#   FR-010-C 的 joint 也在这里：它生成的是三段资料/数据/推断，没有【发生了什么】
+#   （联合分析的"发生了什么"是**两段**，各有自己的标题）。
+MODES_WITHOUT_SECTION_WHAT: tuple[str, ...] = (MODE_DIRECT, MODE_HELP, MODE_GENERAL, MODE_JOINT)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -343,6 +376,19 @@ def classify(question: str) -> Route:
     if not text:
         return Route(INTENT_CLARIFY, MODE_CLARIFY, reason="问题为空", confidence=1.0)
 
+    # ── ①″ ★ FR-010-C 联合分析（资料 + 销售数据）—— **必须排在下面全部之前** ────
+    # 为什么排最前：这一档要**同时**读资料与销售数据，而它的问法几乎都会先撞上别的分支：
+    #   「根据我导入的资料，我们下一步该怎么做」→ 有"导入"+"怎么" → 会被 SYSTEM_HELP 抢走；
+    #   「结合资料和销售数据，分析下后面该怎么发展」→ 有"分析" → 会被 SALES_ANALYSIS 抢走。
+    # 抢走的后果不是"答得不好"，而是**答了另一个问题**（拿静态使用说明、或拿一份销售表
+    # 去回答一个"资料怎么说"的问题）。判据本身在 `app.ai.joint.is_joint_question`
+    # （纯代码、不读数据、不调模型），它内部**先把"只问资料内容"的问题让回给 B**。
+    if joint.is_joint_question(text):
+        return Route(
+            INTENT_JOINT_ANALYSIS, MODE_JOINT,
+            reason="要把你导入的资料和销售数据放在一起看", confidence=0.85,
+        )
+
     # ── ① 系统帮助 / 系统元信息 / 资料内容（都不碰销售数据）────────────
     # 元信息（FR-010-A3）与使用说明走**同一档**（help）—— 它们都是"关于系统自己"的问题，
     # 只是前者要查真实记录、后者是静态文案（由 general.system_answer 分流）。
@@ -400,6 +446,7 @@ __all__ = [
     "INTENT_CLARIFY",
     "INTENT_DATA_LOOKUP",
     "INTENT_GENERAL_QA",
+    "INTENT_JOINT_ANALYSIS",
     "INTENT_REPORT_GENERATION",
     "INTENT_SALES_ANALYSIS",
     "INTENT_SYSTEM_HELP",
@@ -409,6 +456,7 @@ __all__ = [
     "MODE_DIRECT",
     "MODE_GENERAL",
     "MODE_HELP",
+    "MODE_JOINT",
     "MODE_REPORT",
     "MODES_WITHOUT_SECTION_WHAT",
     "NON_SALES_INTENTS",

@@ -33,6 +33,10 @@ AI_DIR = PROJECT_ROOT / "app" / "ai"
 # ① 映射表冻结
 # ════════════════════════════════════════════════════════════════════════
 def test_01_六意图到四档的映射逐条冻结():
+    # ★ FR-010-C 追加了一项 `joint_analysis → joint`（资料 + 销售数据联合分析）。
+    #   这张表仍然是**逐条冻结**的（不是"改成子集检查"）—— 追加要在这一行上看得见。
+    #   为什么 must 是一个新 intent：联合分析要读销售数据，而 system_help 那一档
+    #   在代码调用图上被钉死为"不碰数据"（见 NON_SALES_INTENTS），塞进去就是一句假话。
     assert routing.MODE_BY_INTENT == {
         "sales_analysis": "analysis",
         "data_lookup": "direct",
@@ -40,18 +44,21 @@ def test_01_六意图到四档的映射逐条冻结():
         "arithmetic": "direct",
         "report_generation": "report",
         "system_help": "help",
+        "joint_analysis": "joint",
         "clarify": "clarify",
     }
-    # 多一个 intent 就多一条要维护的分支 —— 这里钉住"只许这七个名字"
+    # 多一个 intent 就多一条要维护的分支 —— 这里钉住"只许这八个名字"
     assert routing.ALL_INTENTS == (
         "sales_analysis", "data_lookup", "general_qa",
-        "arithmetic", "report_generation", "system_help", "clarify",
+        "arithmetic", "report_generation", "system_help", "joint_analysis", "clarify",
     )
     assert set(routing.MODE_BY_INTENT) == set(routing.ALL_INTENTS)
 
 
 def test_02_三档必须不生成旧SECTION_WHAT():
-    assert set(routing.MODES_WITHOUT_SECTION_WHAT) == {"direct", "help", "general"}
+    # FR-010-C 的 joint 也在这一组：它生成的是三段（资料 / 数据 / 推断），
+    # 没有【发生了什么】—— 联合分析的"发生了什么"是两段，各有自己的标题。
+    assert set(routing.MODES_WITHOUT_SECTION_WHAT) == {"direct", "help", "general", "joint"}
     for mode in routing.MODES_WITHOUT_SECTION_WHAT:
         assert "what" not in routing.SECTIONS_BY_MODE[mode], mode
         assert routing.SECTIONS_BY_MODE[mode], mode

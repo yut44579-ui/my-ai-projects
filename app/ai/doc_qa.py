@@ -37,7 +37,12 @@
 ════════════════════════════════════════════════════════════════════════
 【不做什么（都是别的 TASK 的边界，不许顺手做）】
 ════════════════════════════════════════════════════════════════════════
-    · 不做资料 + 销售数据的**联合分析**（那是 FR-010-C）；
+    · 不做资料 + 销售数据的**联合分析**（那是 FR-010-C，在 `app/ai/joint.py`）——
+      但联合分析的**资料那一半**复用本模块的既有能力（`doc_index.search` 检索 +
+      `best_sentences` 抽原句 + `citation_of` 出处 + `attribute_of` 属性词 +
+      `overview_answer` 结构概览），**没有第二套出处机制**；
+      ★ 判据也是同一处：`points_at_document` / `has_content_ask` 由两边共用，
+        所以"问资料里写了什么"永远归本模块，"要把资料与数据放一起看"才归联合分析；
     · 不读销售数据（本模块只 import 文档仓储与导入记录，见 `tests/test_fr010b_documents.py`
       的结构性隔离断言）；
     · 不因文件名猜正文（B4）：文件名只用来**定位**文件，一个字都不进回答的断言部分；
@@ -106,6 +111,20 @@ def has_content_ask(text: str) -> bool:
     return any(word in text for word in _CONTENT_ASKS)
 
 
+def points_at_document(text: str) -> bool:
+    """这句话**指向一份资料**吗（判据①，单独拿出来是因为联合分析也要用它）。
+
+    指向方式有两种：提到「资料 / 文档 / 报告…」这类名词，或者用书名号 / 带后缀的文件名点名。
+    ★ 这是"这份资料"的**唯一一处判据**：FR-010-C 的联合分析也走它 ——
+      词表在这里抄第二份，两处早晚会漂移成"判得出来却答不上来"。
+    """
+    question = (text or "").strip()
+    if not question:
+        return False
+    return bool(_BOOK_RE.search(question) or _FILE_NAME_RE.search(question)) \
+        or any(noun in question for noun in _DOC_NOUNS)
+
+
 def is_document_question(text: str) -> bool:
     """这句话是在问**已导入资料的内容**吗（纯代码，不读数据）。
 
@@ -119,9 +138,7 @@ def is_document_question(text: str) -> bool:
     question = (text or "").strip()
     if not question:
         return False
-    points_at_document = bool(_BOOK_RE.search(question) or _FILE_NAME_RE.search(question)) \
-        or any(noun in question for noun in _DOC_NOUNS)
-    if not points_at_document:
+    if not points_at_document(question):
         return False
     return has_content_ask(question)
 
@@ -350,14 +367,14 @@ _UNIT_BY_KIND = {
 }
 
 
-def _unit_of(document: doc_index.Document) -> str:
+def unit_of(document: doc_index.Document) -> str:
     kinds = {chunk.position_kind for chunk in document.chunks}
     if len(kinds) == 1:
         return _UNIT_BY_KIND[next(iter(kinds))]
     return "节"                                    # 混着来的（少见）：按"节"说，不编更细的
 
 
-def _citation(chunk: doc_index.Chunk) -> str:
+def citation_of(chunk: doc_index.Chunk) -> str:
     """出处文字：`《文件名》第 N 节 · 节标题`（**全项目唯一的一处拼法**）。"""
     position = chunk.position_label
     if chunk.position_title:
@@ -365,7 +382,7 @@ def _citation(chunk: doc_index.Chunk) -> str:
     return f"《{chunk.filename}》{position}"
 
 
-def _listed_positions(document: doc_index.Document, limit: int) -> list[tuple[str, str, str, int]]:
+def listed_positions(document: doc_index.Document, limit: int) -> list[tuple[str, str, str, int]]:
     """`[(位置标识, 位置文字, 节标题, 这个位置的编号终点)]`，按正文顺序取前 `limit` 个。
 
     为什么要带上"终点"：位置文字可能是一段区间（`第 1~11 段`）。只说"列了 8 条"，
@@ -384,8 +401,8 @@ def _catalog(corpus: doc_index.Corpus, names: int = MAX_CATALOG_DOCUMENTS) -> st
     """资料清单（"没有找到"时说明资料里实际有什么 —— **只报结构，不报内容猜测**）。"""
     lines: list[str] = []
     for document in corpus.documents[:names]:
-        listed = _listed_positions(document, MAX_CATALOG_TITLES)
-        unit = _unit_of(document)
+        listed = listed_positions(document, MAX_CATALOG_TITLES)
+        unit = unit_of(document)
         head = f"· 《{document.filename}》—— 共 {document.position_count} {unit}"
         if not listed:
             lines.append(head)
@@ -407,7 +424,7 @@ def _empty_pages_note(corpus: doc_index.Corpus) -> str:
     return ""
 
 
-def _overview_answer(corpus: doc_index.Corpus) -> DocAnswer:
+def overview_answer(corpus: doc_index.Corpus) -> DocAnswer:
     """概览：**每一节各挑一句原文** + 每节各自带出处。
 
     为什么不拿"最像的那一段"回答："这个资料讲了什么"要的是全貌，
@@ -416,8 +433,8 @@ def _overview_answer(corpus: doc_index.Corpus) -> DocAnswer:
     blocks: list[str] = []
     findings: list[dict[str, Any]] = []
     for document in corpus.documents[:MAX_OVERVIEW_DOCUMENTS]:
-        listed = _listed_positions(document, MAX_OVERVIEW_SECTIONS)
-        unit = _unit_of(document)
+        listed = listed_positions(document, MAX_OVERVIEW_SECTIONS)
+        unit = unit_of(document)
         if len(corpus.documents) == 1:
             head = f"你导入的《{document.filename}》一共 {document.position_count} {unit}，内容大致是这些："
         else:
@@ -430,7 +447,7 @@ def _overview_answer(corpus: doc_index.Corpus) -> DocAnswer:
             excerpt = best_sentences(chunk.text, set(), limit=1, max_chars=90)
             name = f"{label} · {title}" if title else label
             lines.append(f"{index}. {name}：{excerpt}")
-            lines.append(f"   出处：{_citation(chunk)}")
+            lines.append(f"   出处：{citation_of(chunk)}")
             findings.append({
                 "document_id": document.document_id, "filename": document.filename,
                 "position": chunk.position_label, "position_title": chunk.position_title,
@@ -458,7 +475,7 @@ def _hit_answer(result: doc_index.SearchResult) -> DocAnswer:
         chunk = hit.chunk
         quote = best_sentences(chunk.text, set(result.query_units))   # 挑与问题最沾边的原句
         lead, body = attribute_of(quote)
-        lines.append(f"· {_citation(chunk)}")
+        lines.append(f"· {citation_of(chunk)}")
         lines.append(f"  {lead}：「{body}」")
         findings.append({
             "document_id": chunk.document_id, "filename": chunk.filename,
@@ -584,7 +601,7 @@ def answer_question(question: str, *, corpus: doc_index.Corpus | None = None) ->
     searched = doc_index.scoped(corpus, document) if document is not None else corpus
 
     if _is_overview(question):
-        return _overview_answer(searched)
+        return overview_answer(searched)
 
     # ★ 检索用的是**剥掉脚手架的那个词**（「资料里有没有写买量成本」→「买量成本」）：
     #   脚手架词（资料 / 有没有 / 提到）会把覆盖率的分母撑大，让本该命中的句子判成没命中。
@@ -611,8 +628,13 @@ __all__ = [
     "attribute_of",
     "answer_question",
     "best_sentences",
+    "citation_of",
     "has_content_ask",
     "is_document_question",
+    "listed_positions",
+    "overview_answer",
+    "points_at_document",
     "sentences_of",
     "topic_of",
+    "unit_of",
 ]

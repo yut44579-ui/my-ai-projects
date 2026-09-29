@@ -40,8 +40,11 @@ from app.ai import (
     answer,
     arithmetic,
     dashboard,
+    doc_index,
+    doc_qa,
     general,
     intent,
+    joint,
     llm,
     routing,
     service,
@@ -54,7 +57,10 @@ from app.ai import (
 #   —— 它们都在调销售工具**之前**结束分支，且 general 不 import tools（见 D24）。
 # ★ FR-010-A 追加两个：system_info（系统自身的问题：导入记录/身份/能力边界，同样不碰销售数据）
 #   与 dashboard（轻量看板：把**已有的**确定性结果摆成卡片，不新造任何口径）。
+# ★ FR-010-B 的两个资料模块（doc_index 检索 / doc_qa 资料问答）与
+#   FR-010-C 的 joint（联合分析：资料 + 销售数据）也在这里 —— joint 是**唯一**两边都读的
+#   能力域，它的两半分别复用 doc_qa/doc_index 与 tools，自己没有第二套口径或出处机制。
 __all__ = [
-    "answer", "arithmetic", "dashboard", "general", "intent", "llm",
-    "routing", "service", "system_info", "tools",
+    "answer", "arithmetic", "dashboard", "doc_index", "doc_qa", "general",
+    "intent", "joint", "llm", "routing", "service", "system_info", "tools",
 ]

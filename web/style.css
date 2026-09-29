@@ -708,6 +708,21 @@ button { font-family: inherit; }
   font-size: 11.5px; color: var(--text-2); line-height: 1.7; white-space: pre-wrap;
 }
 
+/* 长提示条默认收起成一行摘要（口径与假设一个字都没删，点开看全文）。
+   三角与 hover 的写法与上面的 .chain 一致 —— 同一个系统里"能点开"的东西长一个样。 */
+.notice-fold { display: block; }
+.notice-fold > summary {
+  cursor: pointer; list-style: none; color: var(--text-2); white-space: normal;
+}
+.notice-fold > summary::-webkit-details-marker { display: none; }
+.notice-fold > summary::before { content: "▸ "; color: var(--text-3); }
+.notice-fold[open] > summary::before { content: "▾ "; }
+.notice-fold > summary:hover { color: var(--text-1); }
+.notice-full {
+  margin-top: 6px; padding-left: 12px; border-left: 2px solid var(--border);
+  white-space: pre-wrap; word-break: break-word;
+}
+
 /* 历史提问列表（复用 .row 的横向布局思路，但这是列表行不是表单行，单独定义） */
 .rows { display: flex; flex-direction: column; margin-top: 10px; }
 .chat-history-row {

@@ -1427,18 +1427,61 @@
     return tool.title || "问题类型未记录";
   }
 
+  // ── 长提示条：默认只显示**一行摘要**，点开看全文 ──────────────────────────
+  // 为什么要收起来：提示条里装的是口径与假设（数字怎么算的、排除了哪些行、数据到哪天），
+  // 它必须完整可查 —— 但它有三四行长，每条回答下面都摊着，用户得从它上面划过去才能看别的。
+  // 所以**一个字都没删**：全文逐字放进可展开的区域，默认只露一行。
+  //   · 摘要不是新写的内容：它就是后端那句话的第一句（或"这条在说什么"的标签）；
+  //   · 全文用的是后端给的 `notice` 原文，展开后与收起前**是同一段文字**。
+  const NOTICE_COLLAPSE_MIN = 60;        // 短消息（"正在读取…"）照旧原样显示，不套这层壳
+
+  function noticeSummary(text) {
+    const flat = String(text || "").replace(/\s+/g, " ").trim();
+    if (/数字由程序/.test(flat)) return "数字由程序算出 · 口径与假设";
+    const stop = flat.search(/[。；]/);
+    if (stop > 0 && stop <= 70) return flat.slice(0, stop);
+    return flat.length > 70 ? `${flat.slice(0, 70)}…` : flat;
+  }
+
+  function renderNotice(el, text) {
+    if (!el) return;
+    clear(el);
+    const flat = String(text || "").trim();
+    el.hidden = !flat;
+    if (!flat) return;
+    if (flat.replace(/\s+/g, " ").length <= NOTICE_COLLAPSE_MIN) {
+      el.textContent = flat;
+      return;
+    }
+    const fold = document.createElement("details");
+    fold.className = "notice-fold";
+    const summary = document.createElement("summary");
+    summary.textContent = noticeSummary(flat);
+    fold.appendChild(summary);
+    const full = document.createElement("div");
+    full.className = "notice-full";
+    full.textContent = flat;               // ★ 逐字全文（与后端给的提示语完全一致）
+    fold.appendChild(full);
+    el.appendChild(fold);
+  }
+
   function setChatState(kind, message) {
     const el = $("chat-state");
     if (!el) return;
     if (!kind) {
       el.hidden = true;
-      el.textContent = "";
+      clear(el);
       el.className = "chat-state";
       return;
     }
     el.hidden = false;
     el.className = `chat-state ${kind}`;
-    el.textContent = message;
+    // 正在读 / 出错这两种状态**不收**：错误原因被折起来要点一下才看得到，那是帮倒忙。
+    if (kind === "loading" || kind === "error") {
+      el.textContent = message;
+      return;
+    }
+    renderNotice(el, message);
   }
 
   async function askQuestion(question) {
@@ -1524,7 +1567,7 @@
 
     renderChatFacts(record);
     renderChatAnswer(record.answer);
-    setText("chat-notice", record.notice || "");
+    renderNotice($("chat-notice"), record.notice || "");
 
     // 五个环节按"这一环到底有没有内容"决定展开 ——
     // 答不了的问题（数据不支持）不该一进来就摊开四个空块，那看着像有东西其实没有。
