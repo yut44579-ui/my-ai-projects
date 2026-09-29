@@ -64,7 +64,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.ai import arithmetic, system_info
+from app.ai import arithmetic, doc_qa, system_info
 from app.ai.report import report_period
 
 # ════════════════════════════════════════════════════════════════════════
@@ -343,11 +343,19 @@ def classify(question: str) -> Route:
     if not text:
         return Route(INTENT_CLARIFY, MODE_CLARIFY, reason="问题为空", confidence=1.0)
 
-    # ── ① 系统帮助 / 系统元信息（都不碰销售数据）──────────────────────
+    # ── ① 系统帮助 / 系统元信息 / 资料内容（都不碰销售数据）────────────
     # 元信息（FR-010-A3）与使用说明走**同一档**（help）—— 它们都是"关于系统自己"的问题，
     # 只是前者要查真实记录、后者是静态文案（由 general.system_answer 分流）。
-    if _is_system_help(text) or _is_where_question(text) or system_info.is_meta_question(text):
-        return Route(INTENT_SYSTEM_HELP, MODE_HELP, reason="问的是系统怎么用/文件在哪", confidence=0.9)
+    #
+    # ★ FR-010-B 的**资料问答**也排在销售之前，理由与 FR-010-A4 的 CAPABILITY 同源、后果同样严重：
+    #   问句里一旦出现业务词（「资料里预计明年增长多少」里的"增长"、"销售额"），
+    #   往下走就会被判成销售分析 —— 于是系统拿一份**销售数据**去回答一个**资料**问题。
+    #   那不是"答得不好"，是答了另一个东西。判据本身在 `doc_qa.is_document_question`
+    #   （与回答那一侧同一处，不许在这里再抄一份词表）。
+    if _is_system_help(text) or _is_where_question(text) or system_info.is_meta_question(text) \
+            or doc_qa.is_document_question(text):
+        return Route(INTENT_SYSTEM_HELP, MODE_HELP, reason="问的是系统怎么用/文件在哪/资料里怎么写",
+                     confidence=0.9)
 
     # ── ①′ 不具备的能力（FR-010-A4，**必须排在销售之前**：见模块开头）──────
     if system_info.looks_like_capability_question(text):

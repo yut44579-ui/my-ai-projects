@@ -77,6 +77,7 @@ from pathlib import Path
 from typing import Any
 
 from app import state
+from app.document_title import repair_title
 from app.importer import db, store
 
 #: 来源标识（`source_type` 的取值，只有这两个）
@@ -121,7 +122,13 @@ def _import_record(record: dict[str, Any], source_file: dict[str, Any] | None = 
         "source_type": SOURCE_IMPORT,
         "source_label": SOURCE_LABELS[SOURCE_IMPORT],
         "filename": record["filename"],
-        "title": record.get("title") or "",
+        # ★ FR-010-B（B8①）：标题**在读取路径上也过一遍可信化**。
+        #   `repair_title` 原来只在写入时调用（上传 / 导入管道），于是 FR-009-A 之前
+        #   **已经入库**的旧文档标题仍然是乱码（实测：《AI游戏制作知识库.pdf》在库里存的是
+        #   '\x00A\x00I\x00 n8b…'）—— 写时的修复救不了写之前就进去的坏数据。
+        #   修复规则一个字没改，只是"读的时候也修一次"。**只做读时适配，不做写时双写**
+        #   （写时双写会制造新的一致性问题，评审 013 口径）。
+        "title": repair_title(record.get("title"), record["filename"]),
         "text": "",
         "text_available": True,                         # 正文就在库里，原文文件删了也读得到
         "char_count": int(record.get("char_count") or 0),
@@ -149,7 +156,8 @@ def _legacy_record(record: dict[str, Any]) -> dict[str, Any]:
         "source_type": SOURCE_LEGACY,
         "source_label": SOURCE_LABELS[SOURCE_LEGACY],
         "filename": record.get("filename") or "",
-        "title": record.get("title") or "",
+        # 同 `_import_record`：历史文档同样是"写的时候还没这道修复"，读的时候补上。
+        "title": repair_title(record.get("title"), record.get("filename")),
         "text": "",
         "text_available": True,                         # 正文按 stored_path 重新提取
         "char_count": int(record.get("chars") or 0),

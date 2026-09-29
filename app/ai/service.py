@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as _dt
 
 from typing import Any
 
@@ -38,6 +39,7 @@ from app.ai import (
     answer,
     arithmetic,
     dashboard,
+    doc_qa,
     general,
     intent as intent_module,
     llm,
@@ -53,6 +55,15 @@ STATUS_UNSUPPORTED = "unsupported"
 STATUS_ERROR = "error"
 
 STATUSES: tuple[str, ...] = (STATUS_OK, STATUS_DEGRADED, STATUS_UNSUPPORTED, STATUS_ERROR)
+
+
+#: 资料问答四种出口各配一句提示语（都明说"本次没有读取你的销售数据"——这是事实，不是免责）。
+_DOC_NOTICES: dict[str, str] = {
+    doc_qa.KIND_ANSWER: "（这条回答引用的是你已经导入的资料原文，位置就是它在资料里的出处 —— 本次没有读取你的销售数据。）",
+    doc_qa.KIND_NOT_FOUND: "（这次在资料里没有找到 —— 本次没有读取你的销售数据。）",
+    doc_qa.KIND_NO_TEXT: "（这份资料没有可提取的文字，我读不了它的内容 —— 本次没有读取你的销售数据。）",
+    doc_qa.KIND_EMPTY: "（本机还没有导入过资料 —— 本次没有读取你的销售数据。）",
+}
 
 
 def _boundary_note(profile: dict[str, Any]) -> str:
@@ -180,6 +191,100 @@ def _region_boundary_note(result: dict[str, Any], profile: dict[str, Any]) -> st
     )
 
 
+# ── FR-010-B（B8②）：相对时间说法的"锚点"要看得见 ──────────────────────────
+# 现状：「这个月卖了多少」按既有规则锚到数据集最后一天（→ 2011-12-09），
+# 这条假设写在正文里，但**用户看不到"本月其实不完整"这件事** —— 一个被数据边界切短的月份，
+# 读起来和"整月"没有区别。
+#
+# 本 TASK 只做**可见性**：正文里的假设一个字不改（相对时间规则是 FR-007/FR-009 冻结的口径），
+# 只在提示行里把"按哪天换算、实际取了哪一段、这一段完不完整"如实说出来。
+#
+# 为什么要求"实际取的区间与换算结果一致"才提示：用户说了「这个月」而系统实际取的是别的区间时
+# （例如 LLM 没启用、走了关键词路径→按全区间算），提示里那句"按最后一天换算"就是**错的解释**。
+# 这时候宁可不提示，也不给一句与事实不符的说明。
+_RELATIVE_WORDS: tuple[tuple[str, str], ...] = (
+    ("这个月", "month"), ("本月", "month"), ("上个月", "prev_month"), ("上月", "prev_month"),
+    ("这周", "week"), ("本周", "week"), ("上周", "prev_week"),
+    ("今天", "day"), ("昨天", "prev_day"), ("前天", "prev_prev_day"),
+)
+
+
+def _relative_word(question: str) -> tuple[str, str]:
+    """问句里的相对时间说法 → `(原词, 单位)`；没有就 `("", "")`。"""
+    for word, unit in _RELATIVE_WORDS:
+        if word in (question or ""):
+            return word, unit
+    return "", ""
+
+
+def _natural_span(unit: str, last: _dt.date) -> tuple[_dt.date, _dt.date]:
+    """这个说法**天然**指的是哪一段（以数据集最后一天为"今天"）。"""
+    if unit == "month":
+        start = last.replace(day=1)
+        return start, (start + _dt.timedelta(days=32)).replace(day=1) - _dt.timedelta(days=1)
+    if unit == "prev_month":
+        end = last.replace(day=1) - _dt.timedelta(days=1)
+        return end.replace(day=1), end
+    if unit in ("week", "prev_week"):
+        monday = last - _dt.timedelta(days=last.weekday())
+        if unit == "prev_week":
+            return monday - _dt.timedelta(days=7), monday - _dt.timedelta(days=1)
+        return monday, monday + _dt.timedelta(days=6)
+    if unit == "prev_day":
+        return last - _dt.timedelta(days=1), last - _dt.timedelta(days=1)
+    if unit == "prev_prev_day":
+        return last - _dt.timedelta(days=2), last - _dt.timedelta(days=2)
+    return last, last                                   # "今天"
+
+
+def _as_date(value: Any) -> _dt.date | None:
+    if isinstance(value, _dt.date):
+        return value
+    try:
+        return _dt.date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _relative_time_notice(question: str, params: dict[str, Any] | None, profile: dict[str, Any]) -> str:
+    """相对时间说法的可见提示（**不改既有规则，只把假设说清楚**）。
+
+    两种情形各说各的实话：
+
+    ① 这条说法**真的被当成一个时间范围**用了 →
+       「这个月」按数据集最后一天 2011-12-09 换算：取 2011-12-01 ~ 2011-12-09
+       （本月不完整 —— 12-10 之后的数据还没有）
+    ② 这条说法**没有被用上**（取的是整个数据集区间，例如没接模型时相对说法不换算）→
+       「这个月」这次没有被当成一个时间范围 —— 本次按数据集全区间 2010-12-01 ~ 2011-12-09 统计
+
+    ★ ②这一条同样重要：用户问"这个月"，拿到的是**全区间**的数字，而界面上原来什么也不说 ——
+      他会以为那就是"本月"。把这件事说出来，比让他误解一个数要好。
+    """
+    word, unit = _relative_word(question)
+    if not word or not profile:
+        return ""
+    last = _as_date(profile.get("last_day"))
+    if last is None:
+        return ""
+    start, end = _natural_span(unit, last)
+    got_start = _as_date((params or {}).get("start"))
+    got_end = _as_date((params or {}).get("end"))
+
+    if got_start == _as_date(profile.get("first_day")) and got_end == last:
+        return (
+            f"「{word}」这次没有被当成一个时间范围 —— 本次按数据集全区间 {got_start} ~ {got_end} 统计"
+            f"（数据只到 {last}）。想只看这一段时间的话，直接写明日期最稳（例如 {start} 到 {min(end, last)}）。"
+        )
+
+    if got_start != start or got_end != min(end, last):
+        return ""            # 这条说法没有被真的用上 → 不做解释（见上面那段注释）
+    head = f"「{word}」按数据集最后一天 {last} 换算：取 {start} ~ {min(end, last)}"
+    if end <= last:
+        return head + "（这一段是完整的）。"
+    missing = (end - last).days
+    return head + f"；数据只到 {last} —— 这一段还差 {missing} 天没有数据（不完整）。"
+
+
 def _resolve_mode(route: routing.Route, parsed: intent_module.ParsedIntent) -> str:
     """最终用哪一档渲染 —— 路由先定，处理分支发现"名不副实"时**只降不升**。
 
@@ -204,7 +309,38 @@ def _answer_non_sales(question: str, *, route: routing.Route, use_llm: bool) -> 
     `sales_data_accessed` 也必然是 False（tests/test_fr007_isolation.py 把它钉死）。
     """
     if route.intent == routing.INTENT_SYSTEM_HELP:
-        # ★ FR-010-A3/A4：这一档里现在有三种答案 —— 系统元信息（查真实记录）/ 身份（一句话）/
+        # ★ FR-010-B：这一档里现在还有一个**资料问答** —— 「资料里提到的市场计划是什么」。
+        #   它排在最前面判（与 routing 里那条分支同一个判据、同一个顺序）：
+        #   "我导入的资料里都写了什么"这种句子两边都像（元信息 / 资料内容），
+        #   而用户真的想要的显然是**内容**，不是"你导了几份记录"。
+        doc = doc_qa.answer_question(question)
+        if doc is not None:
+            # 资料回答一律是**引用原文**（代码组织，没有模型参与）：来源标 deterministic。
+            payload = answer.compose_flat(
+                key=answer.SECTION_HELP,
+                text=doc.text,
+                source=answer.SOURCE_DETERMINISTIC,
+                title=f"【{doc.title}】",
+                sources=list(doc.findings),
+            )
+            # 命中 / 概览 = 答得上（ok）；"没找到"/"读不出文字"/"还没导入过" = 答不了（unsupported）。
+            # 后三种不是故障，是"我诚实地告诉你没有" —— 与 AC-03 里"数据不支持某个维度"同一档。
+            status = STATUS_OK if doc.kind == doc_qa.KIND_ANSWER else STATUS_UNSUPPORTED
+            notice = _DOC_NOTICES.get(
+                doc.kind, "（这条回答来自你已经导入的资料原文 —— 本次没有读取你的销售数据。）"
+            )
+            return _record(
+                question=question,
+                status=status,
+                profile=None,                        # 资料问答没读过销售数据，就没有数据画像
+                parse_info={"source": "routing", "fallback": None, "llm_error": None},
+                answer_payload=payload,
+                notice=notice,
+                route=route,
+                sales_data_accessed=False,
+            )
+
+        # ★ FR-010-A3/A4：这一档里还有四种答案 —— 系统元信息（查真实记录）/ 身份（一句话）/
         #   我没有的能力（明说没有）/ 既有的静态使用说明。**都是纯查表或静态文案，不碰销售数据。**
         title, text, kind = general.system_answer(question)
         payload = answer.compose_flat(
@@ -473,7 +609,9 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
             answer_payload=payload,
             # 口径那句话（排除取消单/数量≤0…）留在 notice 里，与数据范围并排 ——
             # 正文保持"一个值"的形态，说明放在紧挨着它的地方，不塞进答案里。
-            notice=_direct_notice(result, profile),
+            # ★ FR-010-B（B8②）：相对时间说法的换算与"这一段完不完整"也跟在这句后面
+            #   （正文里的假设保持原样，可见性走 notice）。
+            notice=_direct_notice(result, profile) + _relative_time_notice(question, params, profile),
             route=route,
         )
 
@@ -518,7 +656,7 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
         notice = (
             f"结果由程序确定性计算得出；**本次没有可用的模型**"
             f"（{llm.user_facing_error(llm_error)}），【为什么】/【建议行动】由程序生成，不做推断。"
-            + boundary
+            + boundary + _relative_time_notice(question, params, profile)
         )
     elif not payload["guard"]["passed"]:
         status = STATUS_DEGRADED
@@ -526,10 +664,11 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
             "结果由确定性计算得出；模型本轮写的内容里出现了**无法追溯到计算结果的数字"
             "或写错的币种**，已按「LLM 只负责组织语言、事实以确定性结果为准」的规则整段作废"
             "（见 guard.violations / guard.currency_words）。" + boundary
+            + _relative_time_notice(question, params, profile)
         )
     else:
         status = STATUS_OK
-        notice = boundary
+        notice = boundary + _relative_time_notice(question, params, profile)
 
     return _record(
         question=question,

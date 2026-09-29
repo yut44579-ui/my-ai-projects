@@ -767,6 +767,7 @@ def compose_flat(
     source: str,
     title: str | None = None,
     dashboard: dict[str, Any] | None = None,
+    sources: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """direct / help / general 三档的**唯一**渲染入口：一段，且不带旧 SECTION_WHAT。
 
@@ -776,6 +777,10 @@ def compose_flat(
     `dashboard`（FR-010-A1/A2）是**轻量看板**：它由 `app.ai.dashboard` 从确定性结果里搭好，
     本函数只负责原样带出去。默认 None = 这一档没有看板（help / general / 算术都没有）——
     前端只判空，不用去猜"这条该不该有看板"。
+
+    `sources`（FR-010-B）是**资料问答的出处清单**（哪份文件、哪个位置、引的原话是哪几句）。
+    正文里已经写着出处（人是照着它读的），这一份是给机器/审计看的：事后可以拿它
+    逐条回原文核对"回答里的每一句到底在不在资料里"。默认 None = 这一档没有出处清单。
     """
     section_source = SOURCE_LLM if source == SOURCE_LLM else "code"
     section = _section(key, text, section_source, title=title)
@@ -786,6 +791,7 @@ def compose_flat(
         "export": None,
         "source": source,
         "dashboard": dashboard,
+        "sources": sources,
     }
 
 

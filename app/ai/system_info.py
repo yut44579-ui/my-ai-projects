@@ -207,10 +207,14 @@ def identity_answer(question: str) -> tuple[str, str] | None:
     return IDENTITY_TITLE, IDENTITY_LINE
 
 
-def _format_labels() -> str:
+def format_labels() -> str:
     """可导入的格式（人话）——**从 models.SOURCE_TYPES 的声明里取**，不另抄一份清单。
 
     括号里的补充（如「Excel 工作簿（含宏）」）在"能传什么格式"这句话里是噪音，去掉。
+
+    ★ FR-010-B 起这条是**公开**的：资料问答在"还没有导入过任何资料"时也要说清能导什么格式，
+    而"能导什么格式"的出处只能有一处（`models.SOURCE_TYPES`）—— 两个分支各写一份清单，
+    迟早会出现"一边说支持 PPT，另一边不说"的分叉。
     """
     labels: list[str] = []
     for suffix in models.SOURCE_TYPES:
@@ -345,7 +349,7 @@ def import_records_answer(question: str) -> tuple[str, str] | None:
 
     records = overview["records"]
     if not records:
-        return RECORDS_TITLE, NO_RECORDS.format(formats=_format_labels())
+        return RECORDS_TITLE, NO_RECORDS.format(formats=format_labels())
 
     lines = [_describe(records[0], overview)]
 
@@ -400,6 +404,7 @@ __all__ = [
     "WEATHER_DECLINE",
     "WEATHER_WORDS",
     "decline_for",
+    "format_labels",
     "identity_answer",
     "import_records_answer",
     "is_identity_question",

@@ -864,6 +864,8 @@
     rows.forEach((doc) => {
       const row = document.createElement("tr");
       cell(row, text(doc.filename));
+      // 标题由后端**可信化后**给出（乱码解不回来时是文件名去扩展名）；页面只管画，不做任何推断
+      cell(row, text(doc.title || "—"));
       cell(row, text(doc.source_label || "—"));            // 从哪个入口进来的（后端给的话术）
       cell(row, fmtInt(doc.chars)).className = "num";
       // 块数与单位一起显示：Word 是段落、PDF 是页 —— 只写数字会让人以为是同一种东西

@@ -1272,7 +1272,10 @@
              「来源」那一列说清楚每条是从哪个入口进来的，不需要用户自己去猜。 -->
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>文档</th><th>来源</th><th class="num">字符数</th><th class="num">块数</th><th>时间</th><th>操作</th></tr></thead>
+            <!-- 「标题」这一列是 FR-010-B 加的：它显示的是**从文件里提出来、并已可信化**的标题
+                 （乱码解不回来时会退回文件名，见 app/document_title.py）。
+                 没有这一列的话，"标题修好了没有"在页面上根本看不见 —— 用户只能看到文件名。 -->
+            <thead><tr><th>文档</th><th>标题</th><th>来源</th><th class="num">字符数</th><th class="num">块数</th><th>时间</th><th>操作</th></tr></thead>
             <tbody id="docs-table-body"></tbody>
           </table>
         </div>
