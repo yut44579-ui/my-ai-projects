@@ -96,8 +96,15 @@ async function setup() {
   cap = await freshCaptcha();
   await must("注册小李", await api("/api/auth/register", { method: "POST", body: JSON.stringify(
     { username: MEMBER, password: PLAIN, captcha_id: cap.id, captcha_text: cap.code }) }));
-  await must("老板批准小李", await api(`/api/auth/accounts/${MEMBER}/review`, {
-    method: "POST", body: JSON.stringify({ action: "approve", session_id: bossSession }) }));
+  // FR-002A 之后本机是**单用户模式：注册即生效**，不再需要管理员批准。
+  // 所以这一步在现在的机器上会回 400 `review_no_change`（"这个账号已经是正常了"）——
+  // 那不是失败：本脚本真正需要的前置只是"小李这个账号能用"，批不批都达到了。
+  // 只对**这一种**回执放行，其余错误照旧停下（不许把真问题也吞掉）。
+  const approved = await api(`/api/auth/accounts/${MEMBER}/review`, {
+    method: "POST", body: JSON.stringify({ action: "approve", session_id: bossSession }) });
+  if (approved.status !== 200 && !/review_no_change/.test(approved.text)) {
+    throw new Error(`前置准备失败：老板批准小李 → ${approved.status} ${approved.text.slice(0, 200)}`);
+  }
 
   cap = await freshCaptcha();
   const memberLogin = await must("小李登录", await api("/api/auth/login", { method: "POST", body: JSON.stringify(

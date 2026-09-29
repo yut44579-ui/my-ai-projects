@@ -28,36 +28,22 @@
      游客是"本机随机取个名字"，不进账号表，
      退出后名字会变 —— 游客能提问、看表格、看周报，导入/导出/改任务/账号管理会被拦下（带 ⚠ 记号）。
 
-     页面上的数字（交易行数 / 客户编号数 / 国家地区数）都从当前数据源读出来，
+     页面上的数字（交易行数 / 客户编号数 / 地区数）都从当前数据源读出来，
      不写死在页面里 —— 换数据源它们会跟着变。 -->
 <div class="login-gate" id="login-gate" hidden>
   <div class="login-shell">
+    <!-- 封面左区**只留两样**：品牌（SR）+ 产品名 + 一句 ≤12 字定位。
+         营销 slogan、特性胶囊、统计数字卡一律不放 —— 它们不是用户此刻要做的判断，
+         用户此刻只做一件事：把这几行填完进去。层级越少，专业感越强。 -->
     <section class="login-brand">
       <div class="login-brand-inner">
-      <div class="brand">
-        <div class="brand-logo">SR</div>
-        <div class="brand-text">
-          <div class="brand-title">销售报表 Agent</div>
-          <div class="brand-sub">说一句话，自动生成报表</div>
+        <div class="brand">
+          <div class="brand-logo">SR</div>
+          <div class="brand-text">
+            <div class="brand-title">销售分析平台</div>
+          </div>
         </div>
-      </div>
-      <h2 class="login-headline">用大白话提问，销售数字自动算出</h2>
-      <p class="login-lede">
-        无需记公式、无需背口径。提问「上个月卖了多少」，系统按同一套口径计算，
-        并给出解读，也可导出为 Excel。
-      </p>
-      <ul class="login-caps">
-        <li>自然语言问答</li>
-        <li>销售 · 客户 · 产品</li>
-        <li>一键周报</li>
-        <li>Excel · CSV 导入导出</li>
-      </ul>
-      <div class="login-facts" id="login-facts" hidden>
-        <div class="fact"><b id="fact-rows">—</b><span>交易行数</span></div>
-        <div class="fact"><b id="fact-customers">—</b><span>客户编号数</span></div>
-        <div class="fact"><b id="fact-countries">—</b><span>国家 / 地区数</span></div>
-      </div>
-      <p class="login-facts-note" id="login-facts-note"></p>
+        <p class="login-tagline">企业销售数据分析与报告</p>
       </div>
     </section>
 
@@ -359,7 +345,7 @@
      登录页底部的「帮助」「隐私」点开就是这个抽屉（右侧滑出，不跳页、不弹窗居中）。
      为什么放在这里（而不是 .app 里）：登录时主界面整块不渲染，抽屉必须能独立盖在
      登录页之上；所以它是 body 的直接子元素，层级高于登录页。
-     **里面的每个数字都是从后端读出来的**（数据源名 / 覆盖范围 / 行数 / 客户数 / 国家数 /
+     **里面的每个数字都是从后端读出来的**（数据源名 / 覆盖范围 / 行数 / 客户数 / 地区数 /
      币种 / 能问什么 / 不能问什么 / 报告能导出成什么格式）—— 换数据源这些字会跟着变，
      不写死在页面里。文字一律业务话，不出现接口路径、字段名这类词。 -->
 <div class="info-drawer" id="info-drawer" hidden>
@@ -392,7 +378,7 @@
           <li><b>商品分析</b> —— 2011年11月各商品的退货情况，前10名</li>
         </ul>
         <p class="info-p">另外还可以直接说「<b>做一份销售周报</b>」——系统会生成一份结构化报告
-          （环比、逐日趋势、国家与商品结构），可下载导出。</p>
+          （环比、逐日趋势、地区与商品结构），可下载导出。</p>
 
         <h3 class="info-h">二、数据从哪来</h3>
         <dl class="info-kv">
@@ -400,7 +386,9 @@
           <div><dt>覆盖范围</dt><dd id="help-range">—</dd></div>
           <div><dt>交易行数</dt><dd id="help-rows">—</dd></div>
           <div><dt>客户编号数</dt><dd id="help-customers">—</dd></div>
-          <div><dt>国家 / 地区数</dt><dd id="help-countries">—</dd></div>
+          <!-- 地区数是**按数据源动态决定显不显示**的一行：数据源真的带地区字段才出现，
+               只有 Country 就整行不显示（绝不把国家数标成地区数）。由 session.js 填充。 -->
+          <div id="help-region-row" hidden><dt id="help-region-label">地区数</dt><dd id="help-countries">—</dd></div>
           <div><dt>金额单位</dt><dd id="help-currency">—</dd></div>
         </dl>
         <p class="info-p">这几个数字都是<b>当前</b>从数据源读取的：更换数据源后，它们会随之变化。</p>
@@ -676,7 +664,7 @@
             <button class="chip-btn" id="chip-products" data-question="2011年11月卖得最好的5个产品">产品排行</button>
             <button class="chip-btn" id="chip-customers" data-question="2011年11月销售额最高的10个客户">客户排行</button>
             <button class="chip-btn" id="chip-returns" data-question="2011年11月各商品的退货情况，前10名">退货分析</button>
-            <span class="muted-sm" id="hero-nl-note">本版支持七类问题（汇总 / 趋势 / 产品排行 / 两区间比较 / 国家分布 / 客户分析 / 商品分析）；问数据里没有的维度（如区域、VIP 等级）会被明确拒绝。</span>
+            <span class="muted-sm" id="hero-nl-note">本版支持汇总 / 趋势 / 产品排行 / 两区间比较 / 客户分析 / 商品分析；带地区字段的数据源可在「数据管理 → 按地区」里看地区分布；问数据里没有的维度（如区域、VIP 等级）会被明确拒绝。</span>
           </div>
         </div>
         <div class="hero-facts" id="hero-facts">

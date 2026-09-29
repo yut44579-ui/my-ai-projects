@@ -617,11 +617,18 @@ check(Session.name() === secondGuest, "名字还是刚才那个");
 check(Session.status() === "online", "刷新后状态：在线");
 
 // ════════════════════════════════════════════════════════════════════════
-step("登录页的数字：来自当前数据源（读不到就不摆一排「—」充数）");
+step("封面去营销化：slogan / 特性胶囊 / 统计卡三样一件都不许在");
 // ════════════════════════════════════════════════════════════════════════
-check(el("fact-rows").textContent === "541,909", "交易行数按后端给的渲染", `「${el("fact-rows").textContent}」`);
-check(el("fact-customers").textContent === "4,372", "客户编号数", `「${el("fact-customers").textContent}」`);
-check(el("login-facts-note").textContent.includes("2010-12-01"), "数据范围也写出来");
+// 这一节原来钉的是"统计卡的数字要按后端给的渲染"（FR-005 起那张卡整张删掉了：
+// 封面上不放 541,909 / 4,372 这种"为了占位置而存在"的数字）。
+// 所以这里**反过来**钉：三样营销元素一个都不许回来。
+for (const id of ["login-facts", "fact-rows", "fact-customers", "fact-countries",
+                  "login-facts-note", "login-headline", "login-caps"]) {
+  check(el(id) === undefined && !html.includes(`id="${id}"`), `封面上不该再有 ${id}`);
+}
+check(!html.includes("login-headline") && !html.includes("login-caps"),
+  "封面不该再有 slogan / 特性胶囊（只留品牌 + 产品名 + 一句定位）");
+check(html.includes('class="login-tagline"'), "封面左栏要有那一句定位");
 
 // ════════════════════════════════════════════════════════════════════════
 step("注册：真表单 → 查重 → 成功**等管理员批准**（不再直接进系统）");

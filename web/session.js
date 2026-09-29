@@ -128,8 +128,6 @@ window.Session = (() => {
     pendingChange: null,
   };
 
-  let factsPromise = null;
-
   const fmtCount = (value) => (typeof value === "number" && isFinite(value)
     ? value.toLocaleString("zh-CN")
     : "");
@@ -371,7 +369,15 @@ window.Session = (() => {
       : NOT_AVAILABLE);
     setText("help-rows", fmtCount(profile.rows) || NOT_AVAILABLE);
     setText("help-customers", fmtCount(profile.customer_count) || NOT_AVAILABLE);
-    setText("help-countries", fmtCount(profile.country_count) || NOT_AVAILABLE);
+    // 地理维度**按数据源动态生成**：数据源真的带地区字段，才显示「地区数」这一行；
+    // 只有 Country 就**整行不显示** —— 绝不把国家数标成地区数（那是自欺）。
+    const hasRegion = !!profile.has_region_field;
+    const regionRow = $("help-region-row");
+    if (regionRow) regionRow.hidden = !hasRegion;
+    setText("help-region-label", hasRegion ? "地区数" : "");
+    setText("help-countries", hasRegion
+      ? (fmtCount(profile.region_count) || NOT_AVAILABLE)
+      : "");
     setText("help-currency", (profile.currency && profile.currency.name)
       ? `人民币「${profile.currency.name}」`
       : NOT_AVAILABLE);
@@ -936,7 +942,6 @@ window.Session = (() => {
     if (button) button.disabled = true;
     show(spinner);
     setStatus("busy", "login");
-    await (factsPromise || Promise.resolve()).catch(() => {});
     if (button) button.disabled = false;
     hide(spinner);
     enter(name, "guest");
@@ -1345,32 +1350,6 @@ window.Session = (() => {
     switchTab("account");
   }
 
-  function loadFacts() {
-    if (typeof API === "undefined" || !API.chatCapabilities) return null;
-    factsPromise = API.chatCapabilities().then((caps) => {
-      const profile = (caps || {}).data_profile || {};
-      const rows = fmtCount(profile.rows);
-      const customers = fmtCount(profile.customer_count);
-      const countries = fmtCount(profile.country_count);
-      if (!rows || !customers || !countries) {      // 数字不全就不摆一排"—"充数
-        hide($("login-facts"));
-        setText("login-facts-note", "数据概况暂时无法读取（服务尚未就绪时会出现），不影响登录。");
-        return;
-      }
-      show($("login-facts"));
-      setText("fact-rows", rows);
-      setText("fact-customers", customers);
-      setText("fact-countries", countries);
-      setText("login-facts-note", profile.first_day && profile.last_day
-        ? `数据范围 ${profile.first_day} ~ ${profile.last_day}　·　三个数字均从当前数据源读取，更换数据源后会随之变化`
-        : "三个数字均从当前数据源读取，更换数据源后会随之变化");
-    }).catch(() => {
-      hide($("login-facts"));
-      setText("login-facts-note", "数据概况暂时无法读取（服务尚未就绪时会出现），不影响登录。");
-    });
-    return factsPromise;
-  }
-
   // 首次使用引导：问一次"这台机器上有几个账号"，一个都没有就把"先注册一个"那条亮出来。
   // 读不到就**不亮**（宁可少一条提示，也不假装知道系统里有没有账号）。
   function loadAccountHint() {
@@ -1658,7 +1637,6 @@ window.Session = (() => {
     // 记住账号（FR-002C B2/B3）：记着名字就预填账号框、勾选框一起勾上，并亮出「清除」。
     // 只预填**账号名**这一个框 —— 密码框永远是空的（冻结原则：记住账号 ≠ 记住密码）。
     applyRemembered();
-    loadFacts();
     loadAccountHint();                          // 一个账号都没有 → 亮出"先注册一个"
     loadCaptcha("account");                     // 两张验证码图各取一张（登录 / 注册）
     loadCaptcha("register");

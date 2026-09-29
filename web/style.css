@@ -159,13 +159,15 @@ html, body {
 /* 数字等宽对齐（表格与 KPI 全靠它） */
 .num, .kpi-value, .table td.num, .table th.num, .kv b, .code { font-variant-numeric: tabular-nums; }
 
+/* 字号阶梯只有四级：19 页面标题 / 13 卡片标题 / 12.5 正文 / 11.5 辅助。
+   层级靠**大小**拉开，不靠加粗加色（TDesign 的克制写法）。 */
 h1, h2, h3 { margin: 0; font-weight: 600; }
-h2 { font-size: 15px; }
+h2 { font-size: 13px; }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; }
 
-.muted-sm { color: var(--text-2); font-size: 11px; }
-.note { color: var(--text-2); font-size: 11px; margin: 10px 0 0; }
+.muted-sm { color: var(--text-2); font-size: 11.5px; }
+.note { color: var(--text-2); font-size: 11.5px; margin: 10px 0 0; }
 .ok { color: var(--td-success-color-text); }
 .warn { color: var(--td-warning-color-text); }
 .bad { color: var(--td-error-color-text); }
@@ -305,14 +307,14 @@ button { font-family: inherit; }
 }
 .card-head {
   display: flex; align-items: baseline; justify-content: space-between;
-  gap: 12px; margin-bottom: 14px;
+  gap: 12px; margin-bottom: var(--gap);
 }
 
 /* 区块A · AI 工作台 */
 .hero { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--pad-card); }
 .hero-main { min-width: 0; }
-.hero-title { font-size: 21px; font-weight: 700; letter-spacing: .2px; }
-.hero-sub { color: var(--text-2); font-size: 13px; margin: 8px 0 16px; }
+.hero-title { font-size: 19px; font-weight: 600; line-height: 1.35; }
+.hero-sub { color: var(--text-2); font-size: 12.5px; margin: 8px 0 16px; line-height: 1.7; }
 .hero-input { display: flex; gap: 8px; }
 .hero-input input {
   flex: 1; height: var(--td-loose-height); padding: 0 14px; font-size: 13px;
@@ -334,7 +336,7 @@ button { font-family: inherit; }
 
 /* 区块B · KPI 行 */
 .kpi-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 2fr); gap: var(--gap); }
-.kpi { padding: 14px 16px; }
+.kpi { padding: 12px 16px; }
 .kpi-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .kpi-ico {
   width: 32px; height: 32px; border-radius: var(--td-radius-medium);
@@ -349,7 +351,7 @@ button { font-family: inherit; }
 .kpi-value .unit { font-size: 15px; font-weight: 600; color: var(--text-2); margin-right: 2px; }
 .kpi-sub { font-size: 11px; color: var(--text-2); margin-top: 6px; }
 
-.chart-card { padding: 14px 16px; }
+.chart-card { padding: 12px 16px; }
 .chart-card .card-head { margin-bottom: 6px; }
 .chart-wrap { height: 150px; position: relative; }
 .chart-wrap svg { width: 100%; height: 100%; display: block; }
@@ -456,10 +458,16 @@ button { font-family: inherit; }
 /* ════════════════ 表格（无外框，靠行高与留白分隔）════════════════ */
 .table-wrap { overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; }
+/* 表头：灰底 + 11.5px 次要字色。灰底是**一档分区**（gray-13 对卡片 gray-12），
+   不是装饰 —— 扫读时眼睛先落在列名上，再横向读数。上下留 8px（间距阶梯），
+   行高与数据行一致（都由 --row-height / 同样的 9px 决定）。 */
 .table th {
-  text-align: left; font-size: 12px; font-weight: 500; color: var(--text-2);
-  padding: 0 10px 9px; border-bottom: 1px solid var(--border); white-space: nowrap;
+  text-align: left; font-size: 11.5px; font-weight: 500; color: var(--text-2);
+  padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
+  background: var(--bg-inset);
 }
+.table th:first-child { border-top-left-radius: var(--td-radius-medium); }
+.table th:last-child { border-top-right-radius: var(--td-radius-medium); }
 .table td {
   font-size: 12.5px; color: var(--text-1); padding: 9px 10px;
   border-bottom: 1px solid var(--border); height: var(--row-height);
@@ -873,28 +881,22 @@ body.is-locked .app { display: none; }
   display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr);
   min-height: 100%;                       /* 铺满视口；内容超过一屏时整页纵向滚动 */
 }
+/* 左栏是纯品牌区：**一块平色**，不做渐变、不做装饰卡片。
+   层级只有两步：品牌（Logo + 产品名）→ 一句定位（间距 24，用一条 1px 描边分隔）。 */
 .login-brand {
   display: flex; flex-direction: column; justify-content: center;
   padding: 44px 56px; border-right: 1px solid var(--border);
-  background: linear-gradient(145deg, var(--brand-wash), transparent 58%), var(--bg-section);
+  background: var(--bg-section);
 }
 .login-brand-inner { width: 100%; max-width: 560px; }
-.login-headline { font-size: 22px; line-height: 1.45; margin: 22px 0 10px; }
-.login-lede { font-size: 13px; color: var(--text-2); line-height: 1.85; margin: 0; }
-.login-caps { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; padding: 0; margin: 18px 0 0; }
-.login-caps li {
-  font-size: 12px; color: var(--text-2); background: var(--bg-inset);
-  border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 4px 10px;
+.login-brand .brand-logo {
+  width: 40px; height: 40px; border-radius: var(--td-radius-default); font-size: 15px;
 }
-.login-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 22px; }
-.login-facts[hidden] { display: none; }
-.fact {
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--td-radius-medium); padding: 10px;
+.login-brand .brand-title { font-size: 19px; line-height: 1.35; }
+.login-tagline {
+  font-size: 13px; color: var(--text-2); line-height: 1.8;
+  margin: 24px 0 0; padding-top: 24px; border-top: 1px solid var(--border);
 }
-.fact b { display: block; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.fact span { font-size: 11px; color: var(--text-2); }
-.login-facts-note { font-size: 11px; color: var(--text-3); margin: 8px 0 0; line-height: 1.7; }
 
 /* 表单区：整块铺满右栏，里面的内容限宽 420px 居中（宽度只为好读，外层仍然是满的） */
 .login-card {
@@ -1161,17 +1163,13 @@ body.is-locked .app { display: none; }
   .login-shell { grid-template-columns: minmax(0, 1fr); }
   .login-brand { padding: 28px 24px; border-right: 0; border-bottom: 1px solid var(--border); }
   .login-card { padding: 28px 24px 40px; }
-  .login-headline { font-size: 18px; }
   .login-brand-inner, .login-card-inner { max-width: 100%; }
 }
 @media (max-height: 760px) {
   /* 矮窗口（比如 1238x660）：间距与字号收紧一点，尽量一屏放得下，不用一进来就滚 */
   .login-brand { padding: 24px 40px; }
   .login-card { padding: 24px 40px; }
-  .login-headline { font-size: 19px; margin: 14px 0 8px; }
-  .login-lede { font-size: 12px; line-height: 1.7; }
-  .login-caps { margin-top: 12px; }
-  .login-facts { margin-top: 14px; }
+  .login-tagline { margin-top: 16px; padding-top: 16px; }
 }
 @media (max-width: 760px) {
   /* 最窄才收名字：再挤也留着状态点（hover 有说明） */

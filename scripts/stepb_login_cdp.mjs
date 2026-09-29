@@ -880,6 +880,10 @@ try {
       privacyShown: !document.getElementById("info-pane-privacy").hidden,
       source: read("help-source"), range: read("help-range"), rows: read("help-rows"),
       customers: read("help-customers"), countries: read("help-countries"),
+      regionRowHidden: (() => {
+        const row = document.getElementById("help-region-row");
+        return row ? row.hidden : null;
+      })(),
       currency: read("help-currency"), lastDay: read("help-last-day"),
       formats: read("help-report-formats"),
       body: drawer.innerText.replace(/\s+/g, " "),
@@ -890,9 +894,14 @@ try {
   check(help.h >= 700 && help.panelW >= 360,
     "抽屉占用整条右侧栏（够宽够高，读得下）", `面板宽 ${help.panelW} 高 ${help.h}`);
   check(help.title === "帮助", "标题是「帮助」", `「${help.title}」`);
-  check(help.rows === "541,909" && help.customers === "4,372" && help.countries === "38",
+  check(help.rows === "541,909" && help.customers === "4,372",
     "帮助里的数字是从当前数据源读出来的（不是写死的）",
-    `行数=${help.rows} 客户=${help.customers} 国家=${help.countries}`);
+    `行数=${help.rows} 客户=${help.customers}`);
+  // 地理维度按数据源动态生成：内置数据集只有 Country、没有地区字段 → 「地区数」这一行**不显示**
+  // （绝不把国家数标成地区数）。带地区字段的数据源才出现这一行。
+  check(help.countries === "" && help.regionRowHidden === true,
+    "没有地区字段 → 帮助里不出现「地区数」这一行（不拿国家数顶替）",
+    `地区数值=「${help.countries}」 hidden=${help.regionRowHidden}`);
   check((help.source || "").includes("Online Retail.xlsx"), "数据源名是读出来的", `「${help.source}」`);
   check((help.range || "").includes("2010-12-01") && (help.range || "").includes("2011-12-09"),
     "覆盖范围是读出来的", `「${help.range}」`);

@@ -2075,7 +2075,14 @@
     const caps = state.capabilities;
     if (!caps || !caps.intents) return;   // 拿不到能力清单就不改文案（不编一句"支持三类问题"糊上去）
 
-    const names = caps.intents.map((item) => item.title).join(" / ");
+    // 地理维度**由数据源决定，界面上不主动列**：内置数据集只有 Country、没有地区字段，
+    // 所以这一行不写地理类问题（写了就是"点了才知道问不了"）；带地区字段的数据源，
+    // 它的地区分布在「数据管理 → 按地区」里查，那才是这条能力真实的入口。
+    // 按维度键判断（后端 intent 名），不按中文标题匹配 —— 标题是后端给的，随时可能改。
+    const names = caps.intents
+      .filter((item) => item.name !== "sales_breakdown_by_country")
+      .map((item) => item.title)
+      .join(" / ");
     // 报告是**输出形态**（不是第 6 个 intent），所以它不在 intents 里，得单独提示 ——
     // 否则用户永远猜不到"可以做一份周报"。
     const reportNames = ((caps.report || {}).periods || []).map((item) => item.title).join(" / ");
@@ -2195,8 +2202,18 @@
   // 列名、对齐、数字格式也都来自后端（columns），前端不维护第二份表头。
   // ══════════════════════════════════════════════════════════════════════
   const TABLE_PAGE_SIZES = [20, 50, 100, 200];
-  // 销售表的维度与指标：**取值由后端定**（这里只是显示名，选错后端会明确拒绝）
+  // 销售表的维度与指标：**取值由后端定**（这里只是显示名，选错后端会明确拒绝）。
+  // ★ 这一行是**后端合同**（day / week / country 三个键仍然可用，Legacy 端点一个字没删）。
+  //   但界面不再照搬它 —— 地理维度**按数据源动态生成**，见 salesDimensionOptions()。
   const SALES_DIMENSIONS = [["day", "按日"], ["week", "按周"], ["country", "按国家"]];
+
+  // 界面上真正渲染的维度：地理维度**只在数据源真的带地区字段时才出现**；
+  // 没有地区字段就整块不出现 —— 不许出现点了才说"没有地区字段"的假入口。
+  // 内置数据集只有 Country、没有地区字段（后端 data_profile.has_region_field 就是 False），
+  // 所以这张表上不出地理维度；带地区字段的数据源请在「数据管理 → 按地区」里查（FR-003）。
+  function salesDimensionOptions() {
+    return SALES_DIMENSIONS.filter(([key]) => key !== "country");
+  }
   const SALES_METRICS = [["sales_amount", "销售额"], ["order_count", "订单数"],
                          ["customer_count", "客户数"], ["avg_order_amount", "客单价"]];
   const TABLE_SPECS = {
@@ -2207,7 +2224,7 @@
     sales: { table: "sales", rootId: "tbl-sales", noteId: "sales-scope-note",
              emptyId: "tbl-sales-empty", searchPlaceholder: "期间", sales: true },
     raw: { table: "raw", rootId: "tbl-raw", noteId: "raw-scope-note", emptyId: "tbl-raw-empty",
-           searchPlaceholder: "订单号 / 商品 / 客户 / 国家", sales: false },
+           searchPlaceholder: "订单号 / 商品 / 客户号", sales: false },
   };
 
   // 单元格显示：**后端给 format**，前端只负责按格式排版（不做任何运算）
@@ -2223,7 +2240,7 @@
   }
 
   // 「当前排序：XXX ↓」里的 XXX：**从后端给的列标签取**（前端不维护第二份列名表）。
-  // 维度列额外带上当前维度 —— 光写「期间 ↑」看不出是按日还是按国家排的。
+  // 维度列额外带上当前维度 —— 光写「期间 ↑」看不出是按日还是按别的方式排的。
   function sortLineText(payload, dimensionLabel) {
     const columns = payload.columns || [];
     const hit = columns.find((column) => column.key === payload.sort);
@@ -2304,7 +2321,7 @@
     searchInput.type = "search";
     searchInput.placeholder = spec.searchPlaceholder || "搜索";
 
-    const dimensionSelect = selectBox(SALES_DIMENSIONS, "day");
+    const dimensionSelect = selectBox(salesDimensionOptions(), "day");
     const metricSelect = selectBox(SALES_METRICS, "sales_amount");
     const pageSizeSelect = selectBox(
       TABLE_PAGE_SIZES.map((size) => [String(size), `${size} 条/页`]), "50",
@@ -2651,7 +2668,7 @@
     });
     if (spec.sales) {
       // 换维度 → 清掉人工排序，回到新维度的默认排序
-      // （"按订单数排"是"按日"这张表里的语义，搬到"按国家"那张表上没有意义，
+      // （"按订单数排"是"按日"这张表里的语义，搬到"按商品/按其它维度"那张表上没有意义，
       //   留着旧排序只会让人看不懂顺序）
       dimensionSelect.addEventListener("change", () => {
         panel.sort_source = "default";
@@ -2662,7 +2679,7 @@
       });
       // 换指标 → 分两种情况（这是用户报"顺序没对上"的正解）：
       //   · 还没人工排过（default）→ 排序交给后端按新指标给默认值
-      //     （按国家/按商品 = 新指标降序；**按日仍是日期升序** —— 时间序列的阅读顺序，
+      //     （按商品等非时间维度 = 新指标降序；**按日仍是日期升序** —— 时间序列的阅读顺序，
       //       不许因为顾客换了指标就把它改成按数值排）
       //   · 已经人工排过（user）→ **原样保留**，切指标不许把他的排序悄悄改掉
       metricSelect.addEventListener("change", () => {
