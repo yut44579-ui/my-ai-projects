@@ -44,6 +44,13 @@ router = APIRouter(prefix="/api", tags=["imports"])
 #: 一次请求最多带几个文件（导入前预览也一样）—— 多文件是便利，不是无限并行上传
 MAX_FILES_PER_REQUEST = 20
 
+#: 格式名（models 里的 FMT_* 取值）→ 中文标签（"pdf" → "PDF 文档"）。
+#: 与 `models.SOURCE_TYPES[*]["label"]` 是同一批话术，**从那里派生**而不是另抄一份
+#: （抄一份就有两个地方要改，迟早只改一处）。
+_SOURCE_TYPE_LABELS: dict[str, str] = {
+    str(spec["source_type"]): str(spec["label"]) for spec in models.SOURCE_TYPES.values()
+}
+
 #: 机器可读错误码 → HTTP 状态码（没列出的走 400）
 _STATUS_BY_CODE: dict[str, int] = {
     "dataset_not_found": 404,
@@ -251,10 +258,14 @@ def list_imports(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
+    """导入记录列表 —— **失败的导入也在里面**（status=failed + 可读原因，见 A-4）。
+
+    每一条都带"落成了什么"：文档字数与数据集行数（页面那两列不需要再逐条去取详情）。
+    """
     with db.readonly() as connection:
         records, total = store.list_imports(connection, limit, offset)
-    return {"total": total, "limit": limit, "offset": offset,
-            "imports": [_import_view(record) for record in records]}
+        views = _import_views(connection, records)
+    return {"total": total, "limit": limit, "offset": offset, "imports": views}
 
 
 @router.get("/imports/documents/{document_id}", summary="导入进来的文档正文")
@@ -291,7 +302,7 @@ def get_import(import_id: str) -> Any:
         record = store.get_import(connection, import_id)
         if record is None:
             return _fail(404, "import_not_found", f"没有这条导入记录：{import_id}")
-        body = _import_view(record)
+        body = _import_views(connection, [record])[0]
         counts = store.successful_import_count(connection, str(record["source_file_id"]))
         body["source_file"] = _source_file_view(connection, str(record["source_file_id"]))
         body["dataset"] = (
@@ -303,13 +314,42 @@ def get_import(import_id: str) -> Any:
     return body
 
 
-def _import_view(record: dict[str, Any]) -> dict[str, Any]:
-    """一条导入记录的业务视图（**不含**任何绝对路径）。"""
+def _import_views(connection: Any, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """一批导入记录的业务视图（FR-009-A2：一次把这页的"落成了什么"全查出来）。
+
+    为什么是"一批"而不是每条自己查：列表一页最多 200 条，逐条查就是 200 次往返。
+    页面要的"字数 / 行数"从哪一列取，只在这里定义一次。
+    """
+    char_counts = store.document_char_counts(
+        connection, [str(item["document_id"]) for item in records if item.get("document_id")]
+    )
+    row_counts = store.dataset_row_counts(
+        connection, [str(item["dataset_id"]) for item in records if item.get("dataset_id")]
+    )
+    return [
+        _import_view(
+            record,
+            char_count=char_counts.get(str(record.get("document_id"))),
+            row_count=row_counts.get(str(record.get("dataset_id"))),
+        )
+        for record in records
+    ]
+
+
+def _import_view(
+    record: dict[str, Any], *, char_count: int | None = None, row_count: int | None = None
+) -> dict[str, Any]:
+    """一条导入记录的业务视图（**不含**任何绝对路径）。
+
+    `char_count` / `row_count` 是"这次导入落成了多少内容"：
+    文档资料看字数，数据集看行数 —— 页面那一列（"字数或行数"）直接用它们，不必再点进详情。
+    """
     return {
         "import_id": record["import_id"],
         "source_file_id": record["source_file_id"],
         "filename": record["source_filename"],
         "source_type": record["source_type"],
+        "source_type_label": _SOURCE_TYPE_LABELS.get(str(record["source_type"]), ""),
         "imported_at": record["imported_at"],
         "status": record["status"],
         "status_label": {
@@ -318,6 +358,8 @@ def _import_view(record: dict[str, Any]) -> dict[str, Any]:
         "error_code": record.get("error_code"),
         "dataset_id": record.get("dataset_id"),
         "document_id": record.get("document_id"),
+        "document_char_count": char_count,
+        "dataset_row_count": row_count,
         "parser_version": record["parser_version"],
         "revision": record.get("revision"),
         "note": record.get("note") or "",

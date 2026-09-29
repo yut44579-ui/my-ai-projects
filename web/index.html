@@ -1001,6 +1001,37 @@
         <div id="imp-result" hidden></div>
       </div>
 
+      <!-- 导入记录（FR-009-A2）：**每一次导入都留一条**，成功的、失败的都在这里。
+           这张表读的是落库的真实记录（不是本次会话的内存态），所以刷新页面之后
+           「我导过哪些文件、成了什么、失败的原因是什么」仍然看得到。
+           字数 / 行数由后端给（页面自己不算任何数）。 -->
+      <div class="card">
+        <div class="card-head">
+          <h2>导入记录</h2>
+          <span class="muted-sm">每一次导入都留一条：成功的、失败的都在这里</span>
+        </div>
+        <div class="row">
+          <button id="btn-imp-refresh" class="btn">刷新记录</button>
+          <span class="muted-sm" id="imp-list-state"></span>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr>
+              <th>文件名</th><th>类型</th><th>状态</th><th>时间</th>
+              <th>落成了什么</th><th class="num">字数或行数</th><th>操作</th>
+            </tr></thead>
+            <tbody id="imports-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="imports-empty">
+          <div class="empty-ico">⇪</div>
+          <div class="empty-title">还没有导入记录</div>
+          <div class="empty-hint">用上面的「导入资料」导入一份文件，无论成功还是失败，这里都会留下一条记录。</div>
+        </div>
+        <!-- 单条记录的详情（含它落了哪些数据集 / 文档）：点「详情」才出现 -->
+        <div id="import-detail" hidden></div>
+      </div>
+
       <!-- 已入库数据源（FR-003B）：与上面那份「数据源」列表语义不同 ——
            那边的数据还在原文件里（引用式登记、分析未开通），这里的行**已经在库里**。
            两块都保留，各自照实标注状态，不合并成一句含糊的「导入成功」。 -->
@@ -1020,8 +1051,8 @@
         </div>
         <div class="empty" id="sources-empty">
           <div class="empty-ico">⛁</div>
-          <div class="empty-title">还没有已入库的数据源</div>
-          <div class="empty-hint">用上面的「导入资料」导入一份带数据的文件，它会出现在这里。</div>
+          <div class="empty-title" id="sources-empty-title">还没有已入库的数据源</div>
+          <div class="empty-hint" id="sources-empty-hint">用上面的「导入资料」导入一份带数据的文件（Excel / CSV / Markdown / PPT），它会出现在这里。</div>
         </div>
         <p class="note" id="sources-note"></p>
       </div>
@@ -1236,16 +1267,19 @@
           <table class="table"><tbody id="doc-result"></tbody></table>
         </div>
 
+        <!-- 这张表是**两个入口进来的文档的合表**：上面「上传并提取」进来的，
+             以及「导入资料」里导入的（Word / PDF / Markdown / PPT 带正文的那些）。
+             「来源」那一列说清楚每条是从哪个入口进来的，不需要用户自己去猜。 -->
         <div class="table-wrap">
           <table class="table">
-            <thead><tr><th>文档</th><th class="num">字符数</th><th class="num">段落块</th><th>上传时间</th><th>操作</th></tr></thead>
+            <thead><tr><th>文档</th><th>来源</th><th class="num">字符数</th><th class="num">块数</th><th>时间</th><th>操作</th></tr></thead>
             <tbody id="docs-table-body"></tbody>
           </table>
         </div>
         <div class="empty" id="docs-empty">
           <div class="empty-ico">▤</div>
           <div class="empty-title">还没有文档资料</div>
-          <div class="empty-hint">上传一份 Word 或 PDF，提取出来的正文会显示在这里。提不出文字的文件（扫描件、空文档）不算成功，不会被记成一条。</div>
+          <div class="empty-hint">用上面「上传并提取」传一份 Word / PDF，或从「导入资料」导入带正文的文件，提取出来的正文都会显示在这里。提不出文字的文件（扫描件、空文档）不算成功，不会被记成一条。</div>
         </div>
 
         <!-- 正文查看器：只有点了「看正文」才出现，内容一律来自后端的全文接口 -->

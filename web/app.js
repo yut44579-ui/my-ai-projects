@@ -56,6 +56,8 @@
     inspect: null,         // 导入向导第 1 步的结果（文件类型/工作表/预览/字段映射）
     imported: null,        // 导入向导第 2 步的结果（登记出来的数据集）
     sources: [],           // 已**入库**的数据源（FR-003：行已在库里，与上面的"已登记"不是一回事）
+    imports: [],           // 导入记录（FR-009-A2：每次导入一条，含失败的）
+    importDetail: null,    // 当前展开的那条导入记录详情
     menuOpen: false,
   };
 
@@ -223,6 +225,15 @@
     const payload = await API.listDocuments({ limit: 100 });
     state.documents = payload.documents || [];
     renderDocuments();
+    renderSources();          // "有没有文档资料"会影响「已入库数据源」空态那句人话，一起刷新
+  }
+
+  // 导入记录（FR-009-A2）：**落库的真实记录**，不是本次会话的内存态 —— 所以刷新页面后
+  // "我导过哪些文件、成了什么、失败的原因是什么"仍然看得到。
+  async function loadImports() {
+    const payload = await API.listImports({ limit: 100 });
+    state.imports = payload.imports || [];
+    renderImports();
   }
 
   async function loadConversations() {
@@ -266,6 +277,7 @@
       loadHealth().then(renderDatasourceChip).catch(renderDatasourceUnknown),
       loadTasks(), loadExecutions(), loadDocuments(),
       loadConversations(), loadCapabilities(), loadDatasets(), loadSources(),
+      loadImports(),
     ]);
     const failed = results.find((item) => item.status === "rejected");
     if (failed) {
@@ -838,9 +850,11 @@
     updateCreatePrecondition();
   }
 
-  // ── 文档资料（TASK-003）──────────────────────────────────────────────
-  // 行数据一律来自 GET /api/documents 的响应；每条只带元信息（不塞整篇正文），
-  // 正文要用户真的点「看正文」才去 GET /api/documents/{id}/text 取 —— 列表不预读全文。
+  // ── 文档资料（TASK-003 + FR-009-A1 统一视图）─────────────────────────
+  // 行数据一律来自 GET /api/documents 的响应 —— 那份响应**已经是统一视图**：
+  // 「上传并提取」进来的历史文档与「导入资料」导入的文档都在里面，页面不需要知道
+  // 某一条来自哪套存储（那是后端的事），只需要照实显示，并用「来源」那一列说清入口。
+  // 每条只带元信息（不塞整篇正文），正文要用户真的点「看正文」才去取 —— 列表不预读全文。
   function renderDocuments() {
     const body = $("docs-table-body");
     if (!body) return;
@@ -850,8 +864,10 @@
     rows.forEach((doc) => {
       const row = document.createElement("tr");
       cell(row, text(doc.filename));
+      cell(row, text(doc.source_label || "—"));            // 从哪个入口进来的（后端给的话术）
       cell(row, fmtInt(doc.chars)).className = "num";
-      cell(row, fmtInt(doc.blocks)).className = "num";
+      // 块数与单位一起显示：Word 是段落、PDF 是页 —— 只写数字会让人以为是同一种东西
+      cell(row, `${fmtInt(doc.blocks)}${doc.block_unit ? ` ${doc.block_unit}` : ""}`.trim()).className = "num";
       cell(row, fmtTime(doc.created_at));
 
       const action = document.createElement("td");
@@ -1034,6 +1050,31 @@
       body.addEventListener("click", (event) => {
         const target = event.target.closest("[data-doc-action]");
         if (target) openDocument(target.dataset.docId);
+      });
+    }
+
+    // 导入记录：列表里的「详情」与详情里的「收起」（同一个委托，按钮上挂 data-import-action）
+    const importsBody = $("imports-body");
+    if (importsBody) {
+      importsBody.addEventListener("click", (event) => {
+        const target = event.target.closest("[data-import-action]");
+        if (target && target.dataset.importAction === "view") openImportDetail(target.dataset.importId);
+      });
+    }
+    const importDetail = $("import-detail");
+    if (importDetail) {
+      importDetail.addEventListener("click", (event) => {
+        const target = event.target.closest("[data-import-action]");
+        if (target && target.dataset.importAction === "close") {
+          state.importDetail = null;
+          hide(importDetail);
+        }
+      });
+    }
+    const importRefresh = $("btn-imp-refresh");
+    if (importRefresh) {
+      importRefresh.addEventListener("click", () => {
+        loadImports().catch((err) => status("imp-list-state", `读取失败：${err.message}`, "error"));
       });
     }
 
@@ -2932,6 +2973,7 @@
       body.appendChild(row);
     });
     toggleEmpty("sources-empty", state.sources.length > 0);
+    renderSourcesEmptyWords();
     const note = $("sources-note");
     if (note) {
       const withRegion = state.sources.filter((item) => item.has_region);
@@ -2943,6 +2985,25 @@
       }
       note.textContent = parts.join("");
     }
+  }
+
+  // ★ 空态文案必须说清"是没导进来"还是"导进来了，只是它不产数据集"。
+  // 原来的那句话（"导入一份带数据的文件，它会出现在这里"）在**只导了 PDF 这类纯文档**时
+  // 会把用户带偏：他明明导成功了，却在这里看到"还没有"，很自然会理解成"我的文件没进去"。
+  // 所以有文档资料时改成另一句 —— 说的是实情，也告诉他去哪儿看。
+  function renderSourcesEmptyWords() {
+    const title = $("sources-empty-title");
+    const hint = $("sources-empty-hint");
+    if (!title || !hint) return;
+    if (state.documents.length) {
+      title.textContent = "还没有已入库的数据源（但有文档资料）";
+      hint.textContent = "你导入的文件没有产出可分析的数据表（PDF / Word 这类只产正文），"
+        + "所以这里没有数据源 —— 它们作为文档资料在上面「文档资料」里，导入动作本身也留在「导入记录」里。"
+        + "想要数据源，请导入带表格的文件（Excel / CSV / Markdown / PPT）。";
+      return;
+    }
+    title.textContent = "还没有已入库的数据源";
+    hint.textContent = "用上面的「导入资料」导入一份带数据的文件（Excel / CSV / Markdown / PPT），它会出现在这里。";
   }
 
   function pickedImportFiles() {
@@ -3020,6 +3081,121 @@
     show(box);
   }
 
+  // ── 导入记录（FR-009-A2）──────────────────────────────────────────────
+  // 一条记录 = 一次导入动作（成功 / 失败 / 未重复入库都在里面）。
+  // 页面只做两件事：把后端给的字段画出来、点了「详情」再去取那一条的完整记录。
+  // 字数与行数**不由前端计算** —— 后端在列表里就给了（document_char_count / dataset_row_count）。
+  function importProductLabel(record) {
+    const lands = [];
+    if (record.document_id) lands.push("文档资料");
+    if (record.dataset_id) lands.push("数据集");
+    return lands.length ? lands.join(" + ") : "无产物";
+  }
+
+  function importCountLabel(record) {
+    if (record.document_char_count !== null && record.document_char_count !== undefined) {
+      return `${fmtInt(record.document_char_count)} 字`;
+    }
+    if (record.dataset_row_count !== null && record.dataset_row_count !== undefined) {
+      return `${fmtInt(record.dataset_row_count)} 行`;
+    }
+    return "—";
+  }
+
+  function renderImports() {
+    const body = $("imports-body");
+    if (!body) return;
+    clear(body);
+    state.imports.forEach((record) => {
+      const row = document.createElement("tr");
+      cell(row, text(record.filename));
+      cell(row, text(record.source_type_label));
+      // 状态话术与颜色都跟着后端的 status 走：失败就是失败，不写成"已处理"
+      badge(row, record.status === "success" ? "success"
+        : record.status === "failed" ? "failed" : "info",
+      record.status_label || record.status);
+      cell(row, fmtTime(record.imported_at));
+      cell(row, importProductLabel(record));
+      cell(row, importCountLabel(record)).className = "num";
+
+      const action = document.createElement("td");
+      const view = document.createElement("button");
+      view.type = "button";
+      view.className = "btn btn-sm";
+      view.textContent = "详情";
+      view.dataset.importId = record.import_id;
+      view.dataset.importAction = "view";
+      action.appendChild(view);
+      row.appendChild(action);
+      body.appendChild(row);
+    });
+    toggleEmpty("imports-empty", state.imports.length > 0);
+  }
+
+  // 单条导入记录的详情：**点开才取**（列表不预取 100 条详情）。
+  // 内容全部来自 GET /api/imports/{import_id}；失败的那条要能一眼看到原因。
+  async function openImportDetail(importId) {
+    const box = $("import-detail");
+    if (!box) return;
+    show(box);
+    clear(box);
+    status("imp-list-state", "正在读取这条导入记录的详情…", "loading");
+    try {
+      const detail = await API.getImport(importId);
+      state.importDetail = detail;
+      renderImportDetail(detail);
+      status("imp-list-state", "");
+    } catch (err) {
+      state.importDetail = null;
+      hide(box);
+      status("imp-list-state", `读取详情失败：${err.message}`, "error");
+    }
+  }
+
+  function renderImportDetail(detail) {
+    const box = $("import-detail");
+    if (!box) return;
+    clear(box);
+
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const title = document.createElement("h3");
+    title.textContent = `导入详情 · ${text(detail.filename)}`;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "btn btn-sm";
+    close.textContent = "收起";
+    close.dataset.importAction = "close";
+    head.appendChild(title);
+    head.appendChild(close);
+    box.appendChild(head);
+
+    const table = document.createElement("table");
+    table.className = "table";
+    const tbody = document.createElement("tbody");
+    [
+      ["状态", detail.status_label || detail.status],
+      ["类型", detail.source_type_label || detail.source_type],
+      ["时间", fmtTime(detail.imported_at)],
+      ["落成了什么", importProductLabel(detail)],
+      ["字数或行数", importCountLabel(detail)],
+    ].forEach(([key, value]) => {
+      const row = document.createElement("tr");
+      cell(row, key);
+      cell(row, text(value));
+      tbody.appendChild(row);
+    });
+    // 失败的原因：只在这一条真的失败时出现，说的是人话（后端给的那句）
+    if (detail.status === "failed") {
+      const row = document.createElement("tr");
+      cell(row, "失败原因");
+      cell(row, text(detail.note || "这次导入没有成功，原因没有记录下来。")).className = "bad";
+      tbody.appendChild(row);
+    }
+    table.appendChild(tbody);
+    box.appendChild(table);
+  }
+
   async function runImportFiles() {
     if (!allow("import")) return;
     const files = pickedImportFiles();
@@ -3035,7 +3211,13 @@
       status("imp-state",
         `导入完成：成功 ${payload.ok_count} 个，失败 ${payload.failed_count} 个。`,
         payload.failed_count ? "error" : "success");
-      await loadSources().catch(() => {});
+      // 导入完立刻把三块重新拉一遍（都从后端读，不拿这次的响应自己拼）：
+      // 已入库数据源、文档资料（导入进来的文档要出现在那张合表里）、导入记录（成功的和失败的）。
+      await Promise.all([
+        loadSources().catch(() => {}),
+        loadDocuments().catch(() => {}),
+        loadImports().catch(() => {}),
+      ]);
     } catch (err) {
       hide($("imp-result"));
       status("imp-state", err.message, "error");

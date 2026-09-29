@@ -43,6 +43,7 @@ from typing import Any
 
 from app import state
 from app.datasets import registry as dataset_registry
+from app.document_title import repair_title
 from app.importer import db, normalize, parsers, regions, store
 from app.importer.models import (
     ImporterError,
@@ -81,6 +82,16 @@ def sha256_of_file(path: str | Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _display_title(parsed: parsers.ParsedFile, filename: str) -> str:
+    """这份文档对外显示的标题（FR-009-A3）。
+
+    为什么在**这一层**做：`parsers` 只拿得到落盘路径（`in_xxxx_原名.pdf` 这种带前缀的临时名），
+    拿不到用户看到的那个文件名；兜底必须用**用户认识的那个名字**，所以修复放在知道
+    `filename` 的地方。可信化规则本身在 `app/document_title.py`（与旧管道共用同一份实现）。
+    """
+    return repair_title(parsed.document_title, filename)
 
 
 def _safe_stem(name: str) -> str:
@@ -526,13 +537,14 @@ def _materialize_document(
     """把正文物化成一条 document。"""
     document_id = state.new_id("doc")
     text = parsed.document_text
+    title = _display_title(parsed, filename)
     store.insert_document(connection, {
         "document_id": document_id,
         "source_file_id": source_file_id,
         "import_id": None,
         "filename": filename,
         "source_type": source_type,
-        "title": parsed.document_title or Path(filename).stem,
+        "title": title,
         "text": text,
         "char_count": len(text),
         "block_count": int(parsed.document_meta.get("blocks") or 0),
@@ -543,7 +555,7 @@ def _materialize_document(
     return document_id, {
         "document_id": document_id,
         "filename": filename,
-        "title": parsed.document_title or Path(filename).stem,
+        "title": title,
         "char_count": len(text),
         "source_type": source_type,
         "imported_at": now,
@@ -701,7 +713,7 @@ def preview_file(path: str | Path, *, filename: str | None = None,
         "will_create_document": parsed.has_document,
         "will_create_dataset": bool(parsed.tables),
         "document_chars": len(parsed.document_text),
-        "document_title": parsed.document_title,
+        "document_title": _display_title(parsed, display_name),
         "table_count": len(parsed.tables),
         "tables": table_views,
         "region_dimensions": region_hits,

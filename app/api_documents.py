@@ -19,10 +19,25 @@ api.py 里那 11 个端点是被冻结的（Legacy Contract：请求/响应语�
 【端点清单（全部是新增路径）】
 ════════════════════════════════════════════════════════════════════════
     POST /api/documents                     上传 .docx/.pdf → 提取文本（chars > 0 才算成功）
-    GET  /api/documents                     文档列表（分页）
+    GET  /api/documents                     文档列表（分页）★ 见下：**两个来源的统一视图**
     GET  /api/documents/{doc_id}            单个文档（include_text=true 时带全文）
     GET  /api/documents/{doc_id}/text       全文（text/plain，可直接在浏览器里看）
     POST /api/documents/{doc_id}/summary    结构化摘要 + 关键词 + 关键事实（规则抽取，非 LLM）
+
+════════════════════════════════════════════════════════════════════════
+【FR-009-A1：列表/详情/全文读的是**统一视图**，不是只有 JSON 那一份】
+════════════════════════════════════════════════════════════════════════
+用户实测的缺陷：从「导入资料」导进来的 PDF（FR-003 写 SQLite）在这个列表里**永远看不到** ——
+因为这里原来只读 `state/documents.json`（TASK-003 的历史文档）。
+
+现在这一层的读路径全部经 `app/repositories/unified_documents.py`（两个来源的定位与去重规则
+写在那份文件顶部，不在这里重复）：本文件只做"转发 + 组装响应体"，**不自己堆 merge 逻辑**。
+编号（doc_id）在两个来源里都查，调用方与前端都不需要知道某一条来自哪里。
+
+【FR-009-A3：标题的可信化】
+上传时提取到的标题先过 `app/document_title.py::repair_title`：
+提出来是乱码（如 `'\\x00A\\x00I…'` 这种 UTF-16 被当单字节读的产物）就用**文件名（去扩展名）**兜底，
+绝不让乱码串进库、再显示到用户面前。规则与理由都在那个模块里（新旧两条管道共用同一份实现）。
 
 错误码（`error.code`，前端按它分支）：
     document_unsupported  400  后缀不是 .docx/.pdf
@@ -43,8 +58,10 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import PlainTextResponse
 
 from app import state
+from app.document_title import repair_title
 from app.engine import docs
 from app.engine.docs import DOC_SUFFIXES
+from app.repositories import unified_documents
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -104,42 +121,62 @@ def _relative_to_root(path: str | Path) -> str:
 
 
 def _require_record(doc_id: str) -> dict:
-    record = state.get_document(doc_id)
+    """取一份文档（**两个来源都找** —— FR-009-A1 的统一视图）。
+
+    旧管道（TASK-003，state/documents.json）与新管道（FR-003，SQLite documents）
+    在这里被当成同一件事：调用方与前端都不需要知道它来自哪里。
+    """
+    record = unified_documents.get_document(doc_id)
     if record is None:
         raise DocumentApiError(404, "document_not_found", f"没有这个文档记录：{doc_id}")
     return record
 
 
 def _read_text(record: dict) -> str:
-    """按记录里的 stored_path 重新提取全文（原文文件不在 → 410，不假装还能读）。"""
-    stored = Path(record.get("stored_path") or "")
-    if not stored.is_file():
-        raise DocumentApiError(
-            410, "document_file_gone",
-            f"文档原文已不在：{stored}（记录还在，但重新提取文本需要原文文件）",
-        )
+    """取全文。
+
+    两个来源的取法由仓储层决定（新导入的正文在库里；历史文档按 stored_path 重新提取，
+    原文文件不在 → 410，不假装还能读）。
+    """
     try:
-        return docs.extract(stored, record.get("suffix"))["text"]
-    except docs.DocumentError as exc:
-        raise DocumentApiError(422, exc.code, exc.message) from exc
+        return unified_documents.get_text(record["document_id"])
+    except unified_documents.DocumentTextUnavailable as exc:
+        status = 404 if exc.code == "document_not_found" else (
+            410 if exc.code == "document_file_gone" else 422
+        )
+        raise DocumentApiError(status, exc.code, exc.message) from exc
 
 
 def _document_response(record: dict, *, text: str | None = None, preview: str | None = None) -> dict:
-    """把落盘记录整理成响应体（不含绝对路径、不含全文——除非调用方明确要）。"""
+    """把统一视图的记录整理成响应体（不含绝对路径、不含全文——除非调用方明确要）。
+
+    字段分两组，**都在**：
+      · 统一视图的字段（评审点名的 document_id / source_type / source_label / characters…）
+        —— 新代码按这组写；
+      · TASK-003 以来的老字段名（doc_id / chars / blocks / suffix…）
+        —— 前端与既有测试按这组写，一个都没删（纯增量，老调用方不受影响）。
+    """
     body = {
-        "doc_id": record["doc_id"],
+        # ── 统一视图（FR-009-A1）────────────────────────────────────────
+        "document_id": record["document_id"],
+        "source_type": record["source_type"],
+        "source_label": record.get("source_label", ""),
+        "char_count": record["char_count"],
+        "import_id": record.get("import_id"),
+        # ── 兼容既有响应（名字沿用 TASK-003）────────────────────────────
+        "doc_id": record["document_id"],
         "filename": record["filename"],
-        "suffix": record["suffix"],
-        "size_bytes": record["size_bytes"],
-        "sha256": record["sha256"],
-        "chars": record["chars"],
-        "blocks": record["blocks"],
-        "block_unit": record["block_unit"],
+        "suffix": record.get("suffix", ""),
+        "size_bytes": record.get("size_bytes"),
+        "sha256": record.get("sha256"),
+        "chars": record["char_count"],
+        "blocks": record["block_count"],
+        "block_unit": record.get("block_unit", ""),
         "title": record.get("title", ""),
         "outline": record.get("outline", []),
         "warnings": record.get("warnings", []),
         "extra": record.get("extra", {}),
-        "stored_path": _relative_to_root(record["stored_path"]),
+        "stored_path": _relative_to_root(record["stored_path"]) if record.get("stored_path") else "",
         "summary": record.get("summary"),
         "created_at": record["created_at"],
     }
@@ -187,7 +224,7 @@ def upload_document(
         status = 400 if exc.code == "document_unsupported" else 422
         raise DocumentApiError(status, exc.code, exc.message) from exc
 
-    record = state.record_document(
+    state.record_document(
         doc_id=doc_id,
         filename=original_name or safe_name,
         stored_path=str(target),
@@ -197,25 +234,35 @@ def upload_document(
         chars=extracted["chars"],
         blocks=extracted["blocks"],
         block_unit=extracted["block_unit"],
-        title=extracted.get("title", ""),
+        # 标题一律先过一遍可信化（FR-009-A3）：提出来的是乱码就用文件名兜底，
+        # 绝不让 '\x00A\x00I…' 这种串进库、再显示到用户面前（规则在 app/document_title.py）
+        title=repair_title(extracted.get("title", ""), original_name or safe_name),
         outline=extracted.get("outline", []),
         warnings=extracted.get("warnings", []),
         extra=extracted.get("extra", {}),
     )
+    # 回执走**统一视图**这一条路取（不是把刚落盘的那份原始记录直接拼出去）：
+    # 这样上传接口与列表/详情接口的形状由同一处产出，不会出现"刚上传的少一个字段"。
+    record = _require_record(doc_id)
     return _document_response(record, preview=extracted["text"][:TEXT_PREVIEW_CHARS])
 
 
 # ── 2. 列表 ─────────────────────────────────────────────────────────────
-@router.get("", summary="文档列表（新的在前，分页）")
+@router.get("", summary="文档列表（两个来源统一视图，新的在前，分页）")
 def list_documents(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
-    records, total = state.list_documents(limit, offset)
+    """**统一视图**（FR-009-A1）：FR-003 新导入的文档 + TASK-003 的历史文档，一起返回。
+
+    `source_notes` 是降级说明：某个来源这次读不出来时，另一个照常显示（列表不会整体失败）。
+    """
+    records, total, notes = unified_documents.list_documents(limit, offset)
     return {
         "total": total,
         "limit": limit,
         "offset": offset,
+        "source_notes": notes,
         "documents": [_document_response(record) for record in records],
     }
 
@@ -244,7 +291,7 @@ def get_document_text(doc_id: str) -> PlainTextResponse:
     text = _read_text(record)
     return PlainTextResponse(
         content=text,
-        headers={"X-Doc-Chars": str(record["chars"]), "X-Doc-Sha256": record["sha256"]},
+        headers={"X-Doc-Chars": str(record["char_count"]), "X-Doc-Sha256": record.get("sha256") or ""},
     )
 
 
@@ -274,6 +321,11 @@ def summarize_document(
         text, max_sentences=max_sentences, max_keywords=max_keywords, max_facts=max_facts
     )
     summary["generated_at"] = state.now_iso()
-    summary["input_sha256"] = record["sha256"]      # 摘要针对的是哪一版原文（可追溯）
-    state.set_document_summary(doc_id, summary)
-    return {"doc_id": doc_id, "cached": False, **summary}
+    summary["input_sha256"] = record.get("sha256") or ""   # 摘要针对的是哪一版原文（可追溯）
+    if record["source_type"] == unified_documents.SOURCE_LEGACY:
+        # 历史文档（JSON 状态文件）仍按老规矩把摘要写回记录：刷新页面还在。
+        state.set_document_summary(doc_id, summary)
+    # ★ 新导入的文档（FR-003，正文在 SQLite）**本期不为它新增摘要存储**：
+    #   返回这次算出来的那份（同样确定性、同样可回原文核对），但明说"没有落库"——
+    #   宁可在响应里说实话，也不假装它被记住了（`cached=false` 就是这句话）。
+    return {"doc_id": doc_id, "cached": False, "persisted": record["source_type"] == unified_documents.SOURCE_LEGACY, **summary}

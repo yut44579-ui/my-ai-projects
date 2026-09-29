@@ -426,6 +426,36 @@ def list_documents(
     return records, total
 
 
+def list_document_meta(
+    connection: sqlite3.Connection, limit: int | None = None
+) -> tuple[list[dict[str, Any]], int]:
+    """文档列表（**不含正文**）+ 总数 —— 统一文档视图专用（FR-009-A1）。
+
+    为什么不复用上面的 `list_documents`：那个 `SELECT *` 会把每份文档的**整篇正文**
+    读进内存，而统一视图只是要把"有哪些文档"列出来再合并分页 —— 一篇 3000 字的 PDF 正文
+    对列表页一个字节都用不上。这里显式列出除 `text` 之外的列（`char_count` 足够表达"多长"），
+    合并视图因此可以放心地"取全量再排序"。
+
+    `limit=None` = 不限（默认）：统一视图要按时间合并两个来源，分页得在合并之后做，
+    所以这一层不能先截断。单机文档量级下这是最省事也最不会出错的做法。
+    """
+    sql = (
+        "SELECT document_id, source_file_id, import_id, filename, source_type, title, "
+        "char_count, block_count, imported_at, parser_version, meta FROM documents "
+        "ORDER BY imported_at DESC, document_id DESC"
+    )
+    params: tuple[Any, ...] = ()
+    if limit is not None:
+        sql += " LIMIT ?"
+        params = (int(limit),)
+    rows = connection.execute(sql, params).fetchall()
+    total = int(connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+    records = _rows_to_dicts(rows)
+    for record in records:
+        record["meta"] = _load(record.get("meta"), {})
+    return records, total
+
+
 def successful_import_count(
     connection: sqlite3.Connection, source_file_id: str
 ) -> dict[str, int]:
@@ -453,8 +483,47 @@ def successful_import_count(
     }
 
 
+# ════════════════════════════════════════════════════════════════════════
+# 导入记录的"落成了什么"（FR-009-A2）
+# ════════════════════════════════════════════════════════════════════════
+def document_char_counts(
+    connection: sqlite3.Connection, document_ids: Sequence[str]
+) -> dict[str, int]:
+    """{document_id: 字符数} —— **一次查完这一页涉及的文档**，不逐条查库。
+
+    为什么要批量：导入记录列表一页最多 200 条，逐条 `SELECT` 就是 200 次往返
+    （N+1 查询）。这里一条 `IN (...)` 拿完，页面要的"字数"从哪来这件事只在这里定义一次。
+    """
+    ids = [str(item) for item in document_ids if item]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = connection.execute(
+        f"SELECT document_id, char_count FROM documents WHERE document_id IN ({placeholders})",
+        tuple(ids),
+    ).fetchall()
+    return {str(row[0]): int(row[1] or 0) for row in rows}
+
+
+def dataset_row_counts(
+    connection: sqlite3.Connection, dataset_ids: Sequence[str]
+) -> dict[str, int]:
+    """{dataset_id: 行数} —— 与上面同一个理由（一次查完这一页）。"""
+    ids = [str(item) for item in dataset_ids if item]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = connection.execute(
+        f"SELECT dataset_id, row_count FROM datasets WHERE dataset_id IN ({placeholders})",
+        tuple(ids),
+    ).fetchall()
+    return {str(row[0]): int(row[1] or 0) for row in rows}
+
+
 __all__ = [
     "count_rows",
+    "dataset_row_counts",
+    "document_char_counts",
     "find_import",
     "find_source_file_by_sha",
     "get_dataset",
@@ -471,6 +540,7 @@ __all__ = [
     "list_dataset_columns",
     "list_dataset_tables",
     "list_datasets",
+    "list_document_meta",
     "list_documents",
     "list_imports",
     "load_rows",
