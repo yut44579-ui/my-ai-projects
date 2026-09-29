@@ -707,7 +707,12 @@ def test_AC15_数字闸门对新intent同样生效(monkeypatch):
 def test_能力清单含两个新Intent且不新增多余项():
     body = client.get("/api/chat/capabilities").json()
     names = [item["name"] for item in body["intents"]]
-    assert names == list(intent_module.COMPUTE_INTENTS)
+    # ★ FR-008：地区分布只在**真的有带地区字段的数据源**时进清单；本用例库里没有 →
+    #   清单 = COMPUTE_INTENTS 去掉那一个（其余顺序与项数照旧，TASK-006 的两个仍在末尾）。
+    assert names == [
+        name for name in intent_module.COMPUTE_INTENTS
+        if name != intent_module.INTENT_SALES_BY_REGION
+    ]
     assert names[-2:] == ["customer_analysis", "product_analysis"]
     assert len(names) == 7
     # 不支持的维度里必须点出 VIP 这类"不存在但很诱人"的客户维度

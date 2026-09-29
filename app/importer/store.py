@@ -240,8 +240,16 @@ def _decode_dataset(row: sqlite3.Row | None) -> dict[str, Any] | None:
 def list_datasets(
     connection: sqlite3.Connection, limit: int = 50, offset: int = 0
 ) -> tuple[list[dict[str, Any]], int]:
+    """数据源列表，**最近入库在前**。
+
+    ★ FR-008 补的并列规则：`materialized_at` 是**秒**精度（`state.now_iso()`），
+      同一秒内导入的两份文件会并列；原先用 `dataset_id DESC` 破并列 —— 那是**哈希值**
+      的字典序，与"谁后导入"毫无关系。于是"最近导入优先"在真实使用中（连着导两个文件）
+      会随机失效，而且**看不出来**。改成 `rowid DESC`：SQLite 的 rowid 就是**真实插入顺序**，
+      后插入的一定更大 —— 这就是"最近导入"的机器定义。
+    """
     rows = connection.execute(
-        "SELECT * FROM datasets ORDER BY materialized_at DESC, dataset_id DESC LIMIT ? OFFSET ?",
+        "SELECT * FROM datasets ORDER BY materialized_at DESC, rowid DESC LIMIT ? OFFSET ?",
         (limit, offset),
     ).fetchall()
     total = int(connection.execute("SELECT COUNT(*) FROM datasets").fetchone()[0])

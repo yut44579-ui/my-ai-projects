@@ -136,8 +136,11 @@ def test_T010_报告不是第六个计算型intent():
     TASK-006 之后 `COMPUTE_INTENTS` 是 7 个 —— 那是**评审批准**的两个新增
     （customer_analysis / product_analysis，各自用 operation 收口）。报告**没有**因此
     多出第 8 个 intent，它也**没有**伸进这两个新能力：报告复用的仍是原来那五个工具。
+
+    FR-008 再加一个（sales_by_region，地区分布）→ 8 个。这里断言的是"**报告自己没多出**"，
+    所以数量跟着这条线走，而 `REPORT_TOOL` 仍然不在里面、报告复用的工具集仍然只有那五个。
     """
-    assert len(intent_module.COMPUTE_INTENTS) == 7
+    assert len(intent_module.COMPUTE_INTENTS) == 8
     assert report.REPORT_TOOL not in intent_module.COMPUTE_INTENTS
     # 报告复用的仍是既有五个工具，一个都没多、也没被新 Intent 带跑
     assert set(report.SUB_TOOLS) <= set(intent_module.COMPUTE_INTENTS)
@@ -149,7 +152,12 @@ def test_T010_报告不是第六个计算型intent():
 def test_T010_能力端点的intents不增项_报告单列():
     body = client.get("/api/chat/capabilities").json()
     names = [item["name"] for item in body["intents"]]
-    assert names == list(intent_module.COMPUTE_INTENTS)
+    # ★ FR-008：地区分布**只在真有带地区字段的数据源时**进清单（本用例库里没有）→
+    #   清单 = COMPUTE_INTENTS 去掉那一个。报告的结论一字不变：它自己不是 intent。
+    assert names == [
+        name for name in intent_module.COMPUTE_INTENTS
+        if name != intent_module.INTENT_SALES_BY_REGION
+    ]
     assert report.REPORT_TOOL not in names            # 没有第 6 项
     periods = {item["key"]: item for item in body["report"]["periods"]}
     assert set(periods) == {"weekly", "monthly"}

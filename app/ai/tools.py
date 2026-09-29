@@ -52,6 +52,11 @@ import pandas as pd
 
 from app.engine import executor, loader
 from app.engine import metrics as engine_metrics
+# FR-008：地区问答的两块既有资产 —— 数据源选择规则（region_source）与
+# FR-003D 已交付的确定性地区聚合（region_query）。**不重写聚合**，只调用。
+from app.ai import region_source
+from app.importer import region_query
+from app.importer.models import ImporterError
 
 # 浮点对账容差（与 executor.py 内部同一量级；位级相等时它是 0 差异）
 _FLOAT_TOL = 1e-6
@@ -1234,7 +1239,169 @@ def sales_breakdown_by_country(start: _dt.date, end: _dt.date, top_n: int = 5) -
 
 
 # ════════════════════════════════════════════════════════════════════════
-# 工具 ⑥：customer_analysis（TASK-006）
+# 工具 ⑥：sales_by_region（FR-008）—— 按地区看销售额
+#
+# 【一句话】"各地区卖了多少"这件事，数字**全部**来自
+#   `app/importer/region_query.sales_by_region()`（FR-003D 已交付的 pandas 确定性实现）。
+#   本函数只做两件事：① 按规则挑数据源（`region_source.choose`）；
+#   ② 把它的结果整理成项目统一的工具返回形状（facts / display / items / notes / selfcheck）。
+#
+# 【为什么不在这里写第二套聚合】FR-003D 的实现里已经有两条明确分支（数据源自带金额列 /
+#   交易明细套 D16 掩码），再写一份就是第二套口径 —— 同一个问题两个数，是这类项目最危险的病。
+#   所以这里连一个 `groupby` 都没有，只有一次调用和一次搬运。
+#
+# 【为什么不用内置数据集】内置的 8 列数据里**没有地区字段**（只有 Country）。
+#   地区数据只来自用户导入的数据源；一个带地区字段的都没有时**明确说没有**，
+#   绝不拿 Country 顶替（本文件里没有任何 `Country` → 地区 的映射代码，
+#   这条边界由 `region_source.NO_REGION_REASON` 那句文案 + intent 的硬闸门共同守住）。
+# ════════════════════════════════════════════════════════════════════════
+
+#: 没指明就展示的地区条数（与 /api/sources/{id}/region/query 的上限同一量级，但不追求全列）
+DEFAULT_REGION_TOP_N = 20
+
+
+def sales_by_region(
+    start: _dt.date | None = None,
+    end: _dt.date | None = None,
+    dimension: str | None = None,
+    top_n: int = DEFAULT_REGION_TOP_N,
+) -> dict[str, Any]:
+    """按地区拆销售额（**确定性计算**，见上面的说明）。
+
+    失败**不抛异常给上层**（除了真正的 bug）：返回 `status="region_unavailable"` 的结构，
+    由 service 渲染成"明确说明 + 不产出数字"的回答 —— 用户问到没有地区数据源的库时，
+    该看到的是一句人话，而不是 500 或者一个用国家凑出来的数。
+    """
+    params: dict[str, Any] = {
+        "start": start.isoformat() if start else None,
+        "end": end.isoformat() if end else None,
+        "dimension": dimension,
+        "top_n": int(top_n),
+    }
+    choice = region_source.choose()
+    if choice is None:
+        return _region_unavailable(params, "DIMENSION_UNAVAILABLE", region_source.NO_REGION_REASON)
+
+    record = choice["record"]
+    dataset_id = str(record.get("dataset_id"))
+    params["dataset_id"] = dataset_id
+    params["dataset_name"] = record.get("name")
+
+    try:
+        raw = region_query.sales_by_region(
+            dataset_id, start=start, end=end, dimension=dimension, top_n=int(top_n)
+        )
+    except ImporterError as exc:
+        # 维度不可用 / 维度歧义 / 缺日期列 / 缺金额列 —— 都是"这个数据源答不了"，
+        # 一律如实说明（**不换一个数据源偷偷算、也不用国家顶**）。
+        return _region_unavailable(params, str(exc.code), exc.message)
+
+    items = [
+        {
+            "rank": rank,
+            "region": str(row["region"]),
+            "amount": float(row["amount"]),
+            "share": row.get("share"),
+        }
+        for rank, row in enumerate(raw["rows"], start=1)
+    ]
+    total = float(raw["total_amount"])
+    top_amount = math.fsum(item["amount"] for item in items)
+    dimension_info = raw["dimension"]
+    source_note = (
+        f"{choice['rule']}；分组字段：{dimension_info['label']}"
+        f"（源列「{dimension_info['field']}」）。"
+        "内置示例数据集没有地区字段，这条结果来自你导入的数据源，**没有拿国家代替地区**。"
+    )
+    notes = [
+        source_note,
+        raw["measure"]["note"],
+        "口径：金额按地区分组求和（pandas），与「按地区查询」接口**同一份实现**；"
+        "这个结果只描述该时间段内的分布，不承担「两个时间段之间谁造成变化」的归因。",
+    ] + [str(note) for note in raw["notes"] if note != raw["measure"]["note"]]
+    if raw.get("window"):
+        notes.append(
+            f"时间窗：{raw['window']['start']} ~ {raw['window']['end']}（{raw['window']['semantics']}，"
+            f"窗内 {raw['window']['rows_in_window']:,} 行）"
+        )
+
+    facts: dict[str, Any] = {
+        "total_amount": total,
+        "region_count": int(raw["region_count"]),
+        "shown_count": len(items),
+        "top_n": int(top_n),
+        "top_amount": top_amount,
+        "top_share": (top_amount / total) if total else 0.0,
+        "top_region": items[0]["region"] if items else "",
+        "top_region_amount": items[0]["amount"] if items else 0.0,
+        "rows_used": int(raw["rows_used"]),
+        "rows_skipped_no_region": int(raw["rows_skipped_no_region"]),
+        "measure_kind": raw["measure"]["kind"],
+        "source_dataset": {
+            "dataset_id": dataset_id,
+            "name": record.get("name"),
+            "rule": choice["rule"],
+            "candidates": choice["candidate_names"],
+        },
+        "dimension": {
+            "key": dimension_info.get("key"),
+            "field": dimension_info.get("field"),
+            "label": dimension_info.get("label"),
+        },
+        "window": raw.get("window"),
+    }
+    display = [
+        {"label": "总销售额", "value": total, "unit": currency_unit(), "format": "money"},
+        {"label": "地区数", "value": facts["region_count"], "unit": "个", "format": "int"},
+        {"label": f"展示的地区数（金额降序前 {len(items)}）", "value": len(items), "unit": "个",
+         "format": "int", "derived": True},
+        {"label": f"TOP{len(items)} 合计销售额", "value": top_amount, "unit": currency_unit(),
+         "format": "money"},
+        {"label": "占总额", "value": facts["top_share"] * 100, "unit": "%", "format": "pct",
+         "derived": True},
+    ]
+    if facts["rows_skipped_no_region"]:
+        display.append({"label": "没有地区值的行", "value": facts["rows_skipped_no_region"],
+                        "unit": "行", "format": "int", "derived": True})
+
+    return {
+        "tool": REGION_TOOL,
+        "params": params,
+        "status": "ok",
+        "facts": facts,
+        "items": items,
+        "notes": notes,
+        "display": display,
+        "selfcheck": {
+            "detail_total_source": "region_query.sales_by_region（FR-003D 的确定性实现，与本函数同一份口径）",
+            "reported_total": total,
+            "row_sum": top_amount,
+            "row_sum_matches_total": top_amount <= total + max(_FLOAT_TOL, abs(total) * _FLOAT_TOL),
+            "delta_from_total": abs(total - top_amount),
+            "shown_le_all": len(items) <= facts["region_count"],
+            "dataset_id": dataset_id,
+        },
+    }
+
+
+def _region_unavailable(params: dict[str, Any], code: str, reason: str) -> dict[str, Any]:
+    """地区维度用不了时的**结构化**出口（service 据此渲染"明确说明"，不产出任何数字）。"""
+    return {
+        "tool": REGION_TOOL,
+        "params": params,
+        "status": "region_unavailable",
+        "code": code,
+        "reason": reason,
+        "facts": None,
+        "items": [],
+        "notes": [reason],
+        "display": [],
+        "selfcheck": {"detail_total_source": "不适用（本次没有可用的地区维度）"},
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 工具 ⑦：customer_analysis（TASK-006）
 #
 # 【一句话】客户维度只做「数据里真有的那几列」能算出来的确定性描述：
 #   客户号、成交次数（distinct InvoiceNo）、金额、购买频次、首次/最后一次购买日期。
@@ -1265,6 +1432,8 @@ CUSTOMER_OPERATIONS: tuple[str, ...] = (
 CUSTOMER_ANALYSIS_TOOL = "customer_analysis"
 PRODUCT_ANALYSIS_TOOL = "product_analysis"
 TOP_PRODUCTS_TOOL = "top_products"
+#: FR-008：地区分布工具名 —— 与 intent 名**逐字相同**（`run_tool(parsed.intent, …)` 靠这一点）
+REGION_TOOL = "sales_by_region"
 
 # 整个数据集的逐客户活动表缓存（新客/沉睡都要它；见 `_dataset_customer_activity`）
 _activity_cache: dict[str, Any] | None = None
@@ -2197,6 +2366,15 @@ TOOLS: dict[str, ToolSpec] = {
         description="某时间段各国家销售额分布 TOP N + 占比（**不做变化归因**）",
         run=sales_breakdown_by_country,
     ),
+    # ── FR-008：地区分布（数据来自**用户导入的**带地区字段的数据源）──────────────
+    REGION_TOOL: ToolSpec(
+        name=REGION_TOOL,
+        title="地区分布",
+        description="某时间段各地区（大区/省份/城市）销售额分布 + 占比；"
+                    "数据来自带地区字段的**导入数据源**（内置数据集没有地区列，"
+                    "没有这样的数据源时会明确说明，**不会拿国家顶替**）",
+        run=sales_by_region,
+    ),
     # ── TASK-006：客户 / 商品（**各一个 Intent，用 operation 收口**）───────────
     CUSTOMER_ANALYSIS_TOOL: ToolSpec(
         name=CUSTOMER_ANALYSIS_TOOL,
@@ -2234,6 +2412,8 @@ __all__ = [
     "CUSTOMER_TOP_METRICS",
     "DATASET_CURRENCY",
     "DEFAULT_INACTIVE_DAYS",
+    "DEFAULT_REGION_TOP_N",
+    "REGION_TOOL",
     "PRODUCT_ANALYSIS_TOOL",
     "PRODUCT_OPERATIONS",
     "PRODUCT_TOP_METRICS",
@@ -2259,6 +2439,7 @@ __all__ = [
     "resolve_compare_windows",
     "run_tool",
     "sales_breakdown_by_country",
+    "sales_by_region",
     "sales_compare",
     "sales_summary",
     "sales_trend",

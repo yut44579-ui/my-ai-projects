@@ -232,6 +232,27 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
     elif tool == "sales_breakdown_by_country":
         lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天）")
         lines.append(f"分布口径：按国家分组，销售额降序取前 {params.get('top_n')} 名")
+    elif tool == "sales_by_region":
+        # ★ FR-008：地区分布 —— 数据来自**导入的数据源**，所以必须把"哪一份数据源"写在事实段里
+        #   （内置数据集没有地区字段，不写清楚的话这段数字就没有出处）。
+        facts = result.get("facts") or {}
+        source = facts.get("source_dataset") or {}
+        lines.append(f"数据源：{source.get('name') or params.get('dataset_name') or '（未知）'}")
+        if source.get("rule"):
+            lines.append(f"选源规则：{source['rule']}")
+        dimension = facts.get("dimension") or {}
+        window = facts.get("window") or {}
+        if window:
+            lines.append(
+                f"统计区间：{window.get('start')} ~ {window.get('end')}（含首尾全天，"
+                f"窗内 {window.get('rows_in_window')} 行）"
+            )
+        else:
+            lines.append("统计区间：**未指定时间**，按数据源里的全部行统计")
+        lines.append(
+            f"分布口径：按「{dimension.get('label') or dimension.get('field')}」分组，"
+            f"销售额降序取前 {params.get('top_n')} 名"
+        )
     elif tool == "customer_analysis":
         lines.append(f"统计区间：{params.get('start')} ~ {params.get('end')}（含首尾全天）")
         lines.append(
@@ -274,6 +295,18 @@ def render_facts_text(result: dict[str, Any], *, question: str = "") -> str:
                     f"：{format_value(item['amount'], 'money')}{ai_tools.currency_unit()}"
                     f"（{format_value(item['share'] * 100, 'pct')}%，"
                     f"{item['orders']} 单 / {item['customers']} 位客户）"
+                )
+                continue
+            if "region" in item and "amount" in item:
+                # 地区分布（FR-008）：**直接用 region_query 的行**，这里只排成一行字
+                share = item.get("share")
+                share_text = (
+                    f"（{format_value(share * 100, 'pct')}%，占本数据源地区总额）"
+                    if share is not None else ""
+                )
+                lines.append(
+                    f"  #{item['rank']} {item['region']}"
+                    f"：{format_value(item['amount'], 'money')}{ai_tools.currency_unit()}{share_text}"
                 )
                 continue
             if "return_rows" in item:

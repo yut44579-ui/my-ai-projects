@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app import state
 from app.ai import answer as answer_module, export_docs
-from app.ai import intent as intent_module, llm, service, tools
+from app.ai import intent as intent_module, llm, region_source, service, tools
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -103,6 +103,27 @@ def _summary(record: dict) -> dict:
 def chat_capabilities() -> dict:
     """前端首屏用它渲染"能问什么"，也让用户一眼看到**数据边界**（Gate 的诚实要求）。"""
     profile = tools.dataset_profile()
+    # ★ FR-008：地区能力**随数据源而变** —— 只有库里真有带地区字段的数据源时，
+    #   「地区分布」才写进能力清单（清单上写着、点了却问不出来，就是假能力入口）。
+    region_datasets = region_source.list_region_datasets()
+    region_ready = bool(region_datasets)
+    region_names = [str(record.get("name")) for record in region_datasets]
+    # 内置数据集那两条"没有区域/省份/城市"的声明，在有地区数据源时要说清它的前提：
+    # 那两句描述的是**内置数据集**，而地区问题现在走的是导入的数据源。
+    unsupported_dimensions = [
+        "门店/渠道", "销售员/部门", "毛利/成本/折扣",
+        # TASK-006：客户"属性类"维度 —— 数据里只有客户号，没有这些标签
+        "VIP/客户等级/大客户", "客户行业/客户地区/客户渠道/客户生命周期",
+    ]
+    if not region_ready:
+        unsupported_dimensions[0:0] = ["区域/大区/片区", "省份/城市"]
+    region_line = (
+        f"当前的**导入数据源**里有带地区字段的：{'、'.join(region_names[:3])} —— "
+        f"问「各省份的销售额」这类**地区分布**问题走那份数据源（按地区看销售额）。"
+        if region_ready
+        else "**还没有**任何带地区字段的数据源 —— 导入一份带「大区 / 省份 / 城市」列的数据，"
+             "就能按地区看销售额。"
+    )
     return {
         "intents": [
             {
@@ -111,16 +132,14 @@ def chat_capabilities() -> dict:
                 "description": tools.TOOLS[name].description,
             }
             for name in intent_module.COMPUTE_INTENTS
+            if name != intent_module.INTENT_SALES_BY_REGION or region_ready
         ],
         "unsupported": {
-            "dimensions": [
-                "区域/大区/片区", "省份/城市", "门店/渠道", "销售员/部门", "毛利/成本/折扣",
-                # TASK-006：客户"属性类"维度 —— 数据里只有客户号，没有这些标签
-                "VIP/客户等级/大客户", "客户行业/客户地区/客户渠道/客户生命周期",
-            ],
+            "dimensions": unsupported_dimensions,
             "reason": "数据集只有 8 列（InvoiceNo / StockCode / Description / Quantity / "
                       "InvoiceDate / UnitPrice / CustomerID / Country），没有这些字段；"
-                      "**不会用 Country 代替区域**，也**不会用「销售额 TOP」顶替「VIP TOP」**。",
+                      "**不会用 Country 代替区域**，也**不会用「销售额 TOP」顶替「VIP TOP」**。"
+                      + region_line,
         },
         "llm": llm.status(),
         # 币种**显式声明**（同一个对象也随 data_profile 一起出去，两处同源）：
@@ -165,7 +184,10 @@ def chat_capabilities() -> dict:
             "出一份 2011 年 11 月的月报",
             "VIP客户TOP10（数据不支持，会被明确拒绝）",
             "华南区上个月卖了多少？（数据不支持，会被明确拒绝）",
-        ],
+        ]
+        # ★ FR-008：地区示例只在真的有带地区字段的数据源时给出 ——
+        #   没有的话，例子里的那句会变成"点了才知道问不了"。
+        + (["各省份的销售额（按地区看销售额，用导入的数据源）"] if region_ready else []),
     }
 
 

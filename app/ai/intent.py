@@ -45,6 +45,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from app.ai import llm
+# FR-008：地区问答的「用哪个数据源 / 有没有地区数据源」规则**只在 region_source 一处**声明
+# （硬闸门与工具都问它，不各写一份判断）。
+from app.ai import region_source
 # 报告形态（TASK-010）的常量**只在 report.py 声明一处**，这里只是引用 ——
 # 周期、比较类型、趋势粒度的对应关系不许在解析层再抄一份。
 from app.ai.report import PERIOD_COMPARISON, PERIOD_MONTHLY, PERIOD_WEEKLY, report_period
@@ -54,6 +57,7 @@ from app.ai.tools import (
     CUSTOMER_OPERATIONS,
     CUSTOMER_TOP_METRICS,
     DEFAULT_INACTIVE_DAYS,
+    DEFAULT_REGION_TOP_N,
     PRODUCT_OPERATIONS,
     PRODUCT_TOP_METRICS,
     PRODUCT_TREND_MAX_CODES,
@@ -79,6 +83,11 @@ INTENT_SALES_BREAKDOWN_BY_COUNTRY = "sales_breakdown_by_country"
 # （"沉睡客户"是**规则型**判定，不是预测；对外文案里也不许把它写成"客户跑了"这类结论。）
 INTENT_CUSTOMER_ANALYSIS = "customer_analysis"
 INTENT_PRODUCT_ANALYSIS = "product_analysis"
+# ── FR-008：地区分布（**与 sales_breakdown_by_country 分工明确**）────────────────
+#   问「国家/各国」→ 仍是 sales_breakdown_by_country（Legacy，语义一个字没动）
+#   问「地区/大区/区域/省份/城市」→ sales_by_region（数据来自用户导入的数据源）
+#   两者的计算实现、数据来源、可用条件都不同，绝不互相顶替。
+INTENT_SALES_BY_REGION = "sales_by_region"
 INTENT_UNSUPPORTED = "unsupported"
 
 COMPUTE_INTENTS: tuple[str, ...] = (
@@ -89,6 +98,8 @@ COMPUTE_INTENTS: tuple[str, ...] = (
     INTENT_SALES_BREAKDOWN_BY_COUNTRY,
     INTENT_CUSTOMER_ANALYSIS,
     INTENT_PRODUCT_ANALYSIS,
+    # FR-008 追加（**只能往后追加**：前七项的顺序是既有的，动它就是动别人的合同）
+    INTENT_SALES_BY_REGION,
 )
 ALL_INTENTS: tuple[str, ...] = COMPUTE_INTENTS + (INTENT_UNSUPPORTED,)
 
@@ -186,6 +197,37 @@ class TopProductsParams(_DayRangeParams):
 
 class CountryBreakdownParams(_DayRangeParams):
     top_n: int = Field(default=5, ge=1, le=20)
+
+
+class RegionBreakdownParams(BaseModel):
+    """地区分布参数（FR-008）。
+
+    ★ 与其它计算型 intent 的三点不同，都是刻意的：
+      ① **时间不是必填**：地区数据源可以没有日期列（"各省份的销售额"本身也没提时间）。
+         两端都不给 = 不筛时间；只给一端时按 region_query 的既有语义（那一端当天）处理。
+      ② **不接收 dataset_id**：用哪个数据源由 `region_source` 的规则决定（带地区字段优先、
+         最近导入优先），**不许 LLM 猜一个 id** 出来 —— 猜错就是拿另一个数据源的数字回答。
+      ③ `dimension` 只在用户/模型明确说了按哪个字段看时才填；留空而数据源有多个地区字段时，
+         `region_query.resolve_dimension` 会抛 DIMENSION_AMBIGUOUS → 回答里请用户说清楚
+         （**不替他挑一个**，见 TASK-007 评审的"不确定先澄清，绝不默认"）。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    start: _dt.date | None = None
+    end: _dt.date | None = None
+    dimension: str | None = None
+    top_n: int = Field(default=DEFAULT_REGION_TOP_N, ge=1, le=200)
+
+    def resolved(self) -> "RegionBreakdownParams":
+        """收口检查（`ParsedIntent.validated_params()` 会调这个名字，与其它 intent 同一处）：
+        两端日期都给时，起始不得晚于结束。只给一端是合法的（按 region_query 的语义处理）。"""
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise IntentError(
+                "intent_invalid_params",
+                f"起始日期晚于结束日期：{self.start} > {self.end}",
+            )
+        return self
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -322,6 +364,7 @@ PARAM_MODELS: dict[str, type[BaseModel]] = {
     INTENT_SALES_BREAKDOWN_BY_COUNTRY: CountryBreakdownParams,
     INTENT_CUSTOMER_ANALYSIS: CustomerAnalysisParams,
     INTENT_PRODUCT_ANALYSIS: ProductAnalysisParams,
+    INTENT_SALES_BY_REGION: RegionBreakdownParams,
 }
 
 
@@ -426,13 +469,43 @@ def _format_validation_error(exc: ValidationError) -> str:
 # ════════════════════════════════════════════════════════════════════════
 # 系统提示词
 # ════════════════════════════════════════════════════════════════════════
+def _region_prompt_facts() -> str:
+    """把"地区能力当前到底可不可用"如实写进提示词（FR-008）。
+
+    ★ 为什么必须**按实际情况拼**：模型看不到库里有几张表。它要是以为"地区永远不支持"，
+      用户导入了带省份的数据后它照样回 unsupported；反过来要是以为"地区随便问"，
+      没有地区数据源时它就会编一个 dataset_id 出来。两种都是错的 ——
+      所以这里只写**事实**：库里有几个带地区字段的数据源、各自的地区列叫什么。
+      一个都没有 → 返回空串（一个字都不提，免得模型顺着提示去编）。
+    """
+    try:
+        candidates = region_source.list_region_datasets()
+    except Exception:                       # noqa: BLE001 —— 库读不出来时按"没有"处理（不编）
+        return ""
+    if not candidates:
+        return ""
+    lines = ["", "另外，用户**导入的数据源**里确实有带地区字段的（内置数据集仍然没有）："]
+    for record in candidates[:5]:
+        lines.append(f"- 「{record.get('name')}」：地区字段 {region_source.dimension_labels(record)}")
+    lines.append(
+        "问「地区 / 大区 / 省份 / 城市」的销售额分布 → sales_by_region（第 8 条）；"
+        "**不要填 dataset_id**（用哪个数据源由程序按规则决定，你猜一个只会答错数据源）。"
+    )
+    lines.append(
+        "问「华南 / 华东 / 上海」这种**具体地区名**仍然 unsupported —— 地区这块只做分布，"
+        "不做单个地区的筛选，也**不许**拿国家数据顶替。"
+    )
+    return "\n".join(lines)
+
+
 def system_prompt() -> str:
     """把"数据现实"如实写进提示词 —— 模型知道边界，才可能正确回答"不支持"。"""
     first, last = dataset_bounds()
+    region_facts = _region_prompt_facts()
     return f"""你是销售数据问答的**意图解析器**。你的唯一输出是一段 JSON，不要解释、不要 markdown 代码块、不要多余文字。
 **你不做任何计算、不做任何排序、不判断"主要贡献者"、不挑"最好的客户/商品"** —— 那些由程序做。你只把问题翻译成结构化参数。
 
-可用 intent 只有下面这 8 个，多一个都不许编（**没有 sales_attribution / customer_top / product_return
+可用 intent 只有下面这 9 个，多一个都不许编（**没有 sales_attribution / customer_top / product_return
 这类 intent** —— "归因"是 sales_compare 的参数字段，客户与商品各只有一个 intent、用 operation 区分）：
 1. sales_summary —— 问某时间段的销售额/订单数/客户数。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}}
 2. sales_trend   —— 问某时间段按日或按周的趋势走势。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","granularity":"day"|"week"}}
@@ -470,7 +543,19 @@ def system_prompt() -> str:
    怎么选 operation：问"哪些商品卖得好/商品排行"→ top（**也可以照旧用 top_products**）；
    问"某个/某几个商品的变化趋势"→ trend（**必须把商品编码填进 product_codes**）；
    问"退货/退款/取消单/退货率"→ return。
-8. unsupported   —— 问题涉及数据里不存在的维度/指标时用它。params: {{}}，并在 reason 里说明缺什么。
+8. sales_by_region —— 问**某一个时间段内**各个地区（大区 / 省份 / 城市）的销售额分布/占比。
+   params: {{
+     "start":"YYYY-MM-DD","end":"YYYY-MM-DD",   ← **可以省略**：用户没说时间就别填（地区数据源可能没有日期列）
+     "dimension":"大区"|"省份"|"城市"|具体列名,   ← 只有用户**指明了**按哪个字段看时才填
+     "top_n": 整数(1-200)
+   }}
+   ★ 它的数据来自**用户导入的带地区字段的数据源**（内置数据集只有 Country）。
+   ★ 与 sales_breakdown_by_country 的分工（**别搞混**）：
+     问「国家 / 各国 / 国别」→ sales_breakdown_by_country（那是内置数据集的 Country）
+     问「地区 / 大区 / 区域 / 省份 / 城市 / 片区」→ sales_by_region
+     **绝对不许**用 regions 去命中国家，也不许用国家数据顶替地区。
+   ★ 地区这块**只做销售额分布**：问"各地区的退货率 / 客户数 / 订单数"一律 unsupported。
+9. unsupported   —— 问题涉及数据里不存在的维度/指标时用它。params: {{}}，并在 reason 里说明缺什么。
 
 **客户维度的边界（很容易答错，先看这条）**：
 - 数据里客户只有 **CustomerID（客户号）**。能做：成交次数、金额、购买频次、第一次/最后一次购买日期。
@@ -517,7 +602,7 @@ sales_compare 的 comparison_type 怎么选（**这一条最容易错，请严�
 - **没有「区域」「省份」「城市」「门店」「渠道」「销售员」「毛利」「成本」这些字段**
 - 用户问「华南/华东/大区/某省/某门店/毛利」这类 → 必须返回 unsupported，
   **绝对不许**用 Country（国家）或其它字段"代替"回答 —— 那是答非所问。
-  「国家」是合法维度（数据里有 Country），「区域」不是 —— 两者绝不可混。
+  「国家」是合法维度（数据里有 Country），「区域」不是 —— 两者绝不可混。{region_facts}
 - 「今天」以数据集最后一天 {last} 为基准（数据是历史数据，不是实时数据）。
 
 参数规则：
@@ -711,11 +796,60 @@ def _extract_json(raw: str) -> dict | None:
 # ════════════════════════════════════════════════════════════════════════
 # 代码硬闸门 + 关键词降级
 # ════════════════════════════════════════════════════════════════════════
+def region_dimension_words(text: str) -> list[str]:
+    """这句话是不是在「**按地区拆分**」？命中返回命中的维度词（否则空列表）。
+
+    判据两件事同时成立：
+      ① 出现**维度词**（地区/大区/区域/省份/城市/片区/分区/…）或「各/按/分+省|市」这类前缀写法；
+      ② 句子里**没有**具体地区值词（华南/华东/上海/北京…，见 `_REGION_VALUE_WORDS`）——
+         那是"挑某个地区"，不是"按地区分布"，本项目地区这块只做分布，那种问法照旧走
+         `_BANNED_DIMENSIONS`（明确说答不了），**绝不把整表数据端过去糊弄**。
+    """
+    if not text:
+        return []
+    if any(word in text for word in _REGION_VALUE_WORDS):
+        return []
+    hits = [word for word in _REGION_DIMENSION_WORDS if word in text]
+    if hits:
+        return hits
+    match = _REGION_PREFIX_RE.search(text)
+    return [match.group(0)] if match else []
+
+
+def region_asks_other_metric(text: str) -> bool:
+    """有地区词、但问的不是金额（退货率/客户数/订单数…）—— 地区这块只做销售额分布。"""
+    return any(word in text for word in _REGION_BLOCKERS)
+
+
+
 def guard_unsupported(question: str) -> ParsedIntent | None:
     """命中"数据里没有的维度"关键词 → 直接判 unsupported；否则 None。
 
     这是**代码**的判断，不是 LLM 的 —— 见文件顶部 _BANNED_DIMENSIONS 的说明。
+
+    ★ FR-008 的唯一改动在**入口处**：地区词先过一道"到底是哪种地区问题"的分流
+      （见 `region_dimension_words`）。`_BANNED_DIMENSIONS` 这张表本身一个字没动 ——
+      它的语义（"内置数据集没有这些列"）照旧管着**地区值词**（华南/华东/上海…）
+      与门店/渠道/销售员/毛利这些维度。
     """
+    # ── FR-008：地区维度分流（有带地区字段的数据源 → 放行给 sales_by_region）─────
+    region_hits = region_dimension_words(question)
+    if region_hits:
+        # 问的是"按地区看销售额分布"、并且库里有带地区字段的数据源 → 不拦，交给工具算
+        if region_source.available() and not region_asks_other_metric(question):
+            return None
+        if region_source.available():                 # 有地区数据源，但问的不是金额
+            reason = region_source.REGION_ONLY_SALES_REASON
+        else:                                         # 一个带地区字段的数据源都没有
+            reason = region_source.NO_REGION_REASON
+        return ParsedIntent(
+            intent=INTENT_UNSUPPORTED,
+            params={},
+            assumptions=(),
+            confidence=1.0,
+            reason=f"你问到了「{'/'.join(region_hits)}」。{reason}",
+        )
+
     lowered = question.lower()
     for keywords, reason in _BANNED_DIMENSIONS:
         # 中文词按原样匹配；ASCII 词（VIP / vip / VIP客户里的 VIP）**不区分大小写** ——
@@ -771,6 +905,35 @@ _COMPARE_WORDS = (
     "贡献", "推动", "造成", "拉动",
 )
 _COUNTRY_WORDS = ("国家", "各国", "国别", "按国家")
+
+# ── FR-008 地区维度词（**与上面的 _COUNTRY_WORDS 严格分工**）───────────────────
+# 分工是硬边界（施工指令 §三.1）：
+#   问「国家/各国」→ sales_breakdown_by_country（Legacy 冻结，一个字不动）
+#   问「地区/大区/城市/省份…」→ sales_by_region
+# 所以这里**不继承任何国家词**：`_COUNTRY_WORDS` 里没有一个词能进这张表，反之亦然。
+_REGION_DIMENSION_WORDS = ("地区", "大区", "区域", "片区", "分区", "省份", "城市", "地市", "区县")
+# 「各省 / 按市 / 分区域」这类**带分布意图的前缀**写法。裸的"广东省""上海市"不算 ——
+# 那是"挑某个值"（本项目地区这块只做分布，见 REGION_ONLY_SALES_REASON）。
+_REGION_PREFIX_RE = re.compile(
+    r"(?:各|按|分|每个|每|逐)\s*(?:省|市|县|区|地区|大区|区域|片区|分区|省份|城市|地市|区县)"
+)
+#: 已经是「某个具体地区」的值词（华南/华东/上海…）—— 命中就**不**当作"按地区分布"，
+#: 照旧走下面的 `_BANNED_DIMENSIONS`（"数据里没有这个地区/这个筛选"），不许拿整表数据糊过去。
+#: 直接**从冻结的 _BANNED_DIMENSIONS 派生**（不另抄一份值词表，免得两处漂移）；
+#: 排除掉纯粹的**维度词**（区域/省份/城市…）与单字"省/市/县/区"（它们既可能是维度也可能是值）。
+_REGION_VALUE_WORDS: tuple[str, ...] = tuple(
+    word
+    for keywords, _reason in _BANNED_DIMENSIONS
+    for word in keywords
+    if word not in _REGION_DIMENSION_WORDS and word not in ("省", "市", "县", "区")
+)
+#: 有地区词、但问的**不是金额**时，地区这块答不了（数据源里没有地区口径的退货/客户/订单数）。
+#: 这些词一出现就不把问题当成"按地区看销售额"——宁可明确拒绝，也不换一个指标回答。
+_REGION_BLOCKERS = (
+    "退货", "退款", "取消", "毛利", "利润", "成本", "折扣", "客户", "顾客", "买家",
+    "复购", "回购", "新客", "沉睡", "频次", "单价", "客单价", "销量", "销售量",
+    "数量", "件数", "订单数", "订单量", "多少单", "多少笔", "库存",
+)
 _ATTRIBUTION_WORDS = ("贡献", "推动", "造成", "拉动", "主要来自", "主要是谁", "哪些国家", "哪个国家")
 _PRODUCT_WORDS = ("产品", "商品", "货号", "编码", "SKU", "sku")
 _JOINER_RE = re.compile(r"[到至~～—－]")
@@ -1128,6 +1291,25 @@ def _top_n_from_text(text: str, default: int = 5) -> int:
     return default
 
 
+#: 只为让 `_clamp_to_data` **不生效**而用的宽边界 —— 地区数据源的时间范围与内置数据集无关，
+#: 拿内置数据集的边界去截"2019年3月"这种区间，会把用户问的范围悄悄改掉。
+_FAR_PAST = _dt.date(1900, 1, 1)
+
+
+def explicit_window_from_text(text: str) -> tuple[_dt.date | None, _dt.date | None, list[str]]:
+    """问句里**真的写了**日期才返回区间；没写就 `None, None`（地区问题不筛时间）。
+
+    为什么不能照搬其它 intent 的"没说就用数据集全区间"：地区数据源是**用户导入的**，
+    可能根本没有日期列 —— 硬塞一个内置数据集的区间进去，只会让 `region_query` 报
+    "这个数据源里没有日期列"（用户明明没问时间）。所以这里"没写=不筛"。
+    """
+    if not (_ISO_DATE_RE.search(text) or _CN_DATE_RE.search(text) or _MONTH_RE.search(text)):
+        return None, None, []
+    start, end, notes = _dates_from_text(text, _FAR_PAST, dataset_bounds()[1])
+    # 宽边界带来的"完全在数据集范围之外"那句在内置数据集语境下才成立，这里不适用 → 丢掉
+    return start, end, [note for note in notes if "完全在数据集范围" not in note]
+
+
 def parse_by_keywords(question: str) -> ParsedIntent | None:
     """无 LLM 时的降级解析：认日期 + 认几个关键词。
 
@@ -1153,6 +1335,22 @@ def parse_by_keywords(question: str) -> ParsedIntent | None:
             params={"start": start.isoformat(), "end": end.isoformat(),
                     "top_n": _top_n_from_text(text)},
             assumptions=tuple(notes),
+            confidence=0.5,
+        )
+
+    # ── ②″ FR-008：按地区看销售额（**排在国家之后**：问「各国家」的照旧走上面那条）──
+    # 词表分工见 `_REGION_DIMENSION_WORDS` 的注释；这里只认"按地区分布"的问法，
+    # 时间只在问句真的写了日期时才带上（见 `explicit_window_from_text`）。
+    if region_dimension_words(text) and not region_asks_other_metric(text):
+        window_start, window_end, window_notes = explicit_window_from_text(text)
+        return ParsedIntent(
+            intent=INTENT_SALES_BY_REGION,
+            params={
+                "start": window_start.isoformat() if window_start else None,
+                "end": window_end.isoformat() if window_end else None,
+                "top_n": _top_n_from_text(text, default=DEFAULT_REGION_TOP_N),
+            },
+            assumptions=tuple(window_notes) or ("问句里没有时间信息，按**不筛时间**处理（地区数据源未必有日期列）",),
             confidence=0.5,
         )
 
@@ -1389,6 +1587,7 @@ __all__ = [
     "INTENT_CUSTOMER_ANALYSIS",
     "INTENT_PRODUCT_ANALYSIS",
     "INTENT_SALES_BREAKDOWN_BY_COUNTRY",
+    "INTENT_SALES_BY_REGION",
     "INTENT_SALES_COMPARE",
     "INTENT_SALES_SUMMARY",
     "INTENT_SALES_TREND",
@@ -1400,6 +1599,7 @@ __all__ = [
     "CountryBreakdownParams",
     "CustomerAnalysisParams",
     "ProductAnalysisParams",
+    "RegionBreakdownParams",
     "SalesCompareParams",
     "SalesSummaryParams",
     "SalesTrendParams",
@@ -1409,9 +1609,12 @@ __all__ = [
     "enforce_comparison_semantics",
     "enforce_product_semantics",
     "enforce_report_semantics",
+    "explicit_window_from_text",
     "guard_unsupported",
     "looks_like_comparison",
     "parse",
     "parse_by_keywords",
+    "region_asks_other_metric",
+    "region_dimension_words",
     "system_prompt",
 ]

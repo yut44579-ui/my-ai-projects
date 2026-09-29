@@ -790,7 +790,13 @@ def test_多传字段回422():
 
 def test_能力端点如实披露数据边界():
     body = client.get("/api/chat/capabilities").json()
-    assert [item["name"] for item in body["intents"]] == list(intent_module.COMPUTE_INTENTS)
+    # ★ FR-008：地区分布只在**真的有带地区字段的数据源**时进清单；本用例的库里没有
+    #   （隔离环境，没导入过任何东西）→ 清单 = COMPUTE_INTENTS 去掉那一个。
+    assert [item["name"] for item in body["intents"]] == [
+        name for name in intent_module.COMPUTE_INTENTS
+        if name != intent_module.INTENT_SALES_BY_REGION
+    ]
+    assert "sales_by_region" not in [item["name"] for item in body["intents"]]
     assert body["data_profile"]["has_region_field"] is False
     assert "Country 代替区域" in body["unsupported"]["reason"]
     assert "configured" in body["llm"]
@@ -834,11 +840,12 @@ def test_AC08_app_ai里没有密钥字面量或提交痕迹():
     assert ".env" in ignored
 
 
-def test_AC08_工具白名单恰好七个且都在注册表里():
+def test_AC08_工具白名单恰好八个且都在注册表里():
     """白名单是**穷举**的：表外的东西一律调不动。
 
-    TASK-005 加两个（compare / country），TASK-006 再加两个（customer / product）——
-    每次加的都是**评审批准**的那几个，名字钉死在这里，多一个都进不来。
+    TASK-005 加两个（compare / country），TASK-006 再加两个（customer / product），
+    FR-008 加一个（sales_by_region，地区分布）—— 每次加的都是**评审批准**的那几个，
+    名字钉死在这里，多一个都进不来。
     """
     assert set(tools.TOOLS) == set(intent_module.COMPUTE_INTENTS)
     assert set(tools.TOOLS) == {
@@ -846,6 +853,8 @@ def test_AC08_工具白名单恰好七个且都在注册表里():
         "sales_compare", "sales_breakdown_by_country",
         # TASK-006：客户与商品各一个 Intent，内部用 operation 收口
         "customer_analysis", "product_analysis",
+        # FR-008：地区分布（数据来自带地区字段的**导入数据源**，与 Country 严格分工）
+        "sales_by_region",
     }
     with pytest.raises(KeyError):
         tools.run_tool("delete_everything", {})

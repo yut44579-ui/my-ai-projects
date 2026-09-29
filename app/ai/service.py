@@ -34,7 +34,17 @@ import dataclasses
 from typing import Any
 
 from app import state
-from app.ai import answer, arithmetic, general, intent as intent_module, llm, report, routing, tools
+from app.ai import (
+    answer,
+    arithmetic,
+    general,
+    intent as intent_module,
+    llm,
+    region_source,
+    report,
+    routing,
+    tools,
+)
 
 STATUS_OK = "ok"
 STATUS_DEGRADED = "degraded"
@@ -146,6 +156,27 @@ def _direct_notice(result: dict[str, Any], profile: dict[str, Any]) -> str:
     if notes:
         parts.append(str(notes[0]))
     return "".join(parts) + _boundary_note(profile)
+
+
+def _region_boundary_note(result: dict[str, Any], profile: dict[str, Any]) -> str:
+    """地区回答的边界提示：**说清这条结果用的是哪一份数据源**（FR-008 §三.3）。
+
+    为什么不套用 `_boundary_note(profile)`：那句话描述的是**内置数据集**（8 列、没有地区字段），
+    摆在一条"各地区销售额"的结果旁边等于自相矛盾 —— 用户会以为数字是从内置数据里算的。
+    这条结果来自导入的数据源，边界就得按那份数据源说，并且说清"没拿国家顶替"。
+    """
+    facts = result.get("facts") or {}
+    source = facts.get("source_dataset") or {}
+    window = facts.get("window") or {}
+    span = (
+        f"区间 {window['start']} ~ {window['end']}（含首尾全天）" if window else "未指定时间（按全部行统计）"
+    )
+    return (
+        f"数据源：**{source.get('name') or '（未知）'}** —— {source.get('rule') or ''}"
+        f"；{span}；按「{(facts.get('dimension') or {}).get('label')}」分组的销售额由程序算出"
+        f"（与「按地区查询」接口同一份实现），**没有拿 Country（国家）代替地区**。"
+        f"（内置示例数据集本身没有地区字段，所以这条结果不是从它算的。）"
+    )
 
 
 def _resolve_mode(route: routing.Route, parsed: intent_module.ParsedIntent) -> str:
@@ -351,6 +382,35 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
             route=_with_mode(route, routing.MODE_CLARIFY),
         )
 
+    # ── 地区维度用不了（没有带地区字段的数据源 / 维度名不对 / 多个维度要先澄清）──
+    # FR-008：这一支**不产出任何数字**，也绝不回退到"用国家凑一个"。
+    # 正常情况下 intent 的硬闸门已经拦在前面了；这里是竞态与边界（数据源刚被删、
+    # 维度名对不上、数据源有多个地区字段）时的**同一个诚实出口**。
+    if result.get("status") == "region_unavailable":
+        reason = str(result.get("reason") or region_source.NO_REGION_REASON)
+        payload = answer.compose(
+            question=question,
+            result=None,
+            llm_raw=None,
+            llm_used=False,
+            llm_error=llm_error,
+            unsupported_reason=reason,
+            profile=profile,
+        )
+        return _record(
+            question=question,
+            status=STATUS_UNSUPPORTED,
+            profile=profile,
+            parsed=parsed,
+            parse_info=parse_info,
+            params={key: (value.isoformat() if hasattr(value, "isoformat") else value)
+                    for key, value in params.items()},
+            answer_payload=payload,
+            llm_error=llm_error,
+            notice=f"数据不支持这个问题：{reason}",
+            route=_with_mode(route, routing.MODE_CLARIFY),
+        )
+
     # ── single-value 档（DATA_LOOKUP）：一个值就是全部答案，**不问 LLM** ────
     # 为什么这一档不问模型：问的是"11 月卖了多少"这种确定性事实，答案完整且唯一；
     # 让模型在事实之外再写一段【为什么】/【建议行动】，等于给一个单值问题硬加一段推断
@@ -408,6 +468,13 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
     )
 
     # ── 第 6 步：状态判定 + 落盘 ───────────────────────────────────────
+    # ★ FR-008：地区分布的边界要按**那份导入数据源**说，不能套内置数据集那句话
+    #   （内置数据集没有地区字段，套上去就成了一句与结果自相矛盾的边界说明）。
+    boundary = (
+        _region_boundary_note(result, profile)
+        if parsed.intent == intent_module.INTENT_SALES_BY_REGION
+        else _boundary_note(profile)
+    )
     if not llm_used:
         status = STATUS_DEGRADED
         # 括号里只写**给用户看的一句话**（llm.user_facing_error）：原因原样留在
@@ -415,18 +482,18 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
         notice = (
             f"结果由程序确定性计算得出；**本次没有可用的模型**"
             f"（{llm.user_facing_error(llm_error)}），【为什么】/【建议行动】由程序生成，不做推断。"
-            + _boundary_note(profile)
+            + boundary
         )
     elif not payload["guard"]["passed"]:
         status = STATUS_DEGRADED
         notice = (
             "结果由确定性计算得出；模型本轮写的内容里出现了**无法追溯到计算结果的数字"
             "或写错的币种**，已按「LLM 只负责组织语言、事实以确定性结果为准」的规则整段作废"
-            "（见 guard.violations / guard.currency_words）。" + _boundary_note(profile)
+            "（见 guard.violations / guard.currency_words）。" + boundary
         )
     else:
         status = STATUS_OK
-        notice = _boundary_note(profile)
+        notice = boundary
 
     return _record(
         question=question,
