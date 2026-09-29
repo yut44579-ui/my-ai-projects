@@ -619,3 +619,85 @@ def test_B1_出处清单一并落进回答里(env, tmp_path) -> None:
 
     text = unified_documents.get_text(record["answer"]["sources"][0]["document_id"])
     assert item["quote"].split("。")[0] in text, "出处清单里的引文必须能在原文里找到"
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ⑨ 复核时实测出来的两处"用户看得见"的话（数字必须对得上、省略必须说出来）
+#    ① 那份 12 页 PDF 一共 **115 段**，早先按"块数"说成"共 11 段"，
+#       后面列出来的编号却排到 91 —— 自己跟自己打架；
+#    ② 概览只讲前 3 份资料，第 4 份既不讲也不提，用户会以为库里就 3 份。
+# ════════════════════════════════════════════════════════════════════════
+def _paragraph_document(filename: str, spans: list[tuple[int, int]]) -> doc_index.Document:
+    """造一份"按段落定位"的资料（一个块横跨好几段，就是 PDF 那种形状）。"""
+    chunks = []
+    for number, end in spans:
+        chunks.append(doc_index.Chunk(
+            document_id="dp", filename=filename, position_kind=doc_index.POSITION_PARAGRAPH,
+            position_number=number, position_end=end, position_title="",
+            text=f"第 {number} 段到第 {end} 段的正文。", tf={"正文": 1},
+        ))
+    return doc_index.Document(
+        document_id="dp", filename=filename, title="", char_count=100, chunks=tuple(chunks),
+    )
+
+
+def test_B1_位置总数按编号终点算不按块数算() -> None:
+    """一份 11 块、编号排到 115 段的资料，说出来的总数必须是 115（实测那个 PDF 的形状）。"""
+    spans = [(1, 11), (12, 21), (22, 34), (35, 43), (44, 54), (55, 66),
+             (67, 78), (79, 91), (92, 103), (104, 110), (111, 115)]
+    document = _paragraph_document("AI游戏制作知识库.pdf", spans)
+    assert len(document.chunks) == 11
+    assert document.position_count == 115, "总数要按位置编号的终点算，不能数块数"
+
+
+def test_B1_节类资料的总数不受影响() -> None:
+    """Markdown（一节一块）本来就对：终点的引入不许把它改坏。"""
+    corpus = build_corpus({"游戏资料.md": GAME_DOC})
+    assert corpus.documents[0].position_count == 5
+
+
+def test_B1_资料清单列不下时说明还剩多少() -> None:
+    """"没有找到"时列的清单有上限，截断了就必须说还有多少（不许悄悄少列）。
+
+    13 个位置（1~3 / 4~6 / … / 37~39），每份最多列 8 条 → 这 8 条盖到第 24 段，
+    所以"没列出来"的必须是 39-24=15 段（按**编号**算，不是按"少列了 5 条"算）。
+    """
+    spans = [(index, index + 2) for index in range(1, 40, 3)]
+    document = _paragraph_document("长资料.pdf", spans)
+    text = doc_qa._catalog(doc_index.Corpus(documents=(document,), chunks=document.chunks,
+                                            df={}, average_length=1.0))
+    assert "共 39 段" in text
+    assert "还有 15 段没有列出来" in text, text
+
+
+def test_B1_概览里跨段资料没列出来多少也按编号算() -> None:
+    """概览同一处算术：列 8 条盖到第 91 段，剩的按 115-91 说，不说成 115-8。"""
+    spans = [(1, 11), (12, 21), (22, 34), (35, 43), (44, 54), (55, 66),
+             (67, 78), (79, 91), (92, 103), (104, 110), (111, 115)]
+    document = _paragraph_document("AI游戏制作知识库.pdf", spans)
+    corpus = doc_index.Corpus(documents=(document,), chunks=document.chunks,
+                              df={}, average_length=1.0)
+    text = doc_qa.answer_question("这个资料讲了什么？", corpus=corpus).text
+    assert "一共 115 段" in text
+    assert "还有 24 段没有列出来" in text, text
+
+
+def test_B1_概览没讲到的资料要点名说出来() -> None:
+    """库里 4 份、概览只讲前 3 份 → 第 4 份的文件名必须出现在回答里。"""
+    corpus = build_corpus({
+        "第一份.md": "# 一、甲\n甲的内容在这里。",
+        "第二份.md": "# 一、乙\n乙的内容在这里。",
+        "第三份.md": "# 一、丙\n丙的内容在这里。",
+        "第四份.md": "# 一、丁\n丁的内容在这里。",
+    })
+    answer = doc_qa.answer_question("这个资料讲了什么？", corpus=corpus)
+    assert answer is not None and answer.text
+    assert "第四份.md" in answer.text, "没讲的资料要点名说出来"
+    assert "还有 1 份没有讲" in answer.text
+
+
+def test_B1_概览讲全了就不加省略那句() -> None:
+    """3 份以内全讲到了，不能凭空冒出一句"还有 N 份没有讲"。"""
+    corpus = build_corpus({"甲.md": "# 一、甲\n甲的正文。", "乙.md": "# 一、乙\n乙的正文。"})
+    answer = doc_qa.answer_question("这个资料讲了什么？", corpus=corpus)
+    assert "没有讲" not in (answer.text or "")

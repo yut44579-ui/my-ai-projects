@@ -365,17 +365,37 @@ def _citation(chunk: doc_index.Chunk) -> str:
     return f"《{chunk.filename}》{position}"
 
 
+def _listed_positions(document: doc_index.Document, limit: int) -> list[tuple[str, str, str, int]]:
+    """`[(位置标识, 位置文字, 节标题, 这个位置的编号终点)]`，按正文顺序取前 `limit` 个。
+
+    为什么要带上"终点"：位置文字可能是一段区间（`第 1~11 段`）。只说"列了 8 条"，
+    用户没法知道这 8 条盖到第几段 —— 也就没法知道还剩多少（实测：那份 PDF 列 8 条盖到
+    第 91 段，"还有多少"必须算 115-91=24，不能算成 115-8=107）。
+    """
+    out: list[tuple[str, str, str, int]] = []
+    for key, label, title in document.positions()[:limit]:
+        chunk = document.first_chunk_of(key)
+        end = (chunk.position_end or chunk.position_number) if chunk else 0
+        out.append((key, label, title, end))
+    return out
+
+
 def _catalog(corpus: doc_index.Corpus, names: int = MAX_CATALOG_DOCUMENTS) -> str:
     """资料清单（"没有找到"时说明资料里实际有什么 —— **只报结构，不报内容猜测**）。"""
     lines: list[str] = []
     for document in corpus.documents[:names]:
-        titles = [
-            title or label
-            for _key, label, title in document.positions()[:MAX_CATALOG_TITLES]
-        ]
+        listed = _listed_positions(document, MAX_CATALOG_TITLES)
         unit = _unit_of(document)
         head = f"· 《{document.filename}》—— 共 {document.position_count} {unit}"
-        lines.append(f"{head}：{' / '.join(titles)}" if titles else head)
+        if not listed:
+            lines.append(head)
+            continue
+        tail = " / ".join(title or label for _key, label, title, _end in listed)
+        # 列到一半就断掉、又不说还剩下什么，用户会以为这份资料只有这些位置
+        hidden = document.position_count - listed[-1][3]
+        if hidden > 0:
+            tail += f" / …（还有 {hidden} {unit}没有列出来）"
+        lines.append(f"{head}：{tail}")
     return "\n".join(lines) if lines else "· （这次没有读到可检索的资料）"
 
 
@@ -396,14 +416,14 @@ def _overview_answer(corpus: doc_index.Corpus) -> DocAnswer:
     blocks: list[str] = []
     findings: list[dict[str, Any]] = []
     for document in corpus.documents[:MAX_OVERVIEW_DOCUMENTS]:
-        positions = document.positions()
+        listed = _listed_positions(document, MAX_OVERVIEW_SECTIONS)
         unit = _unit_of(document)
         if len(corpus.documents) == 1:
             head = f"你导入的《{document.filename}》一共 {document.position_count} {unit}，内容大致是这些："
         else:
             head = f"《{document.filename}》（共 {document.position_count} {unit}）："
         lines = [head, ""]
-        for index, (key, label, title) in enumerate(positions[:MAX_OVERVIEW_SECTIONS], start=1):
+        for index, (key, label, title, _end) in enumerate(listed, start=1):
             chunk = document.first_chunk_of(key)
             if chunk is None:
                 continue
@@ -416,10 +436,16 @@ def _overview_answer(corpus: doc_index.Corpus) -> DocAnswer:
                 "position": chunk.position_label, "position_title": chunk.position_title,
                 "quote": excerpt,
             })
-        if document.position_count > MAX_OVERVIEW_SECTIONS:
-            lines.append(f"（还有 {document.position_count - MAX_OVERVIEW_SECTIONS} {unit}没有列出来。）")
+        hidden = document.position_count - (listed[-1][3] if listed else 0)
+        if hidden > 0:
+            lines.append(f"（还有 {hidden} {unit}没有列出来。）")
         lines.append("")
         blocks.append("\n".join(lines).strip())
+    # 只讲前几份、又不提剩下的，等于让用户以为库里就这么点东西 —— 把没讲的点名说出来
+    rest = corpus.documents[MAX_OVERVIEW_DOCUMENTS:]
+    if rest:
+        names = "、".join(f"《{document.filename}》" for document in rest)
+        blocks.append(f"（这次先讲了前 {MAX_OVERVIEW_DOCUMENTS} 份，还有 {len(rest)} 份没有讲：{names}。）")
     text = "\n\n".join(blocks) + "\n\n" + QUOTE_FOOTER
     return DocAnswer(kind=KIND_ANSWER, title=TITLE_ANSWER, text=text, findings=tuple(findings))
 

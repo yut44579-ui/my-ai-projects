@@ -354,8 +354,11 @@ POST /api/exports/reveal    在资源管理器里定位**刚刚生成的那个�
 不加任何依赖（BM25 与分词都是标准库实现）——需求里"轻量检索、不引向量库"照办。
 
 **实测**：
-- 全量 `pytest`：**1130 passed / 0 failed**（1031.55s）。其中本次新增 **73 条**（61 + 12），
-  不含这两个文件时基线为 1057 条 —— 既有的 1057 条一条没改、一条没少。
+- 全量 `pytest`：**1136 条收集 / 1135 passed / 1 failed**（831.56s）。本次新增 **79 条**
+  （`test_fr010b_documents.py` 67 + `test_fr010b_b8.py` 12），不含这两个文件时基线为 1057 条
+  —— 既有的 1057 条一条没改、一条没少。**唯一那条 failed 是既有偶发，与本次改动无关**：
+  `tests/test_documents.py::test_records_are_relistable_and_detail_matches_upload` 的
+  「新的在前」断言（详见 §"偶发取证"）。
 - 真浏览器走查 `scripts/fr010b_documents_cdp.mjs`：**44 通过 / 0 失败**，全程无 JS 报错，
   9 张截图落 `outputs/_cdp_shots/fr010b_*.png`（含出处样式、警示态、属性保留、提示条）。
 - 注入防护：导入一份"命令式"资料前后，同一句销售问题的 facts / params **逐位相同**
@@ -363,6 +366,18 @@ POST /api/exports/reveal    在资源管理器里定位**刚刚生成的那个�
   计算意图清单 / 6 个文件的哈希）**完全一致** —— 资料改不了口径、权限与工具白名单。
 - 隔离：跑完全量测试与走查后，真实 `state/*`（最新 mtime 仍是 22:47:05）与真实
   `data/app.db`（mtime 仍是 18:28:00）**零改动**。
+
+**偶发取证**（那条 failed 是什么，不修测试、不许"顺手改绿"）：
+- 链路：`/api/documents` 上传两份文档 → 列表按 `_sort_key = (created_at, document_id)` 倒序。
+  而 `app/state.py` 的 `now_iso()` 精度是**秒** —— 同一秒上传的两份文档时间戳打平，
+  谁在前就由**随机 doc_id** 决定，于是「新的在前」这条断言约有一半概率翻车。
+- 取证脚本（`D:/Hermes/cache/fr010b/flaky取证.py`，**不动任何测试**）跑 20 遍：10 遍两份落在
+  同一秒，其中 **4 遍**顺序翻车；没打平的 10 遍**全部**顺序正确 —— 打平与翻车一一对应。
+- 干净 HEAD 口径：`git diff cc95c00 HEAD -- app/state.py app/repositories/json_repo.py` **为空**；
+  `unified_documents.py` 的改动只有标题读时修复，**不含** `_sort_key` / `now_iso` 任何一行。
+  即这条偶发在 FR-010-B 之前就存在（派单开头也记着"FR-010-A 全量 1056 passed / 1 flaky"）。
+- **没修**：改 `now_iso()` 精度或排序键属于既有链路的口径变更（TASK-003 / FR-009-A 的范围），
+  不在本次派单内 —— 如实记录，留给单独一张单子。
 
 ### 没做的（如实记录）
 

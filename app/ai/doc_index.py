@@ -268,8 +268,16 @@ class Document:
 
     @property
     def position_count(self) -> int:
-        """这份资料一共有几个"位置"（节 / 页 / 段）—— 概览回答要说"一共 N 节"。"""
-        return len({(chunk.position_kind, chunk.position_number) for chunk in self.chunks})
+        """这份资料一共有几个"位置"（节 / 页 / 段）—— 概览回答要说"一共 N 节"。
+
+        **不是"有多少块"**：一个块常常横跨好几个位置（`第 1~11 段`）。数块数会出现
+        "共 11 段"、紧跟着列出的编号却排到 115 段这种自相矛盾的话（实测于那份 12 页 PDF），
+        所以按**位置编号的终点**算总数。混着两种位置口径的资料（少见）退回数编号个数。
+        """
+        kinds = {chunk.position_kind for chunk in self.chunks}
+        if len(kinds) != 1:
+            return len({(chunk.position_kind, chunk.position_number) for chunk in self.chunks})
+        return max((chunk.position_end or chunk.position_number) for chunk in self.chunks)
 
     def positions(self) -> list[tuple[str, str, str]]:
         """`[(位置标识, 出处文字, 节标题)]`，按正文顺序（概览回答按它列）。"""
