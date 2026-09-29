@@ -25,11 +25,16 @@ intent 之后：先由本模块判出 6 个 intent 之一，再由 service 走�
 ════════════════════════════════════════════════════════════════════════
 【分类顺序冻结（顺序本身就是规格）】
 ════════════════════════════════════════════════════════════════════════
-    SYSTEM_HELP → ARITHMETIC → GENERAL_QA → REPORT_GENERATION
+    SYSTEM_HELP → CAPABILITY → ARITHMETIC → GENERAL_QA → REPORT_GENERATION
                 → DATA_LOOKUP → SALES_ANALYSIS → clarify
 
 为什么系统类/数学/概念要**排在销售前面**：业务关键词一旦先匹配，"1+1等于多少"这种句子
 里的 `多少` 就会把问题吞进销售链路 —— 这正是 FR-007 要修的那个洞。
+
+★ FR-010-A4 追加的 CAPABILITY（「你能查天气吗 / 帮我预测下个月能卖多少」）**必须**排在
+  销售之前，且理由与上面同源、但后果更严重：关键词规则会把"预测下个月能卖多少"当成
+  "卖了多少"，直接拿一个**已经发生的历史数字**冒充预测结果 —— 那不是"答得不好"，
+  是答了一个用户会当真的假结论。所以这类问题在计算之前就结束（见 `app.ai.capability`）。
 
 ★ 分类失败（什么都没匹配上）的默认行为是**澄清**，绝不默认 sales_summary：
   一句"今天天气怎么样"落进销售汇总，会得到一个看着像答案、其实答另一个问题的数字。
@@ -59,7 +64,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.ai import arithmetic
+from app.ai import arithmetic, system_info
 from app.ai.report import report_period
 
 # ════════════════════════════════════════════════════════════════════════
@@ -141,11 +146,15 @@ MODES_WITHOUT_SECTION_WHAT: tuple[str, ...] = (MODE_DIRECT, MODE_HELP, MODE_GENE
 _HELP_TOPICS = (
     "导出", "下载", "导入", "上传", "登录", "退出登录", "注册", "密码", "账号", "用户名",
     "帮助", "使用说明", "说明书", "教程", "怎么用", "操作", "设置", "功能", "界面", "页面",
-    "支持哪些", "支持什么", "能做什么", "能干什么", "你是谁",
+    "支持哪些", "支持什么", "能做什么", "能干什么", "你是谁", "你是什么",
 )
 _HELP_QUESTIONS = ("怎么", "如何", "怎样", "咋", "能不能", "可以吗", "在哪", "哪里", "去哪", "找不到", "忘了")
 # 「我的文件在哪」这类位置类问题（包含"周报/报告"字样，但它们不是在要一份新报告）
 _HELP_WHERE_NOUNS = ("文件", "报表", "周报", "月报", "报告", "产出", "导出", "下载", "记录", "历史", "数据")
+
+# FR-010-A3 的**系统元信息**判据（我导入的文件在哪 / 我导入了几份）不住在这里：
+# 它与"回答那一侧"必须同一处（`app.ai.system_info.is_meta_question`），
+# 否则早晚漂移成"判得出来却答不上来"。这里只 import 来用。
 
 # ── ARITHMETIC ────────────────────────────────────────────────────────
 # 识别逻辑在 arithmetic.py（受限 AST 计算器），这里只是"问一句"。
@@ -283,7 +292,7 @@ def _is_system_help(text: str) -> bool:
     if any(word in text for word in _HELP_QUESTIONS):
         return True
     # 光一个"帮助/使用说明"也算
-    return any(topic in text for topic in ("帮助", "使用说明", "说明书", "教程", "能做什么", "能干什么", "你是谁"))
+    return any(topic in text for topic in ("帮助", "使用说明", "说明书", "教程", "能做什么", "能干什么", "你是谁", "你是什么"))
 
 
 def _is_where_question(text: str) -> bool:
@@ -327,16 +336,25 @@ def _is_data_lookup(text: str) -> bool:
 def classify(question: str) -> Route:
     """一句话 → Route（intent + response_mode）。**纯代码，不碰数据。**
 
-    顺序是冻结的（见模块开头）：SYSTEM_HELP → ARITHMETIC → GENERAL_QA →
+    顺序是冻结的（见模块开头）：SYSTEM_HELP → CAPABILITY → ARITHMETIC → GENERAL_QA →
     REPORT_GENERATION → DATA_LOOKUP → SALES_ANALYSIS → clarify。
     """
     text = (question or "").strip()
     if not text:
         return Route(INTENT_CLARIFY, MODE_CLARIFY, reason="问题为空", confidence=1.0)
 
-    # ── ① 系统帮助（不碰销售数据）────────────────────────────────────
-    if _is_system_help(text) or _is_where_question(text):
+    # ── ① 系统帮助 / 系统元信息（都不碰销售数据）──────────────────────
+    # 元信息（FR-010-A3）与使用说明走**同一档**（help）—— 它们都是"关于系统自己"的问题，
+    # 只是前者要查真实记录、后者是静态文案（由 general.system_answer 分流）。
+    if _is_system_help(text) or _is_where_question(text) or system_info.is_meta_question(text):
         return Route(INTENT_SYSTEM_HELP, MODE_HELP, reason="问的是系统怎么用/文件在哪", confidence=0.9)
+
+    # ── ①′ 不具备的能力（FR-010-A4，**必须排在销售之前**：见模块开头）──────
+    if system_info.looks_like_capability_question(text):
+        return Route(
+            INTENT_SYSTEM_HELP, MODE_HELP,
+            reason="问的是我有没有某项能力（这项能力我没有）", confidence=0.9,
+        )
 
     # ── ② 算术（走受限 AST 计算器，不过 LLM 心算）─────────────────────
     if arithmetic.solve(text) is not None:

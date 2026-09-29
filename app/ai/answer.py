@@ -766,11 +766,16 @@ def compose_flat(
     text: str,
     source: str,
     title: str | None = None,
+    dashboard: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """direct / help / general 三档的**唯一**渲染入口：一段，且不带旧 SECTION_WHAT。
 
     `source` 是接口契约里的 deterministic | llm | system（给机器看）；
     分段自己的 `source` 只有 code | llm 两种取值（前端会把它显示成"程序生成/模型生成"）。
+
+    `dashboard`（FR-010-A1/A2）是**轻量看板**：它由 `app.ai.dashboard` 从确定性结果里搭好，
+    本函数只负责原样带出去。默认 None = 这一档没有看板（help / general / 算术都没有）——
+    前端只判空，不用去猜"这条该不该有看板"。
     """
     section_source = SOURCE_LLM if source == SOURCE_LLM else "code"
     section = _section(key, text, section_source, title=title)
@@ -780,6 +785,7 @@ def compose_flat(
         "guard": _flat_guard_report(),
         "export": None,
         "source": source,
+        "dashboard": dashboard,
     }
 
 
@@ -834,7 +840,12 @@ _DIRECT_LABEL_PREFIX: dict[str, str] = {
 
 
 def render_direct_text(result: dict[str, Any] | None, question: str) -> str:
-    """单值档的正文：**一句话，一个数**（带时间段与单位，不带指标表、不带推断）。"""
+    """单值档的正文：**一句话，一个数**（带时间段与单位，不带指标表、不带推断）。
+
+    ★ FR-010-A2：区间里**一行都没有**时不许把算出来的 0 当答案说出来 ——
+      那读起来就是"那天卖了 0 元"，而事实是"数据源当天没有交易行"。这两种说法
+      对用户的意义完全不同（一个是生意惨淡，一个是数据缺那一格），所以这里如实说缺。
+    """
     display = direct_display(result, question)
     if not display:
         return "本次没有算出可展示的结果。"
@@ -842,6 +853,13 @@ def render_direct_text(result: dict[str, Any] | None, question: str) -> str:
     params = (result or {}).get("params") or {}
     start, end = params.get("start"), params.get("end")
     period = f"{start} ~ {end} " if start and end else ""
+    facts = (result or {}).get("facts") or {}
+    if not int(facts.get("rows_in_range") or 0):
+        span = "这一天" if start and start == end else "这个区间"
+        return (
+            f"{period}{span}在数据里没有任何成交记录"
+            "（不是 0 元 —— 是数据源当天没有交易行）。"
+        )
     value = format_value(row.get("value"), str(row.get("format") or "auto"))
     unit = str(row.get("unit") or "")
     label = str(row.get("label") or "结果").split("（")[0]

@@ -1,9 +1,12 @@
-"""general.py · 非销售分支的两类回答：系统使用帮助 + 概念问答（FR-007）。
+"""general.py · 非销售分支的回答：系统使用帮助 + 概念问答 + 系统自身的问题（FR-007 / FR-010-A）。
 
 ════════════════════════════════════════════════════════════════════════
-【这个文件只做两件事，且**都不读业务数据**】
+【这个文件做三件事，且**都不读业务数据**】
 ════════════════════════════════════════════════════════════════════════
     SYSTEM_HELP  「怎么导出数据 / 我放的周报在哪里」→ 用**静态文案**回答"去哪儿点"
+    SYSTEM_SELF  「我刚刚导入的文件在哪 / 你是什么 / 你能查天气吗」（FR-010-A3/A4）→
+                 导入记录**查真实记录**、身份**一句话**、没有的能力**直接说没有**；
+                 判据与话术在 `app.ai.system_info`（本文件只做分发）
     GENERAL_QA   「什么是毛利率 / 你好」          → 解释概念；有模型就用模型，
                                                     没有模型就用内置词条，绝不编
 
@@ -14,6 +17,9 @@
 所以本文件**不 import** `tools` / `executor` / `loader` / `engine` —— 它连"能读到销售数据"
 这个能力都没有，更不可能"顺手查一下"。想在这里读数据，得先加一行 import，
 而那行 import 会被 tests/test_fr007_isolation.py 的调用图断言当场拦下。
+
+（FR-010-A3 的导入记录读的是**本机的导入流水与文档仓储**，不是销售数据 ——
+  `system_info` 因此也只 import `app.importer.*` / `app.repositories.*`，销售链路一个不碰。）
 
 （对比：靠提示词约束是"请求"，不是"保证"。模型完全可以一边说"我不查数据"，
   一边因为提示词里带了上下文而引用到昨天的数字。这道防线不能建立在模型的自律上。）
@@ -31,7 +37,7 @@ from __future__ import annotations
 
 import re
 
-from app.ai import llm
+from app.ai import llm, system_info
 
 # ════════════════════════════════════════════════════════════════════════
 # ① SYSTEM_HELP：系统怎么用（**静态文案**，一个数据字段都不引用）
@@ -112,6 +118,39 @@ def help_answer(question: str) -> tuple[str, str]:
             return title, "\n".join(lines)
     title, lines = _HELP_FALLBACK
     return title, "\n".join(lines)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ①′ FR-010-A3/A4：系统自身的问题（导入记录 / 身份 / 我没有的能力）
+#
+# 判据与话术都在 `app.ai.system_info` 一处（路由层也用同一个判据判路）——
+# 本函数只负责"先问它，问不出来再走上面那套静态使用说明"。
+# ════════════════════════════════════════════════════════════════════════
+def system_answer(question: str) -> tuple[str, str, str]:
+    """`SYSTEM_HELP` 档的**唯一**入口 → `(标题, 正文, 类别)`。
+
+    类别（`kind`）由调用方决定状态与提示语：
+        "meta" / "identity" / "capability"  见 `system_info.system_self_answer`
+        "help"                              既有的静态使用说明（怎么导出、怎么上传…）
+    """
+    got = system_info.system_self_answer(question)
+    if got is not None:
+        return got
+    title, text = help_answer(question)
+    return title, text, "help"
+
+
+def clarification_notice(question: str) -> str | None:
+    """路由判成「没听懂」（clarify）时，给用户看的那句话（**更诚实的那一句**）。
+
+    如果这个问题其实是在问一项**我没有的能力**（天气/预测），就直接说没有 ——
+    "我没有天气数据"比"我没听懂"更准确：我们不是没听懂，是真的没有那份数据。
+
+    返回 None = 不是这种情况，由调用方给通用的"没听懂"说明。
+    （记录形状一个字没动：status / 错误码 / 没有回答段 —— 那些是 FR-007 冻结的验收点。）
+    """
+    declined = system_info.decline_for(question)
+    return declined[1] if declined is not None else None
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -239,4 +278,10 @@ def _is_chitchat(text: str) -> bool:
     ))
 
 
-__all__ = ["extract_term", "general_answer", "help_answer"]
+__all__ = [
+    "clarification_notice",
+    "extract_term",
+    "general_answer",
+    "help_answer",
+    "system_answer",
+]

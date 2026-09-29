@@ -37,6 +37,7 @@ from app import state
 from app.ai import (
     answer,
     arithmetic,
+    dashboard,
     general,
     intent as intent_module,
     llm,
@@ -203,11 +204,21 @@ def _answer_non_sales(question: str, *, route: routing.Route, use_llm: bool) -> 
     `sales_data_accessed` 也必然是 False（tests/test_fr007_isolation.py 把它钉死）。
     """
     if route.intent == routing.INTENT_SYSTEM_HELP:
-        title, text = general.help_answer(question)
+        # ★ FR-010-A3/A4：这一档里现在有三种答案 —— 系统元信息（查真实记录）/ 身份（一句话）/
+        #   我没有的能力（明说没有）/ 既有的静态使用说明。**都是纯查表或静态文案，不碰销售数据。**
+        title, text, kind = general.system_answer(question)
         payload = answer.compose_flat(
             key=answer.SECTION_HELP, text=text, source=answer.SOURCE_SYSTEM, title=f"【{title}】"
         )
-        status, notice = STATUS_OK, "（这是系统使用说明 —— 本次没有读取你的销售数据。）"
+        if kind == "capability":
+            # 没有这项能力 → 状态是"我给不了"，而不是"系统出了问题"
+            status, notice = STATUS_UNSUPPORTED, "（这项能力我没有 —— 本次没有读取你的销售数据。）"
+        elif kind in ("meta", "identity"):
+            status = STATUS_OK
+            notice = "（这条回答来自你本机的导入记录 —— 本次没有读取你的销售数据。）" \
+                if kind == "meta" else "（这是关于我自己的说明 —— 本次没有读取你的销售数据。）"
+        else:
+            status, notice = STATUS_OK, "（这是系统使用说明 —— 本次没有读取你的销售数据。）"
     elif route.intent == routing.INTENT_ARITHMETIC:
         result = arithmetic.solve(question)
         text = result.render() if result is not None else "这道算式我没能识别出来。"
@@ -259,6 +270,27 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
     # ── 非销售分支：不读数据、不调销售工具（评审 GO 条件 4/6 + §六安全边界③④）──
     if route.intent in routing.NON_SALES_INTENTS:
         return _answer_non_sales(question, route=route, use_llm=use_llm)
+
+    # ── 澄清兜底（FR-010-A4/A5）：**同样不读销售数据** ──────────────────────
+    # 走到这里说明这句话既不是销售问题，也不是算术/概念/系统类 —— 没有任何工具能回答它。
+    # 以前这一支会先读一遍数据画像、再报一段又长又冷的"没听懂…该调哪个工具"；
+    # 现在：不读数据（没读就不该在记录里写画像），措辞里也不出现任何内部名词；
+    # 问的是"我没有的能力"（天气/预测）时直接说没有 —— 那比"没听懂"更准确。
+    #
+    # ★ 记录形状没动：仍是 status=error / intent_unparseable / 没有回答段
+    #   （tests/test_chat.py 与 tests/test_fr007_isolation.py 两条既有验收钉着它）。
+    if route.intent == routing.INTENT_CLARIFY and question:
+        message = intent_module.unparseable_message()
+        return _record(
+            question=question,
+            status=STATUS_ERROR,
+            profile=None,                            # 这一支一次都没读数据 → 不写画像
+            parse_info={"source": "routing", "fallback": None, "llm_error": None},
+            error={"code": "intent_unparseable", "message": message},
+            notice=general.clarification_notice(question) or f"没能解析这个问题：{message}",
+            route=route,
+            sales_data_accessed=False,
+        )
 
     profile = tools.dataset_profile()
 
@@ -420,10 +452,14 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
         single = answer.direct_display(result, question)          # 只留被问的那一行
         lean = dict(result)
         lean["display"] = single
+        # ★ FR-010-A1/A2：单值档配一张**轻量看板**（区间看板 / 单日看板）。
+        #   它只是把**同一份确定性结果**摆成卡片（外加几天趋势，也是同一套工具的产出），
+        #   不进分析档、不给推断与建议 —— "问题有多大，回答就做到多大"。
         payload = answer.compose_flat(
             key=answer.SECTION_ANSWER,
             text=answer.render_direct_text(lean, question),
             source=answer.SOURCE_DETERMINISTIC,
+            dashboard=dashboard.build(result=result, params=params),
         )
         return _record(
             question=question,

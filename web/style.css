@@ -673,6 +673,27 @@ button { font-family: inherit; }
   font-family: var(--font-mono, ui-monospace, "Cascadia Mono", Consolas, monospace);
   font-size: 12px; line-height: 1.75; color: var(--text-1); white-space: pre-wrap; word-break: break-word; }
 
+/* 轻量看板（FR-010-A1/A2）：单值回答下面的 KPI 卡片 + 最近几天小表。
+   卡片里没有的字段**不画**（后端不给就是没有）—— 这一层只负责排版，不造数、不补 0。 */
+.board { margin-top: 10px; border: 1px solid var(--border); border-radius: var(--td-radius-default);
+  background: var(--bg-inset); padding: 12px 14px; }
+.board-title { font-size: 12px; font-weight: 600; color: var(--text-1); margin-bottom: 8px; }
+.board-title-sub { margin-top: 14px; }
+.board-warning { border: 1px solid var(--warning); border-radius: var(--td-radius-default);
+  background: var(--td-warning-bg); color: var(--td-warning-color-text);
+  padding: 8px 10px; font-size: 12px; line-height: 1.7; margin-bottom: 10px; }
+.board-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.board-kpi { border: 1px solid var(--border); border-radius: var(--td-radius-default);
+  background: var(--bg-card); padding: 10px 12px; }
+.board-kpi-label { font-size: 11.5px; color: var(--text-2); }
+.board-kpi-value { font-size: 20px; font-weight: 700; letter-spacing: -.5px; margin-top: 2px;
+  font-variant-numeric: tabular-nums; }
+.board-kpi-unit { font-size: 12px; font-weight: 600; color: var(--text-2); margin-left: 2px; }
+.board-kpi-sub { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+.board-miss td { color: var(--text-3); font-style: italic; }
+.board-note { font-size: 11.5px; color: var(--text-2); margin-top: 8px; line-height: 1.7; }
+.board .table-wrap { margin-top: 0; border-radius: var(--td-radius-default); }
+
 /* 段落来源标签：一眼看出哪段是程序写的、哪段是模型写的（哪段是推断） */
 .src-tag {
   font-size: 10px; padding: 1px 7px; border-radius: var(--radius-pill);

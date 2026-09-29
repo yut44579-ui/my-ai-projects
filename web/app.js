@@ -1569,6 +1569,86 @@
     box.appendChild(wrap);
   }
 
+  // 轻量看板（FR-010-A1/A2）：KPI 卡片 + （单日看板才有的）最近几天小表 + 口径说明。
+  // ★ 后端没给的字段这里一个都不画：卡片数组是后端按"结果里真有这一行"挑出来的，
+  //   空数组就是空数组（比如"这一天没有任何成交记录"时后端不给卡片、只给一句如实说明）。
+  function dashboardPanel(board) {
+    const wrap = document.createElement("div");
+    wrap.className = "board";
+    if (board.title) {
+      const head = document.createElement("div");
+      head.className = "board-title";
+      head.textContent = board.title;
+      wrap.appendChild(head);
+    }
+    // 如实说明优先摆（"这一天没有任何成交记录"——不是 0 元）
+    if (board.warning) {
+      const warning = document.createElement("div");
+      warning.className = "board-warning";
+      warning.textContent = board.warning;
+      wrap.appendChild(warning);
+    }
+    const cards = board.cards || [];
+    if (cards.length) {
+      const kpis = document.createElement("div");
+      kpis.className = "board-kpis";
+      cards.forEach((card) => {
+        const box = document.createElement("div");
+        box.className = "board-kpi";
+        const label = document.createElement("div");
+        label.className = "board-kpi-label";
+        label.textContent = card.label || "";
+        box.appendChild(label);
+        const value = document.createElement("div");
+        value.className = "board-kpi-value";
+        value.textContent = fmtByStyle(card.value, card.format);
+        if (card.unit) {
+          const unit = document.createElement("span");
+          unit.className = "board-kpi-unit";
+          unit.textContent = card.unit;      // 单位来自后端（前端不写死币种）
+          value.appendChild(unit);
+        }
+        box.appendChild(value);
+        if (card.sub) {
+          const sub = document.createElement("div");
+          sub.className = "board-kpi-sub";
+          sub.textContent = card.sub;
+          box.appendChild(sub);
+        }
+        kpis.appendChild(box);
+      });
+      wrap.appendChild(kpis);
+    }
+    if (board.table) {
+      const title = document.createElement("div");
+      title.className = "board-title board-title-sub";
+      title.textContent = board.table.title || "";
+      wrap.appendChild(title);
+      const table = document.createElement("table");
+      table.className = "table";
+      const head = document.createElement("tr");
+      (board.table.headers || []).forEach((label, index) => {
+        const th = document.createElement("th");
+        th.textContent = label;
+        if (index) th.className = "num";
+        head.appendChild(th);
+      });
+      table.appendChild(head);
+      (board.table.rows || []).forEach((row) => {
+        const tr = document.createElement("tr");
+        if (row.miss) tr.className = "board-miss";
+        (row.cells || []).forEach((cellText, index) => cell(tr, cellText, index ? "num" : ""));
+        table.appendChild(tr);
+      });
+      const tableWrap = document.createElement("div");
+      tableWrap.className = "table-wrap";
+      tableWrap.appendChild(table);
+      wrap.appendChild(tableWrap);
+    }
+    (board.notes || []).forEach((note) => wrap.appendChild(line(note, "board-note")));
+    return wrap;
+  }
+
   function renderChatAnswer(payload) {
     const box = $("chat-answer");
     if (!box) return;
@@ -1608,6 +1688,9 @@
       wrap.appendChild(body);
       box.appendChild(wrap);
     });
+    // 轻量看板（FR-010-A1/A2）：单值档的卡片 / 表格**全部由后端给**（值、格式、单位、
+    // 每一个单元格的文字都是后端确定性结果里出来的）—— 前端只摆，不算。
+    if (payload.dashboard) box.appendChild(dashboardPanel(payload.dashboard));
   }
 
   // 报告面板：标题 + 文件名 + 预览（原文）+ 下载。

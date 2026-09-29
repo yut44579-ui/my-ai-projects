@@ -693,14 +693,7 @@ def parse(question: str, *, allow_llm: bool = True) -> tuple[ParsedIntent, dict[
         elif looks_like_comparison(question):
             raise _comparison_unparseable()
         else:
-            raise IntentError(
-                "intent_unparseable",
-                f"没听懂这个问题，也不知道该调哪个工具。当前支持："
-                f"①某时间段卖了多少 ②某时间段卖得怎么样（趋势） ③某时间段卖得最好的产品 "
-                f"④两个时间段比大小（含按国家/商品归因） ⑤某时间段各国销售额分布 "
-                f"⑥做一份周报/月报。"
-                f"（LLM 未能参与解析：{llm_error['message']}）",
-            )
+            raise IntentError("intent_unparseable", unparseable_message())
     # 同三道收口闸门（降级路径也要过，顺序与 LLM 路径一致）
     parsed = enforce_report_semantics(parsed, question)
     parsed = enforce_comparison_semantics(parsed, question)
@@ -1127,6 +1120,22 @@ def enforce_comparison_semantics(parsed: ParsedIntent, question: str) -> ParsedI
             f"代码已改走 sales_compare —— 把两个区间合并成一个区间求和会给出答非所问的数字）",
         )})
     raise _comparison_unparseable()
+
+
+def unparseable_message() -> str:
+    """「没听懂」那句话 —— **给用户看的**（FR-010-A5/A6）。
+
+    两条规矩都落在这句字面量上：
+      · 不出现内部名词：没有"工具""接口路径"，也不再写"该调哪个工具"（那是我们的实现细节）；
+      · 不绕弯子：先说没听懂，再一句话列出**我能做什么**，不铺垫、不道歉三大段。
+    数字一个都不含（`①…⑥` 是序号字符，不是阿拉伯数字）—— 这条既有验收点钉着。
+    """
+    return (
+        "没听懂这个问题 —— 它不属于我能回答的这几类："
+        "①某时间段卖了多少 ②某时间段卖得怎么样（趋势） ③某时间段卖得最好的产品 "
+        "④两个时间段比大小（含按国家/商品归因） ⑤某时间段各国销售额分布 ⑥做一份周报/月报。"
+        "（这次没有模型参与解析，只按规则匹配；匹配不上就说没听懂，不会猜。）"
+    )
 
 
 def _comparison_unparseable() -> IntentError:
@@ -1617,4 +1626,5 @@ __all__ = [
     "region_asks_other_metric",
     "region_dimension_words",
     "system_prompt",
+    "unparseable_message",
 ]

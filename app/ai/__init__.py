@@ -36,9 +36,25 @@
 
 from __future__ import annotations
 
-from app.ai import answer, arithmetic, general, intent, llm, routing, service, tools
+from app.ai import (
+    answer,
+    arithmetic,
+    dashboard,
+    general,
+    intent,
+    llm,
+    routing,
+    service,
+    system_info,
+    tools,
+)
 
 # ★ FR-007 的三个非销售模块与销售链路**平级**：
 #   routing（路由，纯代码）/ arithmetic（受限 AST 计算器）/ general（系统帮助 + 概念问答）
 #   —— 它们都在调销售工具**之前**结束分支，且 general 不 import tools（见 D24）。
-__all__ = ["answer", "arithmetic", "general", "intent", "llm", "routing", "service", "tools"]
+# ★ FR-010-A 追加两个：system_info（系统自身的问题：导入记录/身份/能力边界，同样不碰销售数据）
+#   与 dashboard（轻量看板：把**已有的**确定性结果摆成卡片，不新造任何口径）。
+__all__ = [
+    "answer", "arithmetic", "dashboard", "general", "intent", "llm",
+    "routing", "service", "system_info", "tools",
+]
