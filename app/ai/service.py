@@ -329,7 +329,13 @@ def _answer_non_sales(question: str, *, route: routing.Route, use_llm: bool) -> 
         #   它排在最前面判（与 routing 里那条分支同一个判据、同一个顺序）：
         #   "我导入的资料里都写了什么"这种句子两边都像（元信息 / 资料内容），
         #   而用户真的想要的显然是**内容**，不是"你导了几份记录"。
-        doc = doc_qa.answer_question(question)
+        #
+        # ★ FR-010-D：漏网的那一类（点名了资料、却没用"问内容"那套说法）也走同一个流程 ——
+        #   但**只在路由那一档真的是兜底档时**才越门（`route.fallback`）。
+        #   为什么不在这里重新判一遍：这一档还装着使用说明与元信息，而「怎么导入资料？」这种
+        #   问句同样"点了名资料、又没说问内容" —— 在这里重判就会把它抢答成资料内容（实测到过）。
+        #   判据仍然只有一份（`doc_qa.is_document_fallback`），这里是**听路由的结论**，不是重判。
+        doc = doc_qa.answer_question(question, fallback=route.fallback)
         if doc is not None:
             # 资料回答一律是**引用原文**（代码组织，没有模型参与）：来源标 deterministic。
             payload = answer.compose_flat(
@@ -473,17 +479,32 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
     # 现在：不读数据（没读就不该在记录里写画像），措辞里也不出现任何内部名词；
     # 问的是"我没有的能力"（天气/预测）时直接说没有 —— 那比"没听懂"更准确。
     #
-    # ★ 记录形状没动：仍是 status=error / intent_unparseable / 没有回答段
-    #   （tests/test_chat.py 与 tests/test_fr007_isolation.py 两条既有验收钉着它）。
+    # ★ 记录形状：status=error / intent_unparseable / 不写数据画像（tests/test_chat.py 与
+    #   tests/test_fr007_isolation.py 两条既有验收钉着这几条）。
+    #   ★ FR-010-D 修二起**多了一段回答正文**（与 notice 同一句话）—— 这一条是那一修
+    #   刻意改掉的旧形状（原来 `answer` 是 None，前端③区整块是空的），不是回归。
     if route.intent == routing.INTENT_CLARIFY and question:
         message = intent_module.unparseable_message()
+        # ★ FR-010-D 修二：澄清档**也要有正文**。
+        #   以前这一支只有 notice / error.message，`answer` 是 None —— 前端"③ 回答"那一块
+        #   于是整块空掉（`renderChatAnswer` 收到空 sections），用户只在上方的提示条里看到
+        #   一行很长的字。这里把**同一句话**原样放进回答正文（一个字不加、不另写一种说法、
+        #   也不写"请换个问法"这种绕弯子的话）—— 提示条（notice）保持现状不动。
+        #   状态与错误码一个字没动（status=error / intent_unparseable 仍是 FR-007 的验收点）。
+        notice = general.clarification_notice(question) or f"没能解析这个问题：{message}"
+        payload = answer.compose_flat(
+            key=answer.SECTION_ANSWER,
+            text=notice,
+            source=answer.SOURCE_DETERMINISTIC,      # 代码写的一句说明，没有模型参与
+        )
         return _record(
             question=question,
             status=STATUS_ERROR,
             profile=None,                            # 这一支一次都没读数据 → 不写画像
             parse_info={"source": "routing", "fallback": None, "llm_error": None},
             error={"code": "intent_unparseable", "message": message},
-            notice=general.clarification_notice(question) or f"没能解析这个问题：{message}",
+            answer_payload=payload,
+            notice=notice,
             route=route,
             sales_data_accessed=False,
         )

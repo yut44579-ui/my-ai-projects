@@ -143,6 +143,51 @@ def is_document_question(text: str) -> bool:
     return has_content_ask(question)
 
 
+def is_document_fallback(text: str) -> bool:
+    """★ FR-010-D 兜底判据：**点了名一份资料**，只是没用"问内容"那套说法（纯代码，不读数据）。
+
+    为什么要有这一条（Hermes 复验 B 时抓到的漏网，真实问法）：
+        「供应商与物流.md 里说成本会怎样？」「资料里说明年物流成本会怎样？」
+        这些句子**确实在问那份资料**，但措辞（"会怎样 / 如何 / 怎么变"）不在 `_CONTENT_ASKS` 里，
+        于是判据②把它们挡在外面 → 既不是资料问答，也没有任何别的档接得住 → 最后落进
+        「没听懂这个问题」的澄清档。**用户问资料，得到的却是"我没听懂"。**
+
+    为什么不放宽 `_CONTENT_ASKS` 让它们直接走 ①∧②：
+        那张表同时挡着「怎么导入资料」「我导入的文件在哪」这类**使用说明**（它们也点着"资料"）。
+        放宽就是把使用说明抢答成资料内容 —— 那正是当初加判据②的原因，不能拆。
+        所以这里的选择是"**允许进、但答不出要如实说没找到**"：进得来 ≠ 答得上，
+        检索仍然照实说"没有找到关于 X 的内容"（`NOT_FOUND_TEXT`），不比以前多说一个字。
+
+    与 `is_document_question` 的关系：那道是 ①∧②，这道是 ①∧¬② —— 两道合起来，
+    "指向一份资料"的问法就全都有着落了（②那种走既有入口，这一种走兜底）。
+
+    ★ 本判据**只做字符串判断**：库里有不有资料是另一件事（`has_documents()`），
+      由调用方（路由）把两件事合起来判断 —— 判据的"纯"与"要不要读一次语料"分得开，
+      回答那一侧才能在不读语料的前提下复用同一个判据。
+    """
+    question = (text or "").strip()
+    if not question:
+        return False
+    if not points_at_document(question):
+        return False
+    return not is_document_question(question)          # ①∧¬②：②那种走既有入口，这里只收漏网的
+
+
+def has_documents() -> bool:
+    """库里现在有没有**可检索的资料**（FR-010-D 兜底的另一个条件）。
+
+    为什么库为空时**不**兜底：没有资料可检索，"我在资料里没有找到"这句话无从谈起 ——
+    那不是"没找到"，而是"根本没有资料"。这时候既有路径（使用说明 / 澄清 / 元信息）里
+    本来就有更准确的说法，兜底只会把一句更差的话盖上去。
+
+    读不出来（本机存储暂时不可用）按"没有"处理，同样保持既有路径的原有说法。
+    """
+    try:
+        return bool(doc_index.load_corpus().documents)
+    except Exception:                                     # noqa: BLE001 —— 读不出来就是"这次没有"
+        return False
+
+
 def _is_overview(question: str) -> bool:
     """"这份资料讲了什么" —— 要分节列出来，而不是拿最像的那一段回答。"""
     return any(word in question for word in _OVERVIEW_ASKS)
@@ -573,12 +618,18 @@ def _empty_answer() -> DocAnswer:
     )
 
 
-def answer_question(question: str, *, corpus: doc_index.Corpus | None = None) -> DocAnswer | None:
+def answer_question(question: str, *, corpus: doc_index.Corpus | None = None,
+                    fallback: bool = False) -> DocAnswer | None:
     """资料类问题 → `DocAnswer`；**不是**资料类问题 → None（由别的分支回答）。
 
     纯代码：不调模型、不写记录、不改任何状态（记录由 `app.ai.service` 组装）。
+
+    `fallback=True`（★ FR-010-D）表示调用方已经判过"这是漏网的那一类"（点名了资料、
+    却没有用"问内容"那套说法，且库里有资料）—— 那就**越过判据②**照检索流程走：
+    命中就给带出处的回答，没命中就照 `NOT_FOUND_TEXT` 说没找到。
+    它不是"更宽的资料问答"，而是同一个流程的另一个入口 —— 检索、出处、四种出口一个字没改。
     """
-    if not is_document_question(question):
+    if not fallback and not is_document_question(question):
         return None
 
     corpus = corpus if corpus is not None else doc_index.load_corpus()
@@ -630,6 +681,8 @@ __all__ = [
     "best_sentences",
     "citation_of",
     "has_content_ask",
+    "has_documents",
+    "is_document_fallback",
     "is_document_question",
     "listed_positions",
     "overview_answer",

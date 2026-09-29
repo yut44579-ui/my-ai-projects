@@ -317,7 +317,11 @@ def test_AC02_解析不出来就明确报错不硬算(no_llm):
     assert record["error"]["code"] == "intent_unparseable"
     assert record["tool"] is None and record["facts"] is None
     assert "没听懂" in record["error"]["message"]
-    assert record["answer"] is None                       # 没有事实就没回答，不硬编一段
+    # ★ FR-010-D 修二起，这一档**有正文**了：正文就是提示条那句话（原来是 None，
+    #   前端"③ 回答"那一块整块空掉）。这里改的是**形状**，多了一句"我给不了"的说明，
+    #   不是编了一段内容 —— 状态与错误码一个字没动（上面四条断言照旧）。
+    assert [section["key"] for section in record["answer"]["sections"]] == ["answer"]
+    assert record["answer"]["text"] == record["notice"]
     assert "1" not in record["notice"].replace("TASK-004", "")  # 提示里不夹带任何数字
 
 

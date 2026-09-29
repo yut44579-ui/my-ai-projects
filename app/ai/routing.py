@@ -27,7 +27,8 @@ intent 之后：先由本模块判出 intent 之一，再由 service 走对应�
 【分类顺序冻结（顺序本身就是规格）】
 ════════════════════════════════════════════════════════════════════════
     JOINT(DOC+DATA) → SYSTEM_HELP → CAPABILITY → ARITHMETIC → GENERAL_QA
-                    → REPORT_GENERATION → DATA_LOOKUP → SALES_ANALYSIS → clarify
+                    → REPORT_GENERATION → DATA_LOOKUP → SALES_ANALYSIS
+                    → ★资料兜底(FR-010-D) → clarify
 
 ★ FR-010-C 把 **JOINT（资料+销售数据联合分析）** 加在**最前面**，理由是它"两边都要读"：
   它既可能带着"资料"（会被 SYSTEM_HELP/DOC 抢走），也可能带着"分析/趋势"（会被
@@ -60,10 +61,17 @@ intent 之后：先由本模块判出 intent 之一，再由 service 走对应�
 这是"把老问题换个名字"的那条歧路的分界：`多少` 只是一个必要条件，不是判据。
 
 ════════════════════════════════════════════════════════════════════════
-【本模块是纯代码，不碰数据、不调模型】
+【本模块是纯代码，不碰**销售**数据、不调模型】
 ════════════════════════════════════════════════════════════════════════
-`classify()` 只做字符串判断：不读数据文件、不调 LLM、不查数据库。
-这样它才能被"非销售分支不许碰销售数据"的测试直接钉住（见 tests/test_fr007_isolation.py）。
+`classify()` 只做字符串判断：不调 LLM、**不读一行销售数据**、不建 DataFrame、不算任何指标。
+这样它才能被"非销售分支不许碰销售数据"的测试直接钉住（见 tests/test_fr007_isolation.py：
+那份测试把读数据的入口全换成炸弹，本模块一旦碰了就会当场炸出来）。
+
+★ 唯一的例外写在明处（FR-010-D）：最后那一档兜底要问一句"**库里有没有资料可检索**"
+  （`doc_qa.has_documents()`，读的是资料语料，与销售数据无关）。它**只在前面所有档都没接住**
+  时才走到 —— 也就是本来就要落进 clarify 的那些问题；换句话说，**销售问题的判路上没有多这一步**。
+  这一条是"资料兜底没有意义就不做"的必要条件，不是新判据：判据本身（`doc_qa.is_document_fallback`）
+  仍然是纯字符串判断。
 """
 
 from __future__ import annotations
@@ -271,6 +279,14 @@ class Route:
     reason: str = ""
     confidence: float = 0.0
     source: str = "code"          # 分类器是纯代码；这个字段留痕用
+    #: ★ FR-010-D：这条路是不是**"点名了资料就兜底检索"**那一档判出来的。
+    #: 为什么必须把它带下去：兜底档与"使用说明 / 元信息"**共用 help 档**
+    #: （intent 都是 system_help、mode 都是 help）—— 光看 intent，回答侧分不出
+    #: 「怎么导入资料？」（使用说明，①那一档早就判走了）与「供应商与物流.md 里说成本会怎样？」
+    #: （兜底）。回答侧若只看 intent 就去检索，**使用说明会被抢答成资料内容**
+    #: （施工中实测到过：那条问句被答成"资料里没有找到关于「怎么导入」的内容"）。
+    #: 所以"这次是从哪一档来的"必须跟着路由结论一起传下去，不能让回答侧再猜一遍。
+    fallback: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -279,6 +295,8 @@ class Route:
             "reason": self.reason,
             "confidence": self.confidence,
             "source": self.source,
+            # FR-010-D 追加（机器可读）：这次的 help 档是"静态使用说明"还是"资料检索兜底"。
+            "fallback": self.fallback,
         }
 
     def to_intent_dict(self) -> dict[str, object]:
@@ -430,7 +448,25 @@ def classify(question: str) -> Route:
     if _has_sales_signal(text) or _is_change_over_time(text):
         return Route(INTENT_SALES_ANALYSIS, MODE_ANALYSIS, reason="这是销售分析类问题", confidence=0.6)
 
-    # ── ⑦ 兜底：澄清（**绝不默认 sales_summary**）────────────────────
+    # ── ⑦ ★ FR-010-D 兜底：**点名了资料**就按资料检索回答（排在 clarify 之前）──
+    # 由来：Hermes 复验 FR-010-B 时用自造素材抓到 —— 「供应商与物流.md 里说成本会怎样？」
+    # 这类问法确实在问那份资料，但措辞不在 B 的 `_CONTENT_ASKS` 里，于是①∧②判不成，
+    # 一路掉到"没听懂这个问题"的澄清档：**用户问资料，却被回了"我没听懂"**。
+    # 这里补的就是这一段路的最后一道出口（判据见 `doc_qa.is_document_fallback`）：
+    #   · 用户点名/提到了资料（「资料 / 文档 / 报告…」或书名号、带后缀的文件名）；
+    #   · 并且库里**确实有可检索的资料** —— 没有资料可检索时兜底无意义，保持既有澄清；
+    #   · 命中 → 与既有资料问答**完全同样**的带出处回答；没命中 → "没有找到" + 列库。
+    # ★ 为什么不在这里放宽 `_CONTENT_ASKS`：那张表同时挡着「怎么导入资料」这类使用说明
+    #   （它们也点着"资料"）—— 放宽就是把使用说明抢答成资料内容，那是当初加判据②的原因。
+    #   这里的取舍是"允许进、但答不出要如实说没找到"。
+    # ★ 为什么排在销售各档**之后**：前面每一档都比它更具体（销售/报告/概念/算术/使用说明
+    #   都已经各归各位），只有**所有档都没接住**、又确实点着资料的问题才轮到它。
+    if doc_qa.is_document_fallback(text) and doc_qa.has_documents():
+        return Route(INTENT_SYSTEM_HELP, MODE_HELP,
+                     reason="点名了资料 —— 按资料检索回答（没命中就如实说资料里没有）",
+                     confidence=0.7, fallback=True)
+
+    # ── ⑧ 兜底：澄清（**绝不默认 sales_summary**）────────────────────
     return Route(
         INTENT_CLARIFY,
         MODE_CLARIFY,
