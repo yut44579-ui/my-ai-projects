@@ -538,13 +538,24 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
 
     llm_error = parse_info.get("llm_error")
 
-    # ── ★ FR-012 组 4：路由判它是**单值**问题，解析却说"答不了" ────────────
+    # ── ★ FR-012 组 4：路由判它是**单值**问题，**模型**却说"答不了" ──────────
     # 路由的 direct 判据（单值语义 + 业务实体 + 时间/维度，且不含分析/排行信号）成立，
-    # 说明用户问的确实是"一个数"；这时若解析回了 unsupported，而按**既有降级路径**
+    # 说明用户问的确实是"一个数"；这时若**模型**回了 unsupported，而按**既有降级路径**
     # 这条问题本该落到 sales_summary（销售额 / 订单数 / 客户数 / 客单价 都在它的产出里），
     # 就按它答 —— 数字仍由 `tools.sales_summary` 算，这里一个新口径都没有。
+    #
+    # ★ FR-014 回归修复：`source == "llm"` 这个前提**必须有**。
+    #   8b7a8ce 那版只看"路由判它是单值"，于是「华南区上个月卖了多少？」被
+    #   `guard_unsupported` 判成 unsupported 之后，又被这里救成 sales_summary ——
+    #   **硬闸门被兜底盖住了**，用户拿到一个用 Country 顶替地区算出来的数字（7 条用例转红）。
+    #   为什么这一个条件就够（不是"少写了一道闸门"）：
+    #   `parse()` 里 `guard_unsupported` 排在最前且**命中即返回**（source="guard"），
+    #   `parse_by_keywords` 则**从来不产** INTENT_UNSUPPORTED（它认不出只返回 None）；
+    #   所以 source 不是 "llm" 时，这里根本不该有"模型误判"可救 —— 直接落到下面的
+    #   unsupported 分支如实拒绝。**代码闸门永远压过兜底**，这条不依赖 parse() 的内部顺序。
     if parsed.intent == intent_module.INTENT_UNSUPPORTED \
-            and route.response_mode == routing.MODE_DIRECT:
+            and route.response_mode == routing.MODE_DIRECT \
+            and parse_info.get("source") == "llm":
         rescued = intent_module.rescue_summary_intent(question)
         if rescued is not None:
             parsed = rescued.model_copy(update={
