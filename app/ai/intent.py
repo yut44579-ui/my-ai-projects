@@ -507,7 +507,7 @@ def system_prompt() -> str:
 
 可用 intent 只有下面这 9 个，多一个都不许编（**没有 sales_attribution / customer_top / product_return
 这类 intent** —— "归因"是 sales_compare 的参数字段，客户与商品各只有一个 intent、用 operation 区分）：
-1. sales_summary —— 问某时间段的销售额/订单数/客户数。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}}
+1. sales_summary —— 问某时间段的销售额/订单数/客户数/客单价（客单价 = 销售额 ÷ 订单数，**由程序算**）。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD"}}
 2. sales_trend   —— 问某时间段按日或按周的趋势走势。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","granularity":"day"|"week"}}
 3. top_products  —— 问某时间段卖得最好的产品排行。params: {{"start":"YYYY-MM-DD","end":"YYYY-MM-DD","top_n":整数(1-20)}}
 4. sales_compare —— 问**两个时间段之间**的差别/变化/增减/对比，或问"变化主要是谁造成的"。
@@ -1590,6 +1590,27 @@ def _next_month_start(year: int, month: int) -> _dt.date:
     return _dt.date(year + 1, 1, 1) if month == 12 else _dt.date(year, month + 1, 1)
 
 
+def rescue_summary_intent(question: str) -> ParsedIntent | None:
+    """模型说"答不了"，但按**既有降级路径**这条问题明明能落到 `sales_summary` → 返回那份解析。
+
+    ★ FR-012 组 4（真实事故）：问「2011年11月的客单价是多少」，模型在提示词里没看到"客单价"
+    这一项，于是回了 unsupported —— 用户收到"数据不支持这个问题"，而 `tools.sales_summary`
+    早就在算客单价（`facts.avg_order_amount`），数字一直都在。
+
+    这里**不新写取数逻辑、也不自己算**：拿到的就是 `parse_by_keywords`（既有降级路径）的产物，
+    数字仍然来自同一个白名单工具。调用方（`service.ask`）还会加一道前提 —— **路由已经判过
+    这条问题是"单值"**（单值语义 + 业务实体 + 时间/维度，且不含分析/排行信号），
+    所以不会把"各客户的客单价"这类多行问题抢成单值汇总。
+    """
+    try:
+        parsed = parse_by_keywords((question or "").strip())
+    except Exception:                                     # noqa: BLE001 —— 兜底路径出岔子就保持"答不了"
+        return None
+    if parsed is None or parsed.intent != INTENT_SALES_SUMMARY:
+        return None
+    return parsed
+
+
 __all__ = [
     "ALL_INTENTS",
     "COMPUTE_INTENTS",
@@ -1625,6 +1646,7 @@ __all__ = [
     "parse_by_keywords",
     "region_asks_other_metric",
     "region_dimension_words",
+    "rescue_summary_intent",
     "system_prompt",
     "unparseable_message",
 ]

@@ -79,7 +79,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.ai import arithmetic, doc_qa, joint, system_info
+from app.ai import arithmetic, doc_qa, general, joint, system_info
 from app.ai.report import report_period
 
 # ════════════════════════════════════════════════════════════════════════
@@ -190,6 +190,18 @@ _HELP_TOPICS = (
     "支持哪些", "支持什么", "能做什么", "能干什么", "你是谁", "你是什么",
 )
 _HELP_QUESTIONS = ("怎么", "如何", "怎样", "咋", "能不能", "可以吗", "在哪", "哪里", "去哪", "找不到", "忘了")
+
+# ★ FR-012 组 1：**能力清单**的自然说法（"你能够做什么 / 你能帮我干什么 / 你会什么 / 支持哪些文件格式"）。
+# 为什么单独一张表：这几句问的是"你能干什么"，指向的就是既有的**能力清单文案**
+# （`general._HELP_BLOCKS` 里"这个系统能做什么"那一段 / fallback 那段），不是新档位、也不读销售数据。
+# 它们原先落进澄清档（status=error，"没听懂这个问题"）—— 用户问"你能干什么"却被告知没听懂，
+# 是这一档里观感最差的漏网。逐条收全，而不是放宽成"能/做/什么"这种组合式判据。
+_CAPABILITY_ASKS: tuple[str, ...] = (
+    "能做什么", "能干什么", "能够做什么", "能做啥",
+    "能帮我做什么", "能帮我干什么", "你会什么", "会做什么",
+    "有什么功能", "有哪些功能", "能做哪些事", "能做的事",
+    "支持哪些文件格式", "支持哪些格式", "支持什么格式", "支持哪些文件",
+)
 # 「我的文件在哪」这类位置类问题（包含"周报/报告"字样，但它们不是在要一份新报告）
 _HELP_WHERE_NOUNS = ("文件", "报表", "周报", "月报", "报告", "产出", "导出", "下载", "记录", "历史", "数据")
 
@@ -201,16 +213,10 @@ _HELP_WHERE_NOUNS = ("文件", "报表", "周报", "月报", "报告", "产出",
 # 识别逻辑在 arithmetic.py（受限 AST 计算器），这里只是"问一句"。
 
 # ── GENERAL_QA：概念/定义类问题（不碰销售数据）────────────────────────
-_GENERAL_PATTERNS = (
-    "什么是", "是什么意思", "是啥意思", "指的是什么", "指什么", "怎么理解", "如何理解",
-    "解释一下", "解释下", "的定义", "什么概念", "有什么用", "干什么用的", "为什么叫",
-)
-# 概念问句里**不该出现**的东西：一出现就说明用户在问数据，不是问概念
-_GENERAL_BLOCKERS = (
-    "最", "排行", "排名", "哪些", "哪个", "多少", "几", "趋势", "对比", "比较", "占比",
-    "月", "年", "周", "今天", "昨天", "最近", "本期", "上期", "报表", "数据", "导出", "下载",
-)
-_GENERAL_TERM_RE = re.compile(r"(?:什么是|是什么意思|指的是什么|怎么理解|如何理解|解释一下|解释下)(.{1,16})[？?。！!,，]?$")
+# ★ FR-012 组 3：词表与正则**搬到 `app.ai.general` 一处**（`CONCEPT_PATTERNS` /
+#   `CONCEPT_BLOCKERS` / `is_concept_question`）—— 路由判路与那边抠词共用同一份，
+#   两处各抄一份的代价实测过：「毛利率是什么意思」这种**后缀式**说法一边认得出、一边认不出，
+#   于是判得出来却答不上来（或者反过来）。这里只 import 来用。
 
 # ── REPORT_GENERATION ────────────────────────────────────────────────
 # 「这句话是不是要一份报告」的判据**复用 report.report_period()**（TASK-010 已冻结），
@@ -334,16 +340,18 @@ def _is_change_over_time(text: str) -> bool:
 
 
 def _is_system_help(text: str) -> bool:
-    """系统怎么用 / 文件在哪 —— **不碰销售数据**的那一类。"""
-    if not any(topic in text for topic in _HELP_TOPICS):
+    """系统怎么用 / 文件在哪 / 你能干什么 —— **不碰销售数据**的那一类。"""
+    if not any(topic in text for topic in (*_HELP_TOPICS, *_CAPABILITY_ASKS)):
         return False
     # 有明确销售实体、又在问数的（"11月销售额怎么算"），不算系统帮助
     if _has_sales_signal(text) and any(word in text for word in ("卖了多少", "销售额是多少")):
         return False
     if any(word in text for word in _HELP_QUESTIONS):
         return True
-    # 光一个"帮助/使用说明"也算
-    return any(topic in text for topic in ("帮助", "使用说明", "说明书", "教程", "能做什么", "能干什么", "你是谁", "你是什么"))
+    # 光一个"帮助/使用说明"也算；★ FR-012 组 1：`_CAPABILITY_ASKS` 里那几句同样指向能力清单
+    if any(topic in text for topic in ("帮助", "使用说明", "说明书", "教程", "你是谁", "你是什么")):
+        return True
+    return any(ask in text for ask in _CAPABILITY_ASKS)
 
 
 def _is_where_question(text: str) -> bool:
@@ -354,19 +362,15 @@ def _is_where_question(text: str) -> bool:
 
 
 def _is_general_qa(text: str) -> bool:
-    """概念/定义类问题（"什么是毛利率"）与闲聊（"你好"）—— 都不读当前业务数据。"""
+    """概念/定义类问题（"什么是毛利率" / "毛利率是什么意思"）与闲聊（"你好"）—— 都不读当前业务数据。
+
+    概念那半的判据**只有一处**（`general.is_concept_question`）：它要求"抠得出那个词"
+    且句子里没有"最/多少/11月/数据"这类**问数据**的信号 —— 所以「2011年11月的毛利是多少」
+    照旧走不到这里（被"月"挡住），不会把问数据的句子抢成概念说明。
+    """
     if _CHITCHAT_RE.match(text):
         return True
-    match = _GENERAL_TERM_RE.search(text)
-    if not match:
-        return False
-    term = match.group(1).strip()
-    if not term:
-        return False
-    # 概念问句里带"最/排行/多少/11月"这类词 → 用户在问数据，不是问概念
-    if any(blocker in text for blocker in _GENERAL_BLOCKERS):
-        return False
-    return True
+    return general.is_concept_question(text)
 
 
 def _is_data_lookup(text: str) -> bool:

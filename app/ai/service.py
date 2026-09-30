@@ -538,6 +538,22 @@ def ask(question: str, *, use_llm: bool = True) -> dict[str, Any]:
 
     llm_error = parse_info.get("llm_error")
 
+    # ── ★ FR-012 组 4：路由判它是**单值**问题，解析却说"答不了" ────────────
+    # 路由的 direct 判据（单值语义 + 业务实体 + 时间/维度，且不含分析/排行信号）成立，
+    # 说明用户问的确实是"一个数"；这时若解析回了 unsupported，而按**既有降级路径**
+    # 这条问题本该落到 sales_summary（销售额 / 订单数 / 客户数 / 客单价 都在它的产出里），
+    # 就按它答 —— 数字仍由 `tools.sales_summary` 算，这里一个新口径都没有。
+    if parsed.intent == intent_module.INTENT_UNSUPPORTED \
+            and route.response_mode == routing.MODE_DIRECT:
+        rescued = intent_module.rescue_summary_intent(question)
+        if rescued is not None:
+            parsed = rescued.model_copy(update={
+                "assumptions": tuple(rescued.assumptions) + (
+                    "（解析器原本给的是 unsupported；这个问题按既有口径就是 sales_summary "
+                    "能答的单值问题 —— 代码已改走它，数字仍来自同一个确定性工具）",
+                ),
+            })
+
     # ── 数据不支持的维度：不计算，如实说明（AC-03）──────────────────────
     if parsed.intent == intent_module.INTENT_UNSUPPORTED:
         payload = answer.compose(

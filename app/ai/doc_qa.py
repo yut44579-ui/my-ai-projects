@@ -140,6 +140,14 @@ def is_document_question(text: str) -> bool:
         return False
     if not points_at_document(question):
         return False
+    # ★ FR-012 组 2：**整库清单**的问法（"我有哪些资料 / 资料里写了哪些内容"）不由本模块回答 ——
+    #   它问的是"我的资料有哪些"（元信息：真实文件名与条数），由 `system_info` 查 FR-009-A 的
+    #   统一文档仓储列出。为什么必须在这里让路：回答侧 `doc_qa.answer_question` 排在元信息**之前**，
+    #   不让路就会拿"检索某一段"去回答"我有哪些资料"——实测回的是"没有找到关于「我有」的内容"，
+    #   而紧接着屏幕上又列着资料（同一段话自相矛盾）。
+    from app.ai import system_info                       # 局部 import：与 `_empty_answer` 同一做法
+    if system_info.is_catalog_question(question):
+        return False
     return has_content_ask(question)
 
 

@@ -78,6 +78,18 @@ _META_ASK_WORDS: tuple[str, ...] = (
 _META_ASK_WORDS_SELF: tuple[str, ...] = ("什么", "哪些", "哪些文件", "啥", "什么时候")
 _SELF_WORDS: tuple[str, ...] = ("我", "我的", "自己")
 
+# ★ FR-012 组 2：**资料清单**的问法（"我有哪些资料 / 我导入过什么资料 / 资料里写了哪些内容"）。
+# 与"我导入了几份"是同一件事（都在问**我的记录里有什么**），只是没提"导入/上传"两个字，
+# 所以走这个单独的入口 —— 判据在这里，回答仍在同一个 `import_records_answer`（一处判、一处答）。
+# 为什么逐条收全而不是放宽成"资料 + 哪些"：那样会把「资料里有哪些渠道」这类**问内容**的
+# 检索问题抢成清单（答非所问，也是 FR-010-B 资料问答的既有地盘）。
+_CATALOG_ASKS: tuple[str, ...] = (
+    "有哪些资料", "有什么资料", "哪些资料", "资料清单", "资料列表", "资料目录",
+    "所有资料", "全部资料", "资料都有什么", "都有什么资料",
+    "导入过什么资料", "导入过哪些资料", "导入了哪些资料", "导入的资料有哪些",
+    "资料里写了哪些内容", "资料里有哪些内容", "资料都有哪些内容",
+)
+
 # ── A3：身份 ──────────────────────────────────────────────────────────
 #: 「你是什么」这类问法 —— 一句话能答完，**不展开十几项能力**
 _IDENTITY_WORDS: tuple[str, ...] = (
@@ -155,6 +167,11 @@ IDENTITY_LINE = (
 
 RECORDS_TITLE = "你导入的资料"
 
+# ★ FR-012 组 2：资料清单一次最多列几行 / 列完之后那句话
+#（"可以用上面的名字再问一次"这句取自既有的 `doc_qa.MISSING_FILE_TEXT`，不另写一套说法）
+CATALOG_MAX_DOCUMENTS = 50
+CATALOG_TAIL = "想看其中哪一份的内容，可以用上面的名字再问一次。"
+
 #: 一份导入记录都没查到（**真的空库**，不是"没读到"）
 NO_RECORDS = (
     "还没有导入过任何资料。在「数据管理」页点上传，把 {formats} 拖进去就行 —— "
@@ -174,6 +191,18 @@ _STATUS_LABELS: dict[str, str] = {
 }
 
 
+def is_catalog_question(text: str) -> bool:
+    """「我有哪些资料 / 我导入过什么资料 / 资料里写了哪些内容」——**整库清单**（★ FR-012 组 2）。
+
+    它问的是"我的记录里有什么"（要看**真实文件名与条数**），与"我导入了几份"是同一类，
+    所以判据也归这里；不为它单开档位、也不在别处再抄一份词表。
+    """
+    question = (text or "").strip()
+    if not question:
+        return False
+    return any(ask in question for ask in _CATALOG_ASKS)
+
+
 def is_meta_question(text: str) -> bool:
     """「我刚刚导入的文件在哪里 / 我导入了几份文件」——**系统元信息**（A3）。
 
@@ -182,8 +211,13 @@ def is_meta_question(text: str) -> bool:
       · 记录类词（刚刚/最新/几份/在哪…）单独出现就够；
       · 指代不明的「什么/哪些」必须配第一人称 —— 否则「上传支持哪些格式」这种
         **问能力**的问题会被抢答成"你还没有导入过任何资料"。
+
+    ★ FR-012 组 2：**资料清单**的问法（`is_catalog_question`）也算元信息 ——
+      它们没提"导入/上传"两个字，但问的是同一件事（我的记录里有什么）。
     """
     question = (text or "").strip()
+    if is_catalog_question(question):
+        return True
     if not any(word in question for word in _META_TOPIC_WORDS):
         return False
     if any(word in question for word in _META_ASK_WORDS):
@@ -267,8 +301,13 @@ def _read_imports(limit: int = 50) -> dict[str, Any] | None:
     except Exception:                                     # noqa: BLE001 —— 读不出来就是读不出来
         return None
     document_total: int | None
+    documents: list[dict[str, Any]] | None = None
     try:
-        _page, document_total, _notes = unified_documents.list_documents(limit=1, offset=0)
+        # ★ FR-012 组 2：这里顺带把**文档列表**取回来（同一次调用，不另写取数逻辑）——
+        #   "我有哪些资料"要的是真实文件名与条数，`total` 一个数字答不了它。
+        documents, document_total, _notes = unified_documents.list_documents(
+            limit=CATALOG_MAX_DOCUMENTS, offset=0
+        )
     except Exception:                                     # noqa: BLE001
         document_total = None
     return {
@@ -277,6 +316,7 @@ def _read_imports(limit: int = 50) -> dict[str, Any] | None:
         "char_counts": char_counts,
         "row_counts": row_counts,
         "document_total": document_total,
+        "documents": documents,
     }
 
 
@@ -332,6 +372,51 @@ def _describe(record: dict[str, Any], overview: dict[str, Any]) -> str:
     return f"最近一条导入记录是《{filename}》，{_status_text(record)}（{when}）。"
 
 
+def _catalog_line(record: dict[str, Any]) -> str:
+    """清单里的一行：`· 《文件名》—— 12,345 字`（字数取不到就只写文件名，不编）。"""
+    name = str(record.get("filename") or "（没有文件名）")
+    chars = record.get("char_count")
+    if isinstance(chars, int) and chars > 0:
+        return f"· 《{name}》—— {chars:,} 字"
+    return f"· 《{name}》"
+
+
+def catalog_answer(question: str) -> tuple[str, str] | None:
+    """「我有哪些资料 / 我导入过什么资料 / 资料里写了哪些内容」→ 列出**真实文件名与条数**。
+
+    ★ FR-012 组 2。取数复用 FR-009-A 的统一文档仓储（就是 `_read_imports` 里那一次
+      `unified_documents.list_documents`），格式化复用 A3 既有的 `《文件名》` 那一套 ——
+      不另写取数逻辑、也不另起一套版式（`import_records_answer` 用的就是同一份 `《》` 写法）。
+
+    三种情形分开说（与 A3 同一条诚实底线，一句都不许混）：
+        · 库里真的没有资料 → 那句既有的"还没有导入过任何资料"+ 怎么导入（`NO_RECORDS`）
+        · 列表这次读不出来 → 明说是"这次没读到"（`RECORDS_UNAVAILABLE`），**不说成"你没有资料"**
+        · 有资料           → 逐份列出真实文件名与条数
+    """
+    if not is_catalog_question(question):
+        return None
+
+    overview = _read_imports()
+    if overview is None:
+        return RECORDS_TITLE, RECORDS_UNAVAILABLE
+
+    documents = overview.get("documents") or []
+    if not documents:
+        if overview.get("document_total") is None:
+            # 列表读不出来（文档仓储降级）≠ 没有资料 —— 与 A3 同一条规矩
+            return RECORDS_TITLE, RECORDS_UNAVAILABLE
+        return RECORDS_TITLE, NO_RECORDS.format(formats=format_labels())
+
+    total = overview.get("document_total")
+    head = f"库里的文档资料共 {total} 份：" if isinstance(total, int) else "库里现在有这些文档资料："
+    lines = [head]
+    lines += [_catalog_line(record) for record in documents]
+    if isinstance(total, int) and total > len(documents):
+        lines.append(f"（还有 {total - len(documents)} 份没有列出来。）")
+    lines.append(CATALOG_TAIL)
+    return RECORDS_TITLE, "\n".join(lines)
+
+
 def import_records_answer(question: str) -> tuple[str, str] | None:
     """「我刚刚导入的文件在哪里 / 我导入了几份文件 / 我最新导入了什么」→ **查真实记录**再答。
 
@@ -378,6 +463,9 @@ def system_self_answer(question: str) -> tuple[str, str, str] | None:
     None = 不是这三类，由 `general.system_answer` 继续往下判（使用说明 / 概念问答）。
     """
     for kind, builder in (
+        # ★ FR-012 组 2：清单类（"我有哪些资料"）排在"最近一条导入记录"之前 ——
+        #   同一个词表（`_CATALOG_ASKS`）判出来的问法，要的是**清单**，不是"最新那条"。
+        ("meta", catalog_answer),
         ("meta", import_records_answer),
         ("identity", identity_answer),
     ):
@@ -393,6 +481,8 @@ def system_self_answer(question: str) -> tuple[str, str, str] | None:
 
 
 __all__ = [
+    "CATALOG_MAX_DOCUMENTS",
+    "CATALOG_TAIL",
     "DECLINES",
     "IDENTITY_LINE",
     "IDENTITY_TITLE",
@@ -403,10 +493,12 @@ __all__ = [
     "RECORDS_UNAVAILABLE",
     "WEATHER_DECLINE",
     "WEATHER_WORDS",
+    "catalog_answer",
     "decline_for",
     "format_labels",
     "identity_answer",
     "import_records_answer",
+    "is_catalog_question",
     "is_identity_question",
     "is_meta_question",
     "looks_like_capability_question",
