@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -132,8 +133,195 @@ def extract_docx(path: Path) -> dict:
     }
 
 
+def _clean_page(page_text: str) -> str:
+    """一页的逐行清理（原 extract_pdf 里的那两行，抽出来给主路径和兜底路径共用）。"""
+    return "\n".join(part for part in (_clean(line) for line in page_text.splitlines()) if part)
+
+
+# ── FR-013 兜底解码 ─────────────────────────────────────────────────────
+# 有些中文 PDF（PPT 导出）用 /Type0 + /Encoding /UniGB-UTF16-H 字体，**不带 ToUnicode 表**。
+# pypdf 的 page.extract_text() 走自己的 cmap 解码时会把 2 字节 UTF-16 的字节对齐搞坏
+# （高位字节丢成 NUL），正文变成 "\x00A\x00I\x00 …" 这副样子。
+# 兜底做法：用 pypdf 自己的 ContentStream 取出**原始字符串字节**，按 UTF-16BE 解。
+#
+# ★ 两道闸门（两道都过才替换，缺一不可）——这是"正常 PDF 一个字不变"的保证：
+#   闸门① _looks_broken  只有结果**确实可疑**才去试兜底（正常 PDF 连试都不试）
+#   闸门② _is_better_text 兜底结果必须**确实更干净**才被采用（误进兜底也换不掉原文）
+_FALLBACK_WARNING = "该 PDF 字体为 Type0/UniGB-UTF16-H 且无 ToUnicode 表，已用 UTF-16 兜底解码"
+
+# 闸门①的阈值：NUL 是"UTF-16 高位字节被丢掉"的指纹，一条就够定案
+_BROKEN_CTRL_RATIO = 0.02        # 替换符 + 控制字符（不含 \n \t \r）占比超过这个数 → 可疑
+_BROKEN_MIN_CHARS = 60           # 短于这个长度的页不走"中文占比"那条判据（短标题页容易误伤）
+_BROKEN_NON_ASCII_RATIO = 0.30   # 非 ASCII 占比够高……
+_BROKEN_CJK_RATIO = 0.10         # ……但中文占比极低 → 是乱码（正常中文 PDF 恰好相反）
+
+# 闸门②的阈值：两边都没有脏字符时，要求中文"成倍变多"才算更好（乱码页解码后中文是成倍出现的）
+_CJK_GAIN_FACTOR = 2.0
+_CJK_GAIN_ABS = 20
+
+_CTRL_KEEP = "\n\t\r"            # 这三种控制字符是正常排版换行，不算"脏"
+_STRIP_FOR_COUNT = re.compile(r"\s+")
+
+# 内容流里"换了行/新起一段"的定位算符（BT 起一个文本块，其余四个改文本基线）
+_LINE_OPS = (b"Tm", b"Td", b"TD", b"T*", b"BT")
+
+
+def _cjk_count(text: str) -> int:
+    """中文（基本区）字符数 —— 判"解码对不对"最直接的指标。"""
+    return sum(1 for char in text if "一" <= char <= "鿿")
+
+
+# "正常正文该有的字符"白名单（ASCII 可见字符 / 中文 / 中英标点 / 全角符号 / 常见排版符号）。
+# 白名单**故意收得紧**：解错的 UTF-16 会散落到西里尔、谚文、注音、CJK 扩展 A 等一堆
+# 互不相干的区段里，那些全在名单外 —— 这正是 `_junk_count` 能认出乱码的原因。
+_SANE_RANGES = (
+    (0x20, 0x7E), (0xA5, 0xA5), (0xB0, 0xB0), (0xB7, 0xB7), (0xD7, 0xD7),
+    (0x2010, 0x2027), (0x2030, 0x205E), (0x2190, 0x2199),
+    (0x3000, 0x303F), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF),
+)
+
+
+def _junk_count(text: str) -> int:
+    """数"不像正文"的字符（白名单之外的全算）—— 比较两段解码谁更像正文用。
+
+    只用来**相对比较**（同一段字节的两种解法谁更干净），不设绝对阈值：
+    解对了的一段 junk 为 0，解错的一段必然散落一堆冷门区段字符，比出来的结果很稳。
+    """
+    return sum(
+        1 for char in text
+        if char not in "\n\t\r" and not any(low <= ord(char) <= high for low, high in _SANE_RANGES)
+    )
+
+
+
+def _looks_broken(text: str) -> bool:
+    """闸门①：这段提取结果是不是**可疑乱码**。
+
+    三条判据（命中任意一条即可疑），全部只在"真像乱码"时才成立：
+        1. 含 NUL                       —— UTF-16 高位字节被丢掉的指纹（本缺陷的实测指纹）
+        2. 替换符/控制字符占比超阈值      —— 解码失败的直接证据
+        3. 非 ASCII 一大堆但中文几乎没有  —— latin-1 式的乱码（第 1、2 条都抓不到它）
+    正常 PDF（含正常中文 PDF）三条都不命中：没有 NUL、没有替换符、中文占比高。
+    """
+    if "\x00" in text:
+        return True
+
+    compact = _STRIP_FOR_COUNT.sub("", text)
+    total = len(compact)
+    if total == 0:
+        return False
+
+    dirty = sum(
+        1 for char in compact
+        if char == "�" or (char not in _CTRL_KEEP and unicodedata.category(char) == "Cc")
+    )
+    if dirty / total > _BROKEN_CTRL_RATIO:
+        return True
+
+    if total >= _BROKEN_MIN_CHARS:
+        non_ascii = sum(1 for char in compact if ord(char) > 127)
+        if non_ascii / total > _BROKEN_NON_ASCII_RATIO and _cjk_count(compact) / non_ascii < _BROKEN_CJK_RATIO:
+            return True
+    return False
+
+
+def _raw_text_chunks(page: Any, reader: Any) -> str:
+    """取出这一页所有"文本显示"算符里的字符串（**绕过 pypdf 的字体 cmap 解码**）。
+
+    覆盖四个算符：Tj / ' / " 各取一个字符串，TJ 取数组里的每一段。
+    两种字符串形态都要接 —— 同一份 PDF 里两种会**混着出现**（实测这份就是），
+    它们其实是同一批 UTF-16 字节的两种写法：
+
+        · 十六进制串 <…>  → pypdf 原样给 bytes：**连续的 bytes 攒在一起**再整段按 UTF-16BE 解
+          （必须整段解：逐段解会破坏 2 字节码元的对齐 —— 那正是本缺陷的成因）
+        · 字面串 (…)      → pypdf 自己先解过一道，解对了也解错了（实测两种都有）：
+          它留着 `original_bytes` 这个原始字节，所以按这份字节重新解一遍，
+          再用 `_junk_count` **逐段比一下谁更像正文**，谁干净用谁（一样干净就保持 pypdf 的解）
+    """
+    from pypdf.generic import ContentStream
+
+    contents = page.get_contents()
+    if contents is None:
+        return ""
+
+    pieces: list[str] = []
+    pending = bytearray()                       # 攒连续的 bytes；遇到字面串或走到头再整段解
+    for operands, operator in ContentStream(contents, reader).operations:
+        if operator in _LINE_OPS:
+            # 定位算符 = 这一页自己认定的"换了一行/新起一段"。只有攒到的字节是**偶数个**时才断行：
+            #   断行绝不能以切坏 2 字节码元为代价（宁可少一个换行，也不能把字解错）。
+            if pending and len(pending) % 2 == 0:
+                pieces.append(_decode_utf16(bytes(pending)))
+                pending.clear()
+            if pieces and not pending and pieces[-1] != "\n":
+                pieces.append("\n")
+            continue
+        if operator in (b"Tj", b"'", b'"'):
+            candidates = list(operands)
+        elif operator == b"TJ":
+            candidates = [item for operand in operands if isinstance(operand, (list, tuple)) for item in operand]
+        else:
+            continue
+        for candidate in candidates:
+            if isinstance(candidate, (bytes, bytearray)):
+                pending += candidate
+                continue
+            if not isinstance(candidate, str):
+                continue
+            if pending:                         # 先结算攒着的字节，顺序才不乱
+                pieces.append(_decode_utf16(bytes(pending)))
+                pending.clear()
+            original = getattr(candidate, "original_bytes", b"") or b""
+            decoded = _decode_utf16(bytes(original)) if original else ""
+            pieces.append(decoded if _junk_count(decoded) < _junk_count(candidate) else candidate)
+    if pending:
+        pieces.append(_decode_utf16(bytes(pending)))
+    return "".join(pieces)
+
+
+def _decode_utf16(raw: bytes) -> str:
+    """原始字节按 UTF-16BE 解（解不动就留替换符 —— 那会让它在闸门②里落选，不会被当成好结果）。"""
+    return raw.decode("utf-16-be", errors="replace")
+
+
+def _utf16_fallback(page: Any, reader: Any) -> str:
+    """这一页按上面的办法重解一遍（拿不到就返回空串，交给闸门②判）。"""
+    try:
+        return _raw_text_chunks(page, reader)
+    except Exception:                              # noqa: BLE001 —— 兜底自己坏了不该让整份文档失败
+        return ""
+
+
+def _is_better_text(original: str, candidate: str) -> bool:
+    """闸门②：兜底结果是否**明显更干净**（只有它更好才准替换）。
+
+    主判据：脏字符（NUL + 替换符）**严格变少**。
+    ★ 这一条就是"正常 PDF 不受影响"的硬保证：正常页的脏字符数是 0，
+      **不可能有谁严格少于 0** —— 所以正常页哪怕被闸门①误判、白跑一趟兜底，
+      也一定原样保留（下面那条中文成倍变多的补充判据也要求候选没有脏字符）。
+    """
+    if not candidate.strip():
+        return False
+
+    dirty_before = original.count("\x00") + original.count("�")
+    dirty_after = candidate.count("\x00") + candidate.count("�")
+    cjk_before = _cjk_count(original)
+    cjk_after = _cjk_count(candidate)
+
+    if dirty_after < dirty_before:
+        return cjk_after >= cjk_before          # 更干净了，但中文不许变少
+    if dirty_before == 0 and dirty_after == 0:
+        # 两边都没有脏字符（latin-1 式的乱码页）→ 要求中文成倍变多，且绝对量说得过去
+        return cjk_after >= _CJK_GAIN_ABS and cjk_after >= _CJK_GAIN_FACTOR * cjk_before
+    return False
+
+
 def extract_pdf(path: Path) -> dict:
-    """读 pdf：逐页 extract_text；提不出字的页如实记进 warnings。"""
+    """读 pdf：逐页 extract_text；提不出字的页如实记进 warnings。
+
+    提取结果"可疑"的页（见 `_looks_broken`）会再走一遍 UTF-16 兜底解码（FR-013）：
+    兜底确实更好就采用并写 warning，没更好就保留原结果、同样如实写 warning（绝不静默吞掉）。
+    """
     from pypdf import PdfReader
 
     try:
@@ -145,13 +333,24 @@ def extract_pdf(path: Path) -> dict:
     pages: list[str] = []
     empty_pages: list[int] = []
     broken_pages: list[int] = []
+    rescued_pages: list[int] = []                  # 兜底解码成功、正文已换掉的页
+    suspect_pages: list[int] = []                  # 可疑且兜底也没救回来的页（正文仍是原样）
     for index, page in enumerate(reader.pages, start=1):
         try:
             page_text = page.extract_text() or ""
         except Exception:                          # noqa: BLE001 —— 单页坏了不该毁掉整份文档
             page_text = ""
             broken_pages.append(index)
-        cleaned = "\n".join(part for part in (_clean(line) for line in page_text.splitlines()) if part)
+        cleaned = _clean_page(page_text)
+
+        if _looks_broken(cleaned):
+            decoded = _clean_page(_utf16_fallback(page, reader))
+            if _is_better_text(cleaned, decoded):
+                cleaned = decoded
+                rescued_pages.append(index)
+            else:
+                suspect_pages.append(index)
+
         if not cleaned:
             empty_pages.append(index)
         pages.append(cleaned)
@@ -159,6 +358,13 @@ def extract_pdf(path: Path) -> dict:
     warnings: list[str] = []
     if broken_pages:
         warnings.append(f"第 {broken_pages} 页解析报错，内容已跳过（原文件可能有损坏页）")
+    if rescued_pages:
+        warnings.append(f"第 {rescued_pages} 页{_FALLBACK_WARNING}")
+    if suspect_pages:
+        warnings.append(
+            f"第 {suspect_pages} 页提取出的文字可疑（含 NUL/控制字符或中文占比异常），"
+            "UTF-16 兜底解码没能给出更好的结果 —— 这些页的文字可能不可靠，引用前请核对原文"
+        )
     if empty_pages:
         warnings.append(
             f"第 {empty_pages} 页没有可提取文本（共 {page_count} 页），"
