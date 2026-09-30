@@ -774,14 +774,79 @@ def test_健康检查仍报十二端点与任务号():
 
 
 def test_业务表不碰冻结资产(tmp_path):
-    """A-12 的另一半：engine 层文件在本次改动里未被修改（内容哈希比对 HEAD）。"""
+    """A-12 的另一半：engine 层文件在本次改动里未被修改（内容比对 HEAD）。
+
+    FR-011① 的**声明式例外**（决策记录见 docs/DECISIONS.md）：
+      · metrics.py / executor.py / renderer.py —— 仍然逐字节比对，一个字都不许动；
+      · loader.py —— 只允许"读 Excel → DataFrame"这一步落盘缓存，且守卫**不降级**：
+          ① HEAD 里已有的每个函数/顶层常量，正文必须逐字节相同，**只有 `load_raw` 例外**
+             （它改成调 `_read_frame`）；任何"在别处偷改一行"仍会被抓出来；
+          ② 新增的顶层名字必须落在下面声明过的缓存助手名单里，**不许夹带新行为**；
+          ③ HEAD 里的顶层常量（EXPECTED_SHA256 / EXPECTED_SHAPE / PARSE_DATES 等口径）
+             必须逐字节不变 —— 改口径常量同样会被抓出来。
+    """
+    import ast
     import subprocess
 
-    for path in ("app/engine/metrics.py", "app/engine/executor.py",
-                 "app/engine/renderer.py", "app/engine/loader.py"):
-        head = subprocess.run(["git", "show", f"HEAD:{path}"], capture_output=True, cwd=str(PROJECT_ROOT))
-        current = (PROJECT_ROOT / path).read_bytes()
-        assert head.stdout.replace(b"\r\n", b"\n") == current.replace(b"\r\n", b"\n"), f"{path} 被改过了"
+    def _head_text(p: str) -> str:
+        out = subprocess.run(["git", "show", f"HEAD:{p}"], capture_output=True, cwd=str(PROJECT_ROOT))
+        return out.stdout.decode("utf-8").replace("\r\n", "\n")
+
+    def _now_text(p: str) -> str:
+        return (PROJECT_ROOT / p).read_text(encoding="utf-8").replace("\r\n", "\n")
+
+    # ① 其余三个冻结文件：逐字节比对（原样，不放宽）
+    for path in ("app/engine/metrics.py", "app/engine/executor.py", "app/engine/renderer.py"):
+        assert _head_text(path) == _now_text(path), f"{path} 被改过了"
+
+    # ② loader.py：只放行声明过的那一处
+    ALLOWED_CHANGED = {"load_raw"}          # 唯一允许正文变化的既有函数
+    ALLOWED_NEW = {                          # 唯一允许新增的顶层名字（FR-011① 的缓存助手）
+        "_cache_disabled", "_cache_dir", "_cache_paths", "_index_signature", "_cache_meta",
+        "_read_from_cache", "_write_to_cache", "_read_frame", "_say",
+        "_CACHE_FORMAT_VERSION", "_CACHE_ENV", "_STATE_DIR_ENV", "_CACHE_SUBDIR",
+        "_CACHE_PREFIX", "_READ_ENGINE", "_PARSE_FINGERPRINT",
+    }
+    path = "app/engine/loader.py"
+    old_src, new_src = _head_text(path), _now_text(path)
+    old_lines, new_lines = old_src.splitlines(True), new_src.splitlines(True)
+
+    def _blocks(src: str, lines: list[str]) -> dict:
+        """顶层"函数/类/赋值"的源码片段，按名字索引（用于逐块比对）。"""
+        blocks: dict = {}
+        for node in ast.parse(src).body:
+            seg = "".join(lines[node.lineno - 1:node.end_lineno])
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                blocks[("def", node.name)] = seg
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        blocks[("assign", target.id)] = seg
+        return blocks
+
+    old_blocks, new_blocks = _blocks(old_src, old_lines), _blocks(new_src, new_lines)
+    for key, body in old_blocks.items():
+        kind, name = key
+        if kind == "def" and name in ALLOWED_CHANGED:
+            assert ("def", name) in new_blocks, f"{path} 的 {name} 被删掉了"
+            continue
+        assert key in new_blocks, f"{path} 的 {name} 被删掉了"
+        assert new_blocks[key] == body, f"{path} 的 {name} 被改过了（冻结层只允许改 load_raw）"
+
+    sneaked = [key for key in new_blocks if key not in old_blocks and key[1] not in ALLOWED_NEW]
+    assert not sneaked, f"{path} 夹带了未声明的新内容：{sneaked}"
+
+    # ③ HEAD 里 import 过的模块必须仍然 import（不许靠删 import 顺手改行为）
+    old_mods = {n.name.split(".")[0] for node in ast.walk(ast.parse(old_src))
+                if isinstance(node, ast.Import) for n in node.names}
+    old_mods |= {node.module.split(".")[0] for node in ast.walk(ast.parse(old_src))
+                 if isinstance(node, ast.ImportFrom) and node.module}
+    new_mods = {n.name.split(".")[0] for node in ast.walk(ast.parse(new_src))
+                if isinstance(node, ast.Import) for n in node.names}
+    new_mods |= {node.module.split(".")[0] for node in ast.walk(ast.parse(new_src))
+                 if isinstance(node, ast.ImportFrom) and node.module}
+    missing = old_mods - new_mods
+    assert not missing, f"{path} 少 import 了：{missing}"
 
 
 def test_导出模块与查询模块共用同一个取数函数(monkeypatch):

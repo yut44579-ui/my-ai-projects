@@ -630,3 +630,38 @@ D4 文档在对话里是死的 → 属 FR-009-B，本 TASK 不碰
   分析段数字溯源 / 冲突陈述 / 缺数据零数字 / 注入逐位相同 / 第三段闸门（模型写错就作废）/
   内部名词零命中 / 复用与依赖的结构性检查）；真浏览器走查 `scripts/fr010c_joint_cdp.mjs`
   （三段顺序、提示条收起/展开的几何与逐字对比、注入前后逐位相同、ROI 零数字 + 截屏）。
+
+
+## D28 · FR-011 冻结层豁免：磁盘缓存**只准改"Excel → DataFrame"这一步**（2026-09-30）
+
+- **为什么开这个口**：`app/engine/loader.py` 里 `pd.read_excel` 读 22.6MB / 541,909 行，
+  本机实测 **101.95 秒**（早期注释里"约 108 秒"是旧机器上的旧数，后来还有过 250 秒的记录）。
+  每一次重启服务、每一个隔离验证实例都要重付一遍 —— 这是演示与迭代的最大障碍。
+  实测豁免后：**命中缓存 0.42 秒，加速 243×**。
+- **口子有多窄**（守卫按此判定，见 `tests/test_datasets.py::test_业务表不碰冻结资产`）：
+  · 只允许改 `load_raw()` 里"怎么把 Excel 变成 DataFrame"那一步 —— 现在是把它抽成 `_read_frame()`
+    并在其中先试缓存，唯一被删掉的那行就是原来的 `df = pd.read_excel(...)`（diff 恒为 **+191 / -1**）；
+  · **一个字节都不许动**：SHA256 校验及其报错文案、`EXPECTED_SHAPE` 形状校验与"读少列/少行必须停"、
+    函数签名、**返回副本**的语义、进程级 `_CACHE` 机制、模块内其他函数与常量、任何子调用方；
+  · 新增的顶层名字只能落在**声明过的缓存助手名单**里（`_cache_*` / `_read_from_cache` /
+    `_write_to_cache` / `_read_frame` + 相关常量），不许夹带别的新行为。
+- **开了口也不改变行为**（这是豁免的前提，不是口号）：
+  · `tests/test_loader_disk_cache.py` 钉住"**命中与不命中逐位一致**"——
+    行数 / 列序 / 每列 dtype / 全表 `hash_pandas_object` / 首尾各 200 行哈希，六项全等；
+    Hermes 侧独立复验同样跑过一遍（0.42s vs 101.95s，六项指纹一致）；
+  · 缓存只是加速件、不是真相来源：**坏了/写不进去/版本对不上 → 一律退回原路径重解析**，
+    并保留安全阀 `SRA_DATA_CACHE=0` 完全走原路径；
+  · 校验语义不变：SHA256 不匹配仍然抛 `DataSourceError`，形状不符仍然抛错（缓存被拒后回退重建）；
+  · 实现用 **pickle 而不是 parquet**（**别再改回去**）：本表 `InvoiceNo` 列 object 里混着
+    `C536379` 与纯数字，pyarrow 写 parquet 要定一个具体类型 → 实测直接
+    `ArrowInvalid("Could not convert 'C536379' with type str: tried to convert to int64")`；
+    即便先转字符串，读回来 dtype 也变了（object → str），抽样值不再逐位相同。
+    pickle 不做类型推断，读写往返 dtype 原样。
+- **什么情况下必须回退**：命中与不命中不一致 / 校验被绕过 / 形状校验失效 / 缓存产物进了版本库
+  → **立刻退回原实现**（删掉 `_read_frame` 与缓存助手，`load_raw` 直读 Excel），不许"先留着看看"。
+- **验证**：`tests/test_datasets.py::test_业务表不碰冻结资产`（AST 逐块比对：
+  metrics/executor/renderer 仍逐字节；loader 里 HEAD 已有的每个函数与顶层常量逐字节相同，
+  **只有 `load_raw` 放行**；口径常量、其他函数、import 少一个都报错）；
+  `tests/test_loader_disk_cache.py`（逐位一致 / 坏缓存被拒 / 安全阀 / gitignore）。
+  ★ 负向证明已跑过：在 `sha256_of_file` 里偷加一行 → 守卫报
+  「`app/engine/loader.py` 的 `sha256_of_file` 被改过了（冻结层只允许改 load_raw）」，还原后复绿。
