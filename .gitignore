@@ -1,0 +1,37 @@
+# --- 密钥 / 环境 ---
+.env
+.env.local
+*.pem
+*.key
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# --- Node / 前端 ---
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# --- 编辑器 / 系统 ---
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# --- 日志 / 临时 ---
+*.log
+logs/
+tmp/
+.tmp-edge/

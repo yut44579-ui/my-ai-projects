@@ -1,0 +1,17 @@
+# AI 商业项目助理 —— 后端依赖（Python 3.11+）
+# 技术选型已冻结，见 docs/DECISIONS.md D2。禁止引入 PostgreSQL/Redis/MinIO/Celery 等重型组件。
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32
+SQLAlchemy>=2.0.36,<2.1
+alembic>=1.14
+PyMySQL>=1.1.1
+cryptography>=43.0          # MySQL 8 caching_sha2_password 认证所需
+pydantic>=2.9
+pydantic-settings>=2.6
+python-dotenv>=1.0
+tzdata>=2024.1             # Windows 上 zoneinfo 需要（D6：Asia/Shanghai）
+
+# --- 测试 ---
+pytest>=8.3
+httpx>=0.27                 # fastapi.testclient 依赖
