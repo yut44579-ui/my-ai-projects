@@ -33,6 +33,24 @@ class CustomerSourceType(str, Enum):
     MANUAL = "MANUAL"
 
 
+class LifecycleStatus(str, Enum):
+    """客户生命周期状态（TASK-006）。
+
+    ★ 与 TASK-001 评审砍掉的旧 status 列不是一回事：那是没有流程支撑的死列。
+      这里的每个取值都由「状态变更接口 + customer_events 事件」驱动，可追溯。
+
+    流转不做强约束（V1 不写死合法路径），但每次变更都必须留事件。
+    """
+
+    NEW = "NEW"
+    CONTACTED = "CONTACTED"
+    REPLIED = "REPLIED"
+    ENGAGED = "ENGAGED"
+    QUOTED = "QUOTED"
+    WON = "WON"
+    LOST = "LOST"
+
+
 class DedupeState(str, Enum):
     """去重状态。
 
@@ -97,6 +115,16 @@ class Customer(Base, TimestampMixin):
         server_default=HandoverState.AUTO.value,  # 给存量行兜底（ADD COLUMN NOT NULL 需要）
         index=True,  # 列表页要按它筛「需要人工处理」并打醒目标记
         comment="人工接管三态：AUTO / HUMAN_REQUIRED / HUMAN_ACTIVE",
+    )
+
+    # TASK-006：生命周期状态。默认 NEW；每次变更由 POST /customers/{id}/status 写入，
+    # 且必须同时落一条 customer_events（历史不许丢）。
+    # ★ 并行线合并：与上面的 handover_state 并存 —— 两者是不同口径，互不替代。
+    lifecycle_status: Mapped[LifecycleStatus] = mapped_column(
+        SAEnum(LifecycleStatus, name="customer_lifecycle_status", values_callable=_enum_values),
+        nullable=False,
+        default=LifecycleStatus.NEW,
+        server_default=LifecycleStatus.NEW.value,
     )
 
     first_seen_at: Mapped[datetime] = mapped_column(
