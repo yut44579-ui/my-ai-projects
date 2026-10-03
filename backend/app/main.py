@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.api.router import api_router
 from app.core.config import settings
+from app.services.errors import ImportFailure
 
 
 def create_app() -> FastAPI:
@@ -34,6 +36,12 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # 导入失败的统一出口：{"error": <错误码>, "message": ...}（TASK-001 §五）
+    # 文件级失败 = 零入库，不会留下任何半截数据。
+    @app.exception_handler(ImportFailure)
+    async def _import_failure_handler(_request: Request, exc: ImportFailure) -> JSONResponse:
+        return JSONResponse(status_code=exc.http_status, content=exc.to_body())
 
     app.include_router(api_router, prefix=settings.api_prefix)
     return app

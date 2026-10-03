@@ -1,8 +1,10 @@
 # AI 商业项目助理
 
-V1 单租户 Web 应用。当前进度：**TASK-000 工程骨架**（只有骨架，无任何业务功能）。
+V1 单租户 Web 应用。当前进度：**TASK-001 数据接入**（CSV/XLSX → customers + import_batches）。
+TASK-000 的工程骨架（health / 迁移 / 空态前端）保持不变。
 
 技术选型与业务决策已冻结，见 [`docs/DECISIONS.md`](docs/DECISIONS.md) —— 改动前先读。
+导入的完整规则（编码、映射、去重、失败语义、TEST 隔离）见 [`docs/IMPORT_RULES.md`](docs/IMPORT_RULES.md)。
 
 ## 技术栈
 
@@ -21,17 +23,21 @@ Redux / Zustand / TanStack Query 等一切状态管理库。
 biz-assistant/
 ├── backend/            FastAPI 应用
 │   ├── app/
-│   │   ├── api/        路由层（routes/health.py 等）
+│   │   ├── api/        路由层（routes/health.py、imports.py、customers.py）
 │   │   ├── core/       配置（config.py，全部读环境变量）
 │   │   ├── db/         引擎与会话（session.py）、声明式基类（base.py）
-│   │   ├── models/     ORM 模型（D11 的 7 表，TASK-001 起落地）
+│   │   ├── models/     ORM 模型（customers、import_batches）
 │   │   ├── schemas/    Pydantic 模型（含 D4 的 EvidenceValue 契约）
+│   │   ├── services/   与框架无关的业务逻辑（解析 / 映射 / 去重 / 导入编排）
 │   │   └── main.py     应用入口
 │   └── requirements.txt
 ├── frontend/           React + TS + Vite
 ├── migrations/         Alembic 迁移脚本
+├── scripts/            运维脚本（cleanup_test_data.sql / .py）
 ├── tests/              pytest
-├── docs/DECISIONS.md   已冻结的决策记录
+│   └── fixtures/       测试样本（★ 文件名带 TEST，导入时 source_type 必须是 TEST）
+├── docs/DECISIONS.md     已冻结的决策记录
+├── docs/IMPORT_RULES.md  导入规则（编码/映射/去重/失败语义/TEST 隔离）
 ├── alembic.ini
 ├── pytest.ini
 └── .env.example
@@ -109,12 +115,16 @@ npm run dev      # http://127.0.0.1:5173
 ### 第 7 步：跑测试 / 构建前端
 
 ```bash
-# 测试（在项目根目录）
+# 测试（在项目根目录）。测试会直连本机 MySQL，并只清理自己造的数据，可反复运行
 .venv/Scripts/python.exe -m pytest -q
 
 # 前端生产构建
 cd frontend && npm run build      # 产物在 frontend/dist
 ```
+
+> 导入相关的测试用 `tests/fixtures/` 里的样本文件跑真实链路。夹具文件产生的批次与客户
+> 会在测试前后被自动清掉（按文件 sha256 匹配），属预期行为 —— 用样本文件做的演示数据
+> 也会被一并清掉，重新导入即可。
 
 开发期 Vite 已把 `/api` 代理到 `127.0.0.1:8000`，无需处理跨域。
 
@@ -142,7 +152,60 @@ cd frontend && npm run build      # 产物在 frontend/dist
 
 `.env` 已被 `.gitignore` 忽略，**不要提交真实口令**。
 
+## 数据接入（导入 CSV/XLSX）
+
+### 怎么用
+
+1. 打开 <http://127.0.0.1:5173/customers>，点右上「导入 Excel/CSV」。
+2. 选文件 → 「解析预览」：页面会显示识别到的**编码**、**sheet**、**表头行号**、数据行数、
+   每列的自动映射（`auto` / `unknown`）和**前 3 行样本**。
+3. 在「映射到」下拉里确认/修改每列对应的字段（可选「忽略此列」，被忽略的列不会入库）→「确认映射并导入」。
+4. 结果弹窗显示「新建 N / 去重命中 M / 跳过 K」+ 跳过原因 + 未映射列。
+   出现跳过行时状态是 `PARTIAL`，弹窗用**警告色**并写明「部分导入：N 成功 / M 跳过」。
+
+接口（`/api` 前缀）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/imports/preview` | 只解析、不入库 |
+| POST | `/api/imports/commit` | 带确认后的映射表 + sha256 入库 |
+| GET | `/api/imports` | 批次列表 |
+| GET | `/api/imports/{id}` | 批次详情（跳过明细 + 客户 id 列表），V1 的"追溯"入口 |
+| GET | `/api/customers` | 分页 + 关键词搜索 + `?source_type=` 过滤 |
+| GET | `/api/customers/{id}` | 客户详情 |
+
+限制：单文件 ≤ 10MB、数据行 ≤ 50,000；只接受 `.csv` `.xlsx` `.xlsm`。
+同一份文件（sha256 相同）不允许重复导入。
+
+### 先用测试样本跑通链路
+
+库里暂时没有真实客户数据，先用带 TEST 标记的样本文件验证链路：
+
+```bash
+# 干净样本：8 行正常数据（UTF-8，表头是中文别名）
+tests/fixtures/customers_sample_TEST_clean.csv
+# 脏数据样本：GB18030 编码，覆盖 email/phone 都空、email 重复、缺姓名、
+# 电话/邮箱格式错、整行为空、表头有多余列
+tests/fixtures/customers_sample_TEST_messy.csv
+```
+
+导入时来源一律选 **TEST**（提交接口的 `source_type` 缺省就是 TEST）。
+导入后客户列表顶部会出现黄色 banner「当前包含 N 条测试导入数据」，行内用 Tag 标出来源。
+
+### 清理测试数据
+
+```bash
+# 等价的两条命令，任选一条（不需要 mysql 客户端的用后者）
+mysql -u root -p biz_assistant < scripts/cleanup_test_data.sql
+.venv/Scripts/python.exe scripts/cleanup_test_data.py            # 加 --dry-run 只统计不删
+```
+
+★ 汇报类查询（TASK-007 起）**必须默认过滤 `source_type='REAL'`**，
+否则 TEST 数据会被算进业务数字（`GET /api/customers` 是唯一例外，它要显示 TEST 数据才能跑通链路）。
+
 ## 当前 TASK 的边界
 
-TASK-000 只搭骨架：不导入数据、不建业务表、不做客户/沟通/AI 任何业务逻辑。
-业务表从 TASK-001 起按 D11 逐步落地。数据库当前只有 `alembic_version` 一张 Alembic 自用表。
+TASK-001 只做**数据接入**（CSV/XLSX → customers + import_batches）：
+不接 PDF/Word/PPT/企业微信/邮件/CRM，不做客户编辑/删除/导出，不做撤销导入，
+不做沟通记录 / AI 回复 / 汇报（后续 TASK）。
+数据库当前有 3 张表：`alembic_version`、`customers`、`import_batches`。
