@@ -1,8 +1,8 @@
-import { SendOutlined } from '@ant-design/icons'
+import { RobotOutlined, SendOutlined } from '@ant-design/icons'
 import { Alert, Button, Card, Empty, Input, Segmented, Space, Spin, Tag, Tooltip, Typography } from 'antd'
 import { useCallback, useEffect, useState } from 'react'
 import { apiGet, apiPost } from '../api/client'
-import type { MessageItem, MessageTimelineResponse, MessageType } from '../api/types'
+import type { AiReplyResponse, MessageItem, MessageTimelineResponse, MessageType } from '../api/types'
 import { AI_STATUS_LABELS, SENDER_TYPE_LABELS } from '../api/types'
 
 const { Text, Link } = Typography
@@ -81,6 +81,9 @@ export default function MessageTimeline({
   const [kind, setKind] = useState<MessageType>('CHAT')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [aiBusy, setAiBusy] = useState(false)
+  // AI 回复的提示：转人工（warning）/ 调用失败（error）—— 文案都来自后端
+  const [aiNotice, setAiNotice] = useState<{ kind: 'warning' | 'error'; text: string } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -119,6 +122,37 @@ export default function MessageTimeline({
     }
   }
 
+  /** 把输入框里的内容当作"客户问题"交给 AI：敏感 → 后端转人工（不调 LLM）；失败 → 如实显示兜底文案 */
+  const askAi = async () => {
+    const question = draft.trim()
+    if (!question || aiBusy) return
+    setAiBusy(true)
+    setError(null)
+    setAiNotice(null)
+    try {
+      const resp = await apiPost<AiReplyResponse>(`/api/customers/${customerId}/ai-reply`, {
+        content: question,
+      })
+      setDraft('')
+      if (resp.ai_status === 'HUMAN_REQUIRED') {
+        setAiNotice({ kind: 'warning', text: `已转人工处理：${resp.policy.reason}` })
+      }
+      await load()
+      onChanged?.()
+    } catch (err) {
+      const e = err as { message?: string; status?: number }
+      // ★ 后端 502 的 message 就是「AI 暂时无法回复，请人工处理」——原样显示，绝不自己编一句
+      setAiNotice({
+        kind: 'error',
+        text: e.message ?? 'AI 暂时无法回复，请人工处理',
+      })
+      await load() // 失败时后端也落了一行 FAILED，刷新时间线把它显示出来
+      onChanged?.()
+    } finally {
+      setAiBusy(false)
+    }
+  }
+
   const items = data?.items ?? []
   // 条数只认后端给的 EvidenceValue：NO_DATA 时显示「暂无沟通记录」，不显示 0
   const countText =
@@ -146,17 +180,20 @@ export default function MessageTimeline({
       )}
 
       {error && <Alert type="error" showIcon message={error} style={{ marginTop: 12 }} />}
+      {aiNotice && (
+        <Alert type={aiNotice.kind} showIcon message={aiNotice.text} style={{ marginTop: 12 }} />
+      )}
 
-      {/* 底部人工回复输入框 */}
+      {/* 底部输入框：人工回复（HUMAN）/ 交给 AI 回复（敏感问题后端会自动转人工，不调 LLM） */}
       <Space orientation="vertical" size={8} style={{ width: '100%', marginTop: 16 }}>
         <Input.TextArea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="人工回复/记录（以「人工」身份写入该客户的时间线）"
+          placeholder="人工回复/记录；或把客户问题粘进来点「AI 回复」（以「人工」身份写入该客户的时间线）"
           autoSize={{ minRows: 2, maxRows: 6 }}
           maxLength={4000}
         />
-        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+        <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
           <Segmented
             size="small"
             value={kind}
@@ -166,9 +203,25 @@ export default function MessageTimeline({
               { label: '备注', value: 'NOTE' },
             ]}
           />
-          <Button type="primary" icon={<SendOutlined />} loading={sending} disabled={!draft.trim()} onClick={() => void send()}>
-            发送
-          </Button>
+          <Space>
+            <Button
+              icon={<RobotOutlined />}
+              loading={aiBusy}
+              disabled={!draft.trim() || sending}
+              onClick={() => void askAi()}
+            >
+              AI 回复
+            </Button>
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              loading={sending}
+              disabled={!draft.trim() || aiBusy}
+              onClick={() => void send()}
+            >
+              发送
+            </Button>
+          </Space>
         </Space>
       </Space>
     </Card>

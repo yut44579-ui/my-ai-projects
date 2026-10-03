@@ -73,6 +73,14 @@ class Settings(BaseSettings):
     # --- CORS（前端 Vite 开发服务器）---
     cors_origins: str = Field(default="http://127.0.0.1:5173,http://localhost:5173")
 
+    # --- LLM（TASK-004：DeepSeek，OpenAI 兼容的 /chat/completions）---
+    # ★ key 一律从环境变量 / .env 读，源码里不许出现任何硬编码密钥。
+    #   没配 key 时不是"静默降级"，而是如实报 LLM 不可用（D10：禁止编造 AI 回复）。
+    deepseek_api_key: str | None = Field(default=None)
+    deepseek_base_url: str = Field(default="https://api.deepseek.com")
+    deepseek_model: str = Field(default="deepseek-chat")
+    llm_timeout_seconds: float = Field(default=30.0)
+
     @field_validator("db_name")
     @classmethod
     def _guard_db_name(cls, v: str) -> str:

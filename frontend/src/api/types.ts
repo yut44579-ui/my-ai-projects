@@ -173,6 +173,30 @@ export const MESSAGE_TYPE_LABELS: Record<MessageType, string> = {
   IMPORT: '随导入带入',
 }
 
+// ─────────────── TASK-004：AI 回复 ───────────────
+
+/** 代码层策略闸门的结论（后端给，界面上只显示不判断） */
+export type PolicyOutcome = {
+  allowed: boolean
+  reason: string
+  category: string | null
+  label: string | null
+  matched: string | null
+  tone: string
+}
+
+export type AiReplyResponse = {
+  customer_id: number
+  question: string
+  /** 命中敏感策略时恒为 false（★ 不调 LLM 是硬规则，不是优化） */
+  llm_called: boolean
+  policy: PolicyOutcome
+  ai_status: AiStatus
+  /** 已落库的那一行（AI 回复或转人工说明） */
+  message: MessageItem
+  failure_reason: string | null
+}
+
 export type ColumnPreview = {
   column: string
   target: string | null

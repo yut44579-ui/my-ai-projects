@@ -52,3 +52,18 @@ D17 沟通记录（TASK-003）的三条落地口径：
        "随导入带入"落在 message_type=IMPORT 上（此时 source_type 记 IMPORT）。
     ③ 时间线排序键是 (created_at, id) 双键正序；created_at 与 customers 一样用 DATETIME(6)，
        同一秒内的多条消息也能稳定排出先后（理由同 D16）。
+
+D18 AI 回复（TASK-004）的四条落地口径：
+    ① 闸门是**纯代码函数**（services/policy_gate.py 的 evaluate_policy），判定词表写死在代码里，
+       模型完全不参与"要不要转人工"的判断（D7）。命中 → 不调 LLM，直接落 HUMAN_REQUIRED。
+    ② 二次把关：LLM 生成完的草稿**再过一次同一个闸门**。
+       模型自己写出的"已经给你 8 折"这类对外承诺一样拦下：草稿不落库，改落 HUMAN_REQUIRED
+       （宁可丢一条草稿，也不让承诺出街）。
+    ③ 客户问题从哪来：站内没有真实客户渠道（D9），所以 ai-reply 的入参是
+       content（人工把客户原话贴进来）或 in_reply_to（指向该客户下已录入的一条消息）；
+       **任何路径都不写 sender_type=CUSTOMER**。
+       转人工说明 / LLM 失败兜底都用 sender_type=SYSTEM + message_type=NOTE：
+       这一轮既然没有 AI 回复，就不许留一行看起来像 AI 说的话。
+    ④ LLM 失败（未配 key / 超时 / 非 200 / 空内容）→ 502 + {"error":"llm_unavailable"}，
+       message 固定为「AI 暂时无法回复，请人工处理」，同时库里落一行 FAILED。
+       ★ 绝不允许拿别的内容冒充 AI 回复（D10）；只引 httpx，不引任何 LLM SDK。
