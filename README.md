@@ -37,54 +37,83 @@ biz-assistant/
 └── .env.example
 ```
 
-## 快速开始
+## 首次运行（新人照着做就能通）
 
-### 0. 准备
+> ⚠️ **必须先建 `.env`，否则一定跑不起来。**
+> 配置全部从 `.env` / 环境变量读取（源码里没有任何口令默认值），
+> 少了 `.env` 就会连不上库：`Access denied for user 'root'@'localhost' (using password: NO)`，
+> `/api/health` 会返回 `status=degraded`，`pytest` 与 `alembic` 也会直接报错。
+> `.env` 已被 `.gitignore` 忽略，不会进版本库 —— 换台机器要重新建一次。
+
+### 第 1 步：准备环境
 
 - Python 3.11+、Node 20+、本机 MySQL 8 已启动
-- 建库（只需一次）：
+
+### 第 2 步：建库（只需一次）
 
 ```sql
 CREATE DATABASE IF NOT EXISTS biz_assistant
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-### 1. 后端
+### 第 3 步：建 `.env` 并填 5 个数据库值（关键，别跳过）
 
 ```bash
 cd D:/biz-assistant
+cp .env.example .env
+```
 
-# 建虚拟环境并装依赖（虚拟环境放项目内，不写 C 盘）
+打开 `.env`，确认/填写下面 5 行（本机 MySQL 就填这些）：
+
+```ini
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=你的MySQL密码
+DB_NAME=biz_assistant
+```
+
+`DB_NAME` 必须是 `biz_assistant`（改成别的库名会被 `config.py` 里的守卫拦下或连错库）。
+其余项保持样例默认即可，其中 `TIMEZONE=Asia/Shanghai` 不要改（D6）。
+
+### 第 4 步：装依赖、跑迁移
+
+```bash
+# 虚拟环境放项目内，不写 C 盘
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r backend/requirements.txt
 
-# 配置环境变量：复制样例后按需修改
-cp .env.example .env
-
-# 迁移
 .venv/Scripts/alembic.exe upgrade head
 .venv/Scripts/alembic.exe current
+```
 
-# 起服务（默认 127.0.0.1:8000）
+### 第 5 步：起后端（默认 127.0.0.1:8000）
+
+```bash
 .venv/Scripts/python.exe -m uvicorn app.main:app --app-dir backend --reload
 ```
 
-- 健康检查：<http://127.0.0.1:8000/api/health>
-- 接口文档：<http://127.0.0.1:8000/api/docs>
+`/api/health` 里 `"connected": true` 才算通了。
 
-### 2. 测试
-
-```bash
-.venv/Scripts/python.exe -m pytest -v
-```
-
-### 3. 前端
+### 第 6 步：起前端
 
 ```bash
 cd frontend
 npm install
 npm run dev      # http://127.0.0.1:5173
-npm run build    # 产物在 frontend/dist
+```
+
+- 健康检查：<http://127.0.0.1:8000/api/health>
+- 接口文档：<http://127.0.0.1:8000/api/docs>
+
+### 第 7 步：跑测试 / 构建前端
+
+```bash
+# 测试（在项目根目录）
+.venv/Scripts/python.exe -m pytest -q
+
+# 前端生产构建
+cd frontend && npm run build      # 产物在 frontend/dist
 ```
 
 开发期 Vite 已把 `/api` 代理到 `127.0.0.1:8000`，无需处理跨域。
