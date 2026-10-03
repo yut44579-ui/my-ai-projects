@@ -16,6 +16,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from app.models.customer import CustomerSourceType, DedupeState
+from app.models.handover import HandoverState
 from app.models.import_batch import ImportBatchStatus
 from app.schemas.evidence import EvidenceValue, ValueState
 
@@ -32,6 +33,11 @@ class CustomerItem(BaseModel):
     source_type: CustomerSourceType
     evidence_ref: str | None = Field(default=None, description="= import_batch:{batch_id}")
     dedupe_state: DedupeState
+    handover_state: HandoverState = Field(
+        default=HandoverState.AUTO,
+        description="人工接管三态（D8/TASK-005）：AUTO / HUMAN_REQUIRED / HUMAN_ACTIVE。"
+        "列表与详情都带它，前端据此打「需人工处理」标记（AC1）",
+    )
     first_seen_at: datetime
     last_seen_at: datetime
     created_at: datetime

@@ -14,6 +14,7 @@ from app import __version__
 from app.api.router import api_router
 from app.core.config import settings
 from app.services.errors import ImportFailure
+from app.services.handover import HandoverError
 
 
 def create_app() -> FastAPI:
@@ -41,6 +42,12 @@ def create_app() -> FastAPI:
     # 文件级失败 = 零入库，不会留下任何半截数据。
     @app.exception_handler(ImportFailure)
     async def _import_failure_handler(_request: Request, exc: ImportFailure) -> JSONResponse:
+        return JSONResponse(status_code=exc.http_status, content=exc.to_body())
+
+    # 接管操作的统一出口：{"error": <错误码>, "message": ...}（TASK-005）
+    # 非法迁移 / 客户不存在 / AI 越权改状态，都不会留下半截状态。
+    @app.exception_handler(HandoverError)
+    async def _handover_error_handler(_request: Request, exc: HandoverError) -> JSONResponse:
         return JSONResponse(status_code=exc.http_status, content=exc.to_body())
 
     app.include_router(api_router, prefix=settings.api_prefix)

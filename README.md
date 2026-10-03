@@ -248,6 +248,20 @@ node scripts/ui_screenshots_task002.mjs            # 先截图 + 抓浏览器真
 .venv/Scripts/python.exe scripts/collect_evidence_task002.py
 # 产出：docs/screenshots/task002-*.png、docs/evidence/TASK-002-evidence.md
 ```
+## 人工接管三态（TASK-005）
+
+D8：`AUTO → HUMAN_REQUIRED → HUMAN_ACTIVE`，不做工作流引擎。每次状态变化都留痕。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/customers/{id}/takeover` | 人工接管 → `HUMAN_ACTIVE`（写事件 `actor_type=HUMAN`） |
+| `POST` | `/api/customers/{id}/resume` | 交回 AI → `AUTO`（写事件） |
+| `GET`  | `/api/customers/{id}/handover` | 当前状态 + 变更历史（`event_count` 走 EvidenceValue） |
+
+客户列表/详情已带 `handover_state` 字段。AI 闸门（TASK-004）判定敏感时调用
+`app.services.handover.set_human_required(db, customer_id, reason, ...)`；
+调 LLM 前统一用 `ai_auto_reply_allowed(state)` 判断能否自动回复。
+接口与整合说明见 **docs/HANDOVER_INTEGRATION.md**。
 
 ## 当前 TASK 的边界
 
@@ -256,4 +270,8 @@ TASK-001 只做**数据接入**（CSV/XLSX → customers + import_batches）：
 TASK-002 只在客户模块上做**只读增强**：不碰 AI 回复 / 沟通记录写入 / 人工接管 / 汇报，
 不新增数据库列（尤其没有加回 `customers.status`），不引新依赖。
 不做沟通记录 / AI 回复 / 汇报（后续 TASK）。
-数据库当前有 3 张表：`alembic_version`、`customers`、`import_batches`。
+
+TASK-005（本 worktree，分支 `task005`）只做**后端**：人工接管状态机 + 接口 + 事件留痕，
+并给 TASK-004 闸门留调用口（`set_human_required`）。**不改 `frontend/`**，
+不做 TASK-003/004/006/007 的内容。数据库当前 4 张表：
+`alembic_version`、`customers`、`import_batches`、`customer_handover_events`。
