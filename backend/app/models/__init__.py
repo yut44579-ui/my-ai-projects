@@ -15,6 +15,7 @@ from app.models.import_batch import (
     ImportBatchStatus,
     SkipReason,
 )
+from app.models.report import REPORT_TIMEZONE, Report, ReportSourceType, ReportType
 
 __all__ = [
     "Base",
@@ -24,5 +25,9 @@ __all__ = [
     "DedupeState",
     "ImportBatch",
     "ImportBatchStatus",
+    "REPORT_TIMEZONE",
+    "Report",
+    "ReportSourceType",
+    "ReportType",
     "SkipReason",
 ]

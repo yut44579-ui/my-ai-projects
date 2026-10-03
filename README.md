@@ -5,6 +5,7 @@ TASK-000 的工程骨架（health / 迁移 / 空态前端）保持不变。
 
 技术选型与业务决策已冻结，见 [`docs/DECISIONS.md`](docs/DECISIONS.md) —— 改动前先读。
 导入的完整规则（编码、映射、去重、失败语义、TEST 隔离）见 [`docs/IMPORT_RULES.md`](docs/IMPORT_RULES.md)。
+汇报（报告快照 / 指标口径 / 下钻）的语义契约与四个接口的前端接法见 [`docs/REPORTS.md`](docs/REPORTS.md)。
 
 ## 技术栈
 
@@ -38,6 +39,7 @@ biz-assistant/
 │   └── fixtures/       测试样本（★ 文件名带 TEST，导入时 source_type 必须是 TEST）
 ├── docs/DECISIONS.md     已冻结的决策记录
 ├── docs/IMPORT_RULES.md  导入规则（编码/映射/去重/失败语义/TEST 隔离）
+├── docs/REPORTS.md       汇报契约（快照语义 / 指标口径 / 下钻 / 前端接法）
 ├── alembic.ini
 ├── pytest.ini
 └── .env.example
