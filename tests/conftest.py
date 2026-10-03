@@ -161,6 +161,9 @@ def clean_imports(db: Session) -> Generator[None, None, None]:
             return
         for row in rows:
             detached.append({name: getattr(row, name) for name in columns})
+        # ★ tmp/ 在 .gitignore 里，新 clone / 新 worktree 里并不存在（主仓库恰好有，才没暴露）。
+        #   写入前先确保父目录存在，否则任何"库里有与夹具同键的客户"的干净检出都会在这里崩。
+        SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
         SNAPSHOT_PATH.write_text(
             json.dumps(detached, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
         )

@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app import __version__
+from app.core.config import settings
 
 
 def test_health_returns_200(client: TestClient) -> None:
@@ -13,14 +14,19 @@ def test_health_returns_200(client: TestClient) -> None:
 
 
 def test_health_reports_real_db_connection(client: TestClient) -> None:
-    """db.connected 必须是真去连库得到的结果，且连的是 biz_assistant。"""
+    """db.connected 必须是真去连库得到的结果，且连的是**当前配置**的库。
+
+    ★ 这里不许写死库名：同一份代码要在 biz_assistant / biz_assistant_int 等多个库上跑
+      （例如 worktree 的整合库），写死任何具体库名都会让测试在别的库上必然失败。
+      断言"等于当前 Settings 里的 db_name"才是这条 AC 的本意：连的必须是配置指向的那个库。
+    """
     body = client.get("/api/health").json()
 
     assert body["status"] == "ok", f"数据库未连通：{body['db']}"
     assert body["db"]["connected"] is True
     assert body["db"]["error"] is None
     assert body["db"]["dialect"] == "mysql"
-    assert body["db"]["database"] == "biz_assistant"
+    assert body["db"]["database"] == settings.db_name
 
     # MySQL 8 的版本号形如 8.0.42
     version = body["db"]["server_version"] or ""
