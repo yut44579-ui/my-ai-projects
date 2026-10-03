@@ -42,3 +42,13 @@ D15 跳过原因的层级：missing_name / invalid_phone / invalid_email / empty
 
 D16 customers.first_seen_at / last_seen_at 在 MySQL 上用 DATETIME(6)：
     DATETIME 默认只到秒，"命中即刷新 last_seen_at"在同一秒内无法观测，语义会被吃掉。
+
+D17 沟通记录（TASK-003）的三条落地口径：
+    ① D9 的「禁止伪造客户消息」落成**两道闸门**：services/messaging.py 的 write_message()
+       直接拒绝 sender_type=CUSTOMER（任何代码路径都写不进去），接口层再翻译成
+       400 + customer_sender_forbidden（明确错误码）。CUSTOMER 枚举保留，留给将来的真实客户渠道。
+    ② 规格写的「只允许写 HUMAN / SYSTEM / IMPORT」在本表上的含义：
+       sender_type 枚举（规格冻结）里没有 IMPORT，所以 HUMAN=人工、SYSTEM=系统产生、
+       "随导入带入"落在 message_type=IMPORT 上（此时 source_type 记 IMPORT）。
+    ③ 时间线排序键是 (created_at, id) 双键正序；created_at 与 customers 一样用 DATETIME(6)，
+       同一秒内的多条消息也能稳定排出先后（理由同 D16）。

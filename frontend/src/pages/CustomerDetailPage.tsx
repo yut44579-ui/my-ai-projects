@@ -18,6 +18,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet } from '../api/client'
 import type { CustomerDetail, CustomerTimelineResponse, EvidenceValue } from '../api/types'
 import { DEDUPE_STATE_LABELS } from '../api/types'
+import MessageTimeline from '../components/MessageTimeline'
 import SourceTag from '../components/SourceTag'
 
 const { Title, Text, Link } = Typography
@@ -208,8 +209,10 @@ export default function CustomerDetailPage() {
         </Space>
       </Card>
 
-      {/* 三个显式空区块 —— 不含任何数字或假占位 */}
-      <EmptyBlock title="沟通记录" evidence={detail.conversations} />
+      {/* 沟通记录：TASK-003 起接真数据 —— 真时间线 + 底部人工回复输入框 */}
+      <MessageTimeline customerId={detail.id} onChanged={() => void load()} />
+
+      {/* 尚未接入的区块 —— 显式空态，不含任何数字或假占位 */}
       <EmptyBlock title="风险提醒" evidence={detail.risks} />
       <EmptyBlock title="相关批次明细" evidence={detail.batch_details} />
     </Space>

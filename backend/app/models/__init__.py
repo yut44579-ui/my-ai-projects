@@ -9,6 +9,14 @@ TASK-001 落地其中 2 张：import_batches、customers（其余按 TASK 逐步
 
 from app.db.base import Base
 from app.models.customer import Customer, CustomerSourceType, DedupeState
+from app.models.customer_message import (
+    AiStatus,
+    CustomerMessage,
+    MessageSourceType,
+    MessageType,
+    SenderType,
+    message_evidence_ref,
+)
 from app.models.import_batch import (
     BatchSourceType,
     ImportBatch,
@@ -17,12 +25,18 @@ from app.models.import_batch import (
 )
 
 __all__ = [
+    "AiStatus",
     "Base",
     "BatchSourceType",
     "Customer",
+    "CustomerMessage",
     "CustomerSourceType",
     "DedupeState",
     "ImportBatch",
     "ImportBatchStatus",
+    "MessageSourceType",
+    "MessageType",
+    "SenderType",
     "SkipReason",
+    "message_evidence_ref",
 ]

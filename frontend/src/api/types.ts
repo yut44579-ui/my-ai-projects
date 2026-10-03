@@ -118,6 +118,61 @@ export type CustomerStatsResponse = {
   new_this_week: EvidenceValue
 }
 
+// ─────────────── TASK-003：沟通记录（customer_messages） ───────────────
+
+/** 消息发送方。★ CUSTOMER 只可能来自将来的真实客户渠道，V1 前端永远不发送它（D9）。 */
+export type SenderType = 'CUSTOMER' | 'HUMAN' | 'AI' | 'SYSTEM'
+export type MessageType = 'CHAT' | 'NOTE' | 'IMPORT'
+export type MessageSourceType = 'MANUAL' | 'IMPORT' | 'SYSTEM'
+
+/** AI 回复状态：NONE=与 AI 无关；REQUESTED=已发起；REPLIED=已回复；FAILED=调用失败；HUMAN_REQUIRED=命中敏感策略转人工 */
+export type AiStatus = 'NONE' | 'REQUESTED' | 'REPLIED' | 'FAILED' | 'HUMAN_REQUIRED'
+
+export type MessageItem = {
+  id: number
+  customer_id: number
+  sender_type: SenderType
+  message_type: MessageType
+  content: string
+  source_type: MessageSourceType
+  /** 由后端生成：customer_message:{id} */
+  evidence_ref: string
+  ai_status: AiStatus
+  created_at: string
+}
+
+export type MessageTimelineResponse = {
+  customer_id: number
+  /** 按 (created_at, id) 正序 */
+  items: MessageItem[]
+  /** 分页元数据，不是业务数字 */
+  page: number
+  page_size: number
+  /** 业务数字：该客户的消息条数；一条都没有时 state=NO_DATA、value=null（界面不显示数字） */
+  total: EvidenceValue
+}
+
+export const SENDER_TYPE_LABELS: Record<SenderType, string> = {
+  CUSTOMER: '客户',
+  HUMAN: '人工',
+  AI: 'AI',
+  SYSTEM: '系统',
+}
+
+export const AI_STATUS_LABELS: Record<AiStatus, string> = {
+  NONE: '',
+  REQUESTED: 'AI 回复中',
+  REPLIED: 'AI 已回复',
+  FAILED: 'AI 回复失败',
+  HUMAN_REQUIRED: '需人工处理',
+}
+
+export const MESSAGE_TYPE_LABELS: Record<MessageType, string> = {
+  CHAT: '对话',
+  NOTE: '备注',
+  IMPORT: '随导入带入',
+}
+
 export type ColumnPreview = {
   column: string
   target: string | null
