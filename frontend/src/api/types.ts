@@ -48,6 +48,76 @@ export type CustomerListResponse = {
   test_count: EvidenceValue
 }
 
+// ─────────────── TASK-002：客户详情 / 事件流 / 指标卡 ───────────────
+
+/** 来源批次的可追溯信息（详情页「来源与可追溯」卡） */
+export type BatchRef = {
+  batch_id: number
+  filename: string
+  status: BatchStatus
+  source_type: CustomerSourceType
+  imported_at: string
+  evidence_ref: string
+}
+
+export type SourceTrace = {
+  source_type: CustomerSourceType
+  evidence_ref: string | null
+  batch_id: number | null
+  batch: BatchRef | null
+}
+
+/** ★ V1 没有客户生命周期状态（customers 表已砍掉 status），这是显式占位 */
+export type FollowUpStatus = {
+  available: boolean
+  label: string
+  state: string
+  note: string
+}
+
+export type CustomerDetail = CustomerItem & {
+  source: SourceTrace
+  status: FollowUpStatus
+  /** 三个空区块：本 TASK 恒为 NO_DATA，前端只显示明确空态 */
+  conversations: EvidenceValue
+  risks: EvidenceValue
+  batch_details: EvidenceValue
+}
+
+export type TimelineEventKind = 'CUSTOMER_CREATED' | 'SOURCE_IMPORT' | 'DEDUPE_PENDING_REVIEW'
+
+export type TimelineEvent = {
+  kind: TimelineEventKind
+  title: string
+  occurred_at: string
+  evidence_ref: string
+  detail: string | null
+}
+
+/** 尚未接入的事件类型：显式 NO_DATA，绝不用空数组冒充「已接入但为空」 */
+export type TimelineUnavailable = {
+  kind: string
+  label: string
+  state: ValueState
+  reason: string
+}
+
+export type CustomerTimelineResponse = {
+  customer_id: number
+  events: TimelineEvent[]
+  events_count: EvidenceValue
+  unavailable: TimelineUnavailable[]
+}
+
+export type CustomerStatsResponse = {
+  /** 口径说明（与列表页同一个 q / source_type） */
+  scope: string
+  total: EvidenceValue
+  test_count: EvidenceValue
+  pending_review: EvidenceValue
+  new_this_week: EvidenceValue
+}
+
 export type ColumnPreview = {
   column: string
   target: string | null

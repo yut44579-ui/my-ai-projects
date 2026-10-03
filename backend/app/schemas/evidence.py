@@ -79,3 +79,23 @@ def build_evidence(
         source_type=source_type,
         evidence_ref=evidence_ref,
     )
+
+
+def no_data_evidence(
+    reason: str,
+    *,
+    source_type: SourceType,
+    evidence_ref: str | None = None,
+) -> EvidenceValue:
+    """显式空态：这块确实没有数据（功能未接入 / 该口径下一条都没有）。
+
+    ★ 与 build_evidence(None) 的区别只在 reason：这里必须写清"为什么没有"。
+      无论哪种情况 value 都是 None —— 绝不许用 0 冒充「没有数据」。
+    """
+    return EvidenceValue(
+        value=None,
+        state=ValueState.NO_DATA,
+        source_type=source_type,
+        evidence_ref=evidence_ref,
+        reason=reason,
+    )

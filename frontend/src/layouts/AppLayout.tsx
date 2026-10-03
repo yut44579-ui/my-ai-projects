@@ -20,9 +20,13 @@ const PAGE_TITLES: Record<string, string> = {
 export default function AppLayout() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
-  const selectedKeys = MENU_ITEMS.some((item) => item.key === pathname)
-    ? [pathname]
-    : []
+  // ★ 前缀匹配：/customers/:id（客户详情）也要让侧边栏「客户」保持高亮
+  const selectedKeys = MENU_ITEMS.filter(
+    (item) => pathname === item.key || pathname.startsWith(`${item.key}/`),
+  ).map((item) => item.key)
+  const title = pathname.startsWith('/customers/')
+    ? '客户详情'
+    : (PAGE_TITLES[pathname] ?? 'AI 商业项目助理')
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -58,7 +62,7 @@ export default function AppLayout() {
           }}
         >
           <Text strong style={{ fontSize: 15 }}>
-            {PAGE_TITLES[pathname] ?? 'AI 商业项目助理'}
+            {title}
           </Text>
         </Header>
         <Content style={{ padding: 24 }}>

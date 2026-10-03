@@ -1,7 +1,8 @@
 # AI 商业项目助理
 
-V1 单租户 Web 应用。当前进度：**TASK-001 数据接入**（CSV/XLSX → customers + import_batches）。
-TASK-000 的工程骨架（health / 迁移 / 空态前端）保持不变。
+V1 单租户 Web 应用。当前进度：**TASK-002 客户模块**（列表页指标卡 + 客户详情页，
+在 TASK-001 的数据接入之上增强）。
+TASK-000 的工程骨架（health / 迁移 / 空态前端）与 TASK-001 的导入链路全部保持原样。
 
 技术选型与业务决策已冻结，见 [`docs/DECISIONS.md`](docs/DECISIONS.md) —— 改动前先读。
 导入的完整规则（编码、映射、去重、失败语义、TEST 隔离）见 [`docs/IMPORT_RULES.md`](docs/IMPORT_RULES.md)。
@@ -32,8 +33,12 @@ biz-assistant/
 │   │   └── main.py     应用入口
 │   └── requirements.txt
 ├── frontend/           React + TS + Vite
+│   └── src/
+│       ├── pages/      CustomersPage（列表）、CustomerDetailPage（详情，TASK-002）
+│       └── components/ EvidenceNumber（业务数字唯一渲染口）、StatCard、SourceTag、ImportModal
 ├── migrations/         Alembic 迁移脚本
-├── scripts/            运维脚本（cleanup_test_data.sql / .py）
+├── scripts/            运维/证据脚本（cleanup_test_data.*、ui_screenshots*.mjs、collect_evidence*.py）
+│   └── lib/            截图脚本共用的 CDP 客户端（cdp.mjs）
 ├── tests/              pytest
 │   └── fixtures/       测试样本（★ 文件名带 TEST，导入时 source_type 必须是 TEST）
 ├── docs/DECISIONS.md     已冻结的决策记录
@@ -125,6 +130,11 @@ cd frontend && npm run build      # 产物在 frontend/dist
 > 导入相关的测试用 `tests/fixtures/` 里的样本文件跑真实链路。夹具文件产生的批次与客户
 > 会在测试前后被自动清掉（按文件 sha256 匹配），属预期行为 —— 用样本文件做的演示数据
 > 也会被一并清掉，重新导入即可。
+>
+> 另外：如果库里已经存在**与夹具同手机号/邮箱**的客户（例如用样本数据造的演示数据），
+> 测试会先把这些行整行快照后**临时摘除**，测完再原样写回（id 不变、一行不删），
+> 这样「导入 8 行 → 新建 8 行」才不会被误判成去重命中。兜底快照在
+> `tmp/pytest-detached-customers.json`（测试正常结束时会自动删除）。
 
 开发期 Vite 已把 `/api` 代理到 `127.0.0.1:8000`，无需处理跨域。
 
@@ -172,7 +182,9 @@ cd frontend && npm run build      # 产物在 frontend/dist
 | GET | `/api/imports` | 批次列表 |
 | GET | `/api/imports/{id}` | 批次详情（跳过明细 + 客户 id 列表），V1 的"追溯"入口 |
 | GET | `/api/customers` | 分页 + 关键词搜索 + `?source_type=` 过滤 |
-| GET | `/api/customers/{id}` | 客户详情 |
+| GET | `/api/customers/stats` | 列表页四个指标卡（口径与列表一致：`?q=` / `?source_type=`） |
+| GET | `/api/customers/{id}` | 客户详情（基础字段 + 来源可追溯 + 状态占位 + 三个空区块） |
+| GET | `/api/customers/{id}/timeline` | 客户事件流（V1 只有真实事件） |
 
 限制：单文件 ≤ 10MB、数据行 ≤ 50,000；只接受 `.csv` `.xlsx` `.xlsm`。
 同一份文件（sha256 相同）不允许重复导入。
@@ -203,9 +215,45 @@ mysql -u root -p biz_assistant < scripts/cleanup_test_data.sql
 ★ 汇报类查询（TASK-007 起）**必须默认过滤 `source_type='REAL'`**，
 否则 TEST 数据会被算进业务数字（`GET /api/customers` 是唯一例外，它要显示 TEST 数据才能跑通链路）。
 
+## 客户模块（TASK-002）
+
+在 TASK-001 的导入链路之上增强，**只读**：本 TASK 一行数据都不写、一列都不加。
+
+### 列表页（`/customers`）
+
+- 顶部四个指标卡：**客户总数 / 测试数据 / 待人工裁决 / 本周新增**。
+  数字全部由 `GET /api/customers/stats` 算好（口径 = 当前搜索词 + 来源筛选），
+  前端只用 `EvidenceNumber` 渲染，自己一个都不算（D4）。
+- ★ **`—` 与 `0` 是两回事**：口径内一条客户都没有 → 后端返回 `NO_DATA`，界面显示
+  「— 暂无数据」；口径内有客户但计数为 0（例如"本周新增 0"）→ 返回 `VALID: 0`，界面显示 0。
+- 点任意一行 → 进入该客户详情页。
+
+### 客户详情页（`/customers/:id`）
+
+- 头部：姓名 + 公司 + 来源 Tag + 去重状态 Tag + 返回列表。
+- 基本信息：电话 / 邮箱 / 地区 / 备注 / 首次接触 / 最近命中。
+- **来源与可追溯**：文件名、批次号、导入时间、`evidence_ref`
+  （点 `evidence_ref` 直接打开该批次详情接口 `GET /api/imports/{batch_id}` —— TASK-001 的追溯入口）。
+- 事件流：只列**真实存在**的事件（客户记录创建 / 来源导入 / 去重待裁决）。
+  AI 对话、人工跟进尚未接入 → 显式写「待 TASK-003 接入」，**不编事件**。
+- 状态：V1 没有生命周期状态（`customers` 表已按评审砍掉 `status` 列，本 TASK 没有加回来），
+  显示显式占位「未开始跟进（V1 暂无流程）」，等 TASK-006 接入状态机。
+- 三个区块（沟通记录 / 风险提醒 / 相关批次明细）在 V1 全是**明确空态**（`NO_DATA`）：
+  没有假数据、假图表，也不用 `0` 冒充。
+
+### 重采本 TASK 的证据
+
+```bash
+node scripts/ui_screenshots_task002.mjs            # 先截图 + 抓浏览器真实调用（需 8000/5173 都在跑）
+.venv/Scripts/python.exe scripts/collect_evidence_task002.py
+# 产出：docs/screenshots/task002-*.png、docs/evidence/TASK-002-evidence.md
+```
+
 ## 当前 TASK 的边界
 
 TASK-001 只做**数据接入**（CSV/XLSX → customers + import_batches）：
-不接 PDF/Word/PPT/企业微信/邮件/CRM，不做客户编辑/删除/导出，不做撤销导入，
+不接 PDF/Word/PPT/企业微信/邮件/CRM，不做客户编辑/删除/导出，不做撤销导入。
+TASK-002 只在客户模块上做**只读增强**：不碰 AI 回复 / 沟通记录写入 / 人工接管 / 汇报，
+不新增数据库列（尤其没有加回 `customers.status`），不引新依赖。
 不做沟通记录 / AI 回复 / 汇报（后续 TASK）。
 数据库当前有 3 张表：`alembic_version`、`customers`、`import_batches`。
