@@ -9,6 +9,12 @@ TASK-001 落地其中 2 张：import_batches、customers（其余按 TASK 逐步
 
 from app.db.base import Base
 from app.models.customer import Customer, CustomerSourceType, DedupeState
+from app.models.handover import (
+    CustomerHandoverEvent,
+    HandoverActorType,
+    HandoverEventType,
+    HandoverState,
+)
 from app.models.import_batch import (
     BatchSourceType,
     ImportBatch,
@@ -20,8 +26,12 @@ __all__ = [
     "Base",
     "BatchSourceType",
     "Customer",
+    "CustomerHandoverEvent",
     "CustomerSourceType",
     "DedupeState",
+    "HandoverActorType",
+    "HandoverEventType",
+    "HandoverState",
     "ImportBatch",
     "ImportBatchStatus",
     "SkipReason",

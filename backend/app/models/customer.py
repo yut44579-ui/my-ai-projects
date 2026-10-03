@@ -16,6 +16,7 @@ from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
+from app.models.handover import HandoverState
 from app.models.import_batch import _enum_values
 
 # MySQL 的 DATETIME 默认只精确到秒，同一秒内多次导入就分不出先后。
@@ -84,6 +85,18 @@ class Customer(Base, TimestampMixin):
         SAEnum(DedupeState, name="customer_dedupe_state", values_callable=_enum_values),
         nullable=False,
         default=DedupeState.CLEAN,
+    )
+
+    # 人工接管三态（D8，TASK-005）：AUTO → HUMAN_REQUIRED → HUMAN_ACTIVE
+    # 与 TASK-001 故意砍掉的旧 status 不同 —— 它由闸门 / 人工操作驱动，每一步都有事件留痕
+    # （customer_handover_events），不是没有流程支撑的死列。
+    handover_state: Mapped[HandoverState] = mapped_column(
+        SAEnum(HandoverState, name="customer_handover_state", values_callable=_enum_values),
+        nullable=False,
+        default=HandoverState.AUTO,
+        server_default=HandoverState.AUTO.value,  # 给存量行兜底（ADD COLUMN NOT NULL 需要）
+        index=True,  # 列表页要按它筛「需要人工处理」并打醒目标记
+        comment="人工接管三态：AUTO / HUMAN_REQUIRED / HUMAN_ACTIVE",
     )
 
     first_seen_at: Mapped[datetime] = mapped_column(
