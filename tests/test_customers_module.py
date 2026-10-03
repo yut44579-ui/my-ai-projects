@@ -204,10 +204,16 @@ def test_detail_status_is_explicit_placeholder_without_db_column(
     assert "TASK-006" in status["note"]
 
 
-def test_detail_empty_blocks_are_explicit_no_data(client: TestClient, db: Session) -> None:
-    """AC4：沟通记录 / 风险提醒 / 相关批次明细必须是显式 NO_DATA，不许假数据、不许 0。"""
-    customer = db.execute(select(Customer).order_by(Customer.id.desc())).scalars().first()
-    assert customer is not None
+def test_detail_empty_blocks_are_explicit_no_data(
+    client: TestClient, manual_customer: Customer
+) -> None:
+    """AC4：沟通记录 / 风险提醒 / 相关批次明细必须是显式 NO_DATA，不许假数据、不许 0。
+
+    ★ TASK-003 起「沟通记录」区块接真数据，本用例因此把主体从"id 最大的客户"换成
+      夹具里这条**确定没有消息**的客户（manual_customer，用完即删）：
+      断言一条没动，只是不再依赖"最新那条客户恰好没消息"这种库状态假设。
+    """
+    customer = manual_customer
 
     body = client.get(f"/api/customers/{customer.id}").json()
     for key in ("conversations", "risks", "batch_details"):

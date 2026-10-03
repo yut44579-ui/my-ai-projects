@@ -1,12 +1,20 @@
 # AI 商业项目助理
 
-V1 单租户 Web 应用。当前进度：**TASK-002 客户模块**（列表页指标卡 + 客户详情页，
-在 TASK-001 的数据接入之上增强）。
-TASK-000 的工程骨架（health / 迁移 / 空态前端）与 TASK-001 的导入链路全部保持原样。
+V1 单租户 Web 应用。当前进度：**TASK-004 AI 回复**（代码层策略闸门 → LLM → 回复落库），
+在 TASK-003 沟通记录（customer_messages + 人工回复时间线）、TASK-002 客户模块、
+TASK-001 数据接入之上叠加。
+TASK-000 的工程骨架（health / 迁移 / 空态前端）、TASK-001 的导入链路、
+TASK-002 的只读接口全部保持原样。
 
 技术选型与业务决策已冻结，见 [`docs/DECISIONS.md`](docs/DECISIONS.md) —— 改动前先读。
 导入的完整规则（编码、映射、去重、失败语义、TEST 隔离）见 [`docs/IMPORT_RULES.md`](docs/IMPORT_RULES.md)。
 汇报（报告快照 / 指标口径 / 下钻）的语义契约与四个接口的前端接法见 [`docs/REPORTS.md`](docs/REPORTS.md)。
+
+沟通记录的硬边界（★ 严禁写入 sender_type=CUSTOMER）见 [D9 / D17](docs/DECISIONS.md)；
+AI 回复的顺序与失败语义（★ 命中敏感不调 LLM、LLM 失败禁止编造回复）见 [D7 / D10 / D18](docs/DECISIONS.md)。
+
+**AI 回复需要 LLM 配置**：`.env` 里填 `DEEPSEEK_API_KEY`（见 `.env.example`）。
+没配也不是"静默降级"——接口会如实返回 `llm_unavailable` + 「AI 暂时无法回复，请人工处理」。
 
 ## 技术栈
 
@@ -25,7 +33,7 @@ Redux / Zustand / TanStack Query 等一切状态管理库。
 biz-assistant/
 ├── backend/            FastAPI 应用
 │   ├── app/
-│   │   ├── api/        路由层（routes/health.py、imports.py、customers.py）
+│   │   ├── api/        路由层（routes/health.py、imports.py、customers.py、messages.py、ai.py）
 │   │   ├── core/       配置（config.py，全部读环境变量）
 │   │   ├── db/         引擎与会话（session.py）、声明式基类（base.py）
 │   │   ├── models/     ORM 模型（customers、import_batches）

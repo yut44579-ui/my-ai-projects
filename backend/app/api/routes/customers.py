@@ -48,6 +48,7 @@ from app.schemas.evidence import (
     build_evidence,
     no_data_evidence,
 )
+from app.services.messaging import count_for_customer
 
 router = APIRouter(tags=["customers"])
 
@@ -62,9 +63,10 @@ try:  # pragma: no cover - 依赖运行环境
 except Exception:  # pragma: no cover - 兜底分支
     APP_TZ = timezone(timedelta(hours=8))
 
-# 这三个区块 V1 还没有数据源：显式空态，写明等哪个 TASK 接入。
+# 还没有数据源的区块：显式空态，写明等哪个 TASK 接入。
+# ★ conversations 自 TASK-003 起已接入（customer_messages），这里只在「该客户确实一条都没有」时用。
 NO_DATA_REASONS = {
-    "conversations": "暂无沟通记录（TASK-003 接入后显示）",
+    "conversations": "暂无沟通记录（TASK-003 已接入 customer_messages，该客户尚无消息）",
     "risks": "暂无风险记录（TASK-005 接入后显示）",
     "batch_details": "V1 不按客户展开批次明细（来源批次见「来源与可追溯」）",
 }
@@ -316,6 +318,20 @@ def get_customer(customer_id: int, db: Session = Depends(get_db)) -> CustomerDet
         else None
     )
 
+    # TASK-003：「沟通记录」区块接真数据 —— 该客户的消息条数（业务数字 → EvidenceValue）。
+    # ★ 一条都没有 → NO_DATA 空态（AC4），绝不用 0 冒充「暂无沟通记录」。
+    message_count = count_for_customer(db, customer.id)
+    conversations_ref = f"customer_messages:count|customer_id={customer.id}"
+    conversations = (
+        build_evidence(message_count, source_type=SourceType.SYSTEM, evidence_ref=conversations_ref)
+        if message_count
+        else no_data_evidence(
+            NO_DATA_REASONS["conversations"],
+            source_type=SourceType.SYSTEM,
+            evidence_ref=conversations_ref,
+        )
+    )
+
     base = CustomerItem.model_validate(customer).model_dump()
     return CustomerDetailResponse(
         **base,
@@ -331,12 +347,8 @@ def get_customer(customer_id: int, db: Session = Depends(get_db)) -> CustomerDet
             state="NOT_STARTED",
             note="V1 暂无跟进流程；等 TASK-006 接入状态机",
         ),
-        # ★ 三个区块本 TASK 一律 NO_DATA：不返回假数据、不返回 0 冒充
-        conversations=no_data_evidence(
-            NO_DATA_REASONS["conversations"],
-            source_type=SourceType.SYSTEM,
-            evidence_ref=f"customer:{customer.id}:conversations",
-        ),
+        # 沟通记录：TASK-003 起接真数据（见上）；另外两区块仍是显式 NO_DATA
+        conversations=conversations,
         risks=no_data_evidence(
             NO_DATA_REASONS["risks"],
             source_type=SourceType.SYSTEM,
@@ -414,13 +426,13 @@ def customer_timeline(customer_id: int, db: Session = Depends(get_db)) -> Custom
                 kind="AI_CONVERSATION",
                 label="AI 对话",
                 state=ValueState.NO_DATA,
-                reason="V1 没有客户消息渠道，待 TASK-003 接入",
+                reason="事件流只放客户/批次的客观事件；对话内容见 TASK-003 的「沟通记录」区块",
             ),
             TimelineUnavailable(
                 kind="HUMAN_FOLLOW_UP",
                 label="人工跟进",
                 state=ValueState.NO_DATA,
-                reason="V1 没有跟进记录，待 TASK-003 接入",
+                reason="人工跟进记录见 TASK-003 的「沟通记录」区块（本事件流不重复列举）",
             ),
         ],
     )

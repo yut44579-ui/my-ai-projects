@@ -21,6 +21,16 @@ export async function apiGet<T>(path: string): Promise<T> {
   return parse<T>(resp)
 }
 
+/** JSON 提交（沟通记录 / AI 回复）。后端失败时带 {"error": 错误码, "message": 说明}。 */
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const resp = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return parse<T>(resp)
+}
+
 /** multipart 提交（导入预览/提交）。后端失败时带 {"error": 错误码, "message": 说明}。 */
 export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
   const resp = await fetch(`${BASE_URL}${path}`, { method: 'POST', body: form })
