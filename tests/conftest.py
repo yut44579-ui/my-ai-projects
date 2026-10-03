@@ -18,7 +18,8 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.db.session import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models.customer import Customer  # noqa: E402
+from app.models.customer import Customer, CustomerSourceType, LifecycleStatus  # noqa: E402
+from app.models.customer_event import CustomerEvent  # noqa: E402
 from app.models.import_batch import ImportBatch  # noqa: E402
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -88,6 +89,52 @@ def clean_imports(db: Session) -> Generator[None, None, None]:
     purge()
     yield
     purge()
+
+
+@pytest.fixture
+def test_customer(db: Session) -> Generator[Customer, None, None]:
+    """TASK-006 状态机测试用的临时客户（source_type=TEST，遵守测试数据隔离）。
+
+    直接经 ORM 建行（不走导入接口），测完连同它的事件一起删掉，不污染库。
+    """
+    customer = Customer(
+        name="__TASK006_TEST_CUSTOMER__",
+        source_type=CustomerSourceType.TEST,
+        lifecycle_status=LifecycleStatus.NEW,
+    )
+    db.add(customer)
+    db.commit()
+    db.refresh(customer)
+    try:
+        yield customer
+    finally:
+        db.rollback()
+        db.execute(delete(CustomerEvent).where(CustomerEvent.customer_id == customer.id))
+        db.execute(delete(Customer).where(Customer.id == customer.id))
+        db.commit()
+
+
+def fresh(db: Session) -> None:
+    """结束当前事务，丢弃陈旧快照。
+
+    ★ 必须 rollback 而不是 expire_all：MySQL 默认 REPEATABLE READ，
+      测试会话若一直挂着同一个读事务，就永远看不到另一个连接（API 请求）刚提交的数据。
+    """
+    db.rollback()
+
+
+def refresh_events(db: Session, customer_id: int) -> list[CustomerEvent]:
+    """读该客户的事件（按 id 升序 = 发生顺序），读前先结束旧事务。"""
+    fresh(db)
+    return list(
+        db.execute(
+            select(CustomerEvent)
+            .where(CustomerEvent.customer_id == customer_id)
+            .order_by(CustomerEvent.id)
+        )
+        .scalars()
+        .all()
+    )
 
 
 @pytest.fixture

@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.models.customer import CustomerSourceType, DedupeState
+from app.models.customer import CustomerSourceType, DedupeState, LifecycleStatus
 from app.schemas.evidence import EvidenceValue
 
 
@@ -22,6 +22,9 @@ class CustomerItem(BaseModel):
     source_type: CustomerSourceType
     evidence_ref: str | None = Field(default=None, description="= import_batch:{batch_id}")
     dedupe_state: DedupeState
+    lifecycle_status: LifecycleStatus = Field(
+        default=LifecycleStatus.NEW, description="TASK-006：生命周期状态（默认 NEW）"
+    )
     first_seen_at: datetime
     last_seen_at: datetime
     created_at: datetime
