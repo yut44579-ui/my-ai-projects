@@ -385,5 +385,5 @@ $ .venv/Scripts/python.exe -m pytest          # 全量
 ### 证据12：本 TASK 提交
 
 ```
-git commit: <见下方补记>
+6bc8abb  feat(TASK-007): 自动汇报 + 下钻（后端骨架：reports 表 / 四个接口 / 快照与口径）
 ```
