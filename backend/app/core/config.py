@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 
@@ -14,6 +15,30 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/core/config.py -> 上溯三级即项目根目录
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+# 本地配置文件。缺失时不会静默通过：warn_if_env_file_missing() 会在配置加载阶段
+# 打一条 warning，提示照 README 建 .env（否则会以空口令连库并报 1045）。
+ENV_FILE = PROJECT_ROOT / ".env"
+
+logger = logging.getLogger(__name__)
+
+
+def warn_if_env_file_missing(env_file: Path | None = None) -> bool:
+    """`.env` 不存在时打一条 warning，返回本次是否打了。
+
+    文案里只出现文件路径，绝不出现口令、连接串等敏感值。
+    本函数自身无状态；「只打一次」由调用方 get_settings() 的 lru_cache 保证。
+    """
+    target = ENV_FILE if env_file is None else Path(env_file)
+    if target.is_file():
+        return False
+
+    logger.warning(
+        "未找到 .env（%s），配置回落到默认值；"
+        "若数据库连不通，请先 copy .env.example .env 并填写凭据",
+        target,
+    )
+    return True
 
 
 class Settings(BaseSettings):
@@ -76,6 +101,12 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    """加载配置。
+
+    lru_cache 保证进程内只执行一次 —— 缺 .env 的 warning 因此也只打一次，
+    不会每个请求刷屏（请求路径上不会再调用本函数）。
+    """
+    warn_if_env_file_missing()
     return Settings()
 
 

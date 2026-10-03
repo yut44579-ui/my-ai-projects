@@ -36,6 +36,32 @@ def test_health_metadata(client: TestClient) -> None:
     assert body["time"].startswith("20"), "time 应为 ISO8601，形如 2026-10-03T19:xx"
 
 
+def test_health_reports_degraded_when_db_unreachable(client: TestClient, monkeypatch) -> None:
+    """连不上库时必须如实报 degraded + error，不许假装 ok。"""
+    from app.api.routes import health as health_route
+
+    def fake_check_connection(engine_override=None) -> dict:
+        return {
+            "connected": False,
+            "database": "biz_assistant",
+            "dialect": "mysql",
+            "server_version": None,
+            "error": (
+                "OperationalError: (1045, \"Access denied for user "
+                "'root'@'localhost' (using password: NO)\")"
+            ),
+        }
+
+    monkeypatch.setattr(health_route, "check_connection", fake_check_connection)
+    resp = client.get("/api/health")
+    body = resp.json()
+
+    assert body["status"] == "degraded", "连不上库却报 ok 就是撒谎"
+    assert body["db"]["connected"] is False
+    assert body["db"]["server_version"] is None
+    assert body["db"]["error"], "连不上库时必须带出 error，不许吞掉"
+
+
 def test_health_is_not_hardcoded() -> None:
     """反向验证：连一个不存在的库时必须报 connected=False，证明是真去连了库。"""
     from sqlalchemy import create_engine
