@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="index,follow">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>唐宇 · AI Agent 应用开发 · 作品集</title>
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="唐宇 · AI Agent 应用开发">
+<meta property="og:title" content="唐宇 · AI Agent 应用开发 · 作品集">
+<meta property="og:description" content="一个可在本机真实运行的项目：销售报表 Agent（企业销售分析助手）。数字全部由程序算、LLM 只负责听懂和说话；指标可追溯，案例可回放。">
+<meta name="twitter:card" content="summary">
+<meta name="description" content="唐宇 · AI Agent 应用开发作品集：可运行项目、可追溯指标、离线可演示。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body >
+<div class="bg-fx"><i></i><i></i><i></i></div>
+<div class="grain"></div>
+
+<header class="nav">
+  <div class="wrap inner">
+    <a class="brand" href="index.html" style="text-decoration:none;color:inherit">
+      <span class="dot"></span>
+      <span>唐宇<small>AI AGENT · 应用开发</small></span>
+    </a>
+    <nav class="links">
+      <a class="lnk" href="index.html#projects">项目</a>
+      <a class="lnk" href="index.html#replay">案例回放</a>
+      <a class="lnk" href="index.html#kpi">指标</a>
+      <a class="lnk" href="index.html#flow">工作流程</a>
+      <a class="lnk" href="index.html#guide">问一问</a>
+      <a class="lnk" href="index.html#limits">局限</a>
+    </nav>
+  </div>
+  <div class="progress"></div>
+</header>
+
+<main>
+  <!-- ============ HERO ============ -->
+  <section class="hero" id="top">
+    <div class="wrap hero-grid">
+      <div>
+        <span class="eyebrow reveal">Portfolio · 2026</span>
+        <h1 class="reveal">把模糊需求<br>做成<span class="grad nowrap-lg">能跑、能验、能交付</span><br>的 AI 应用</h1>
+        <p class="sub reveal" id="profileLine"></p>
+        <div class="cta reveal">
+          <a class="btn primary" href="#projects">看我的项目 →</a>
+          <a class="btn" href="#guide">问我几个问题</a>
+        </div>
+        <div class="hero-stats reveal" id="heroStats"></div>
+      </div>
+      <div class="reveal">
+        <div class="term">
+          <div class="bar"><i></i><i></i><i></i><span>我的工作方式（示意）</span></div>
+<pre><span class="c"># 需求进来，先把它变成可验收的东西</span>
+$ <span class="k">复述</span>   目标用户 / 输入输出 / 边界（哪些一个字节都不许碰）
+$ <span class="k">拆解</span>   哪些交给 AI 实现，哪些必须我定
+
+<span class="c"># 实现交给工具，判断留给自己</span>
+$ <span class="k">评审</span>    方案先送双审（两家都过才放行，单审不算）
+$ <span class="k">施工</span>    Claude Code 出实现与测试草稿
+$ <span class="k">核对</span>    读实现、跑真实页面、在隔离库跑破坏性测试
+
+<span class="c"># 结论必须有证据，否则不算完成</span>
+$ <span class="k">验收</span>    <span class="s">真实页面操作</span> + <span class="s">针对性测试</span> + <span class="s">独立复验（自造素材）</span>
+$ <span class="k">留痕</span>    指标 → 仓库 eval 结果文件（可逐条复核）</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 项目 ============ -->
+  <section id="projects">
+    <div class="wrap">
+      <span class="eyebrow reveal">Projects</span>
+      <h2 class="title reveal">一个能当面启动的项目</h2>
+      <p class="lead reveal">它能在本机一键启动、有真实页面、有可追溯指标。点<b>卡片任意位置</b>进入项目详情（背景 · 我的职责 · 指标与来源 · 取舍与放弃的方案 · 局限）。卡片下方的状态点在本地版会<b>真实探测</b>本机服务——没启动就直说，不做假成功。<b>本地版卡片上还有「打开演示 ↗」，点进去是正在跑的真实系统，不是截图。</b></p>
+      <div class="shots" id="shotsStrip" style="margin-top:30px"></div>
+      <div class="pgrid" id="pgrid"></div>
+    </div>
+  </section>
+
+  <!-- ============ 指标 ============ -->
+  <section id="kpi">
+    <div class="wrap">
+      <span class="eyebrow reveal">Evidence</span>
+      <h2 class="title reveal">指标不是形容词，是可复核的数字</h2>
+      <p class="lead reveal">下面每个数字都来自仓库里的 eval 结果文件或验收记录。测试集表现不等于生产准确率——这一点我写在每一项的来源里。</p>
+      <div class="kpi-grid">
+        <div class="card kpi reveal"><div class="n"><span data-count="1388">0</span>/1388</div><div class="l">全量自动化测试（1388 通过 / 0 失败）</div><div class="src">来源：tests/（pytest 全量 耗时 16:15）</div></div>
+        <div class="card kpi reveal"><div class="n"><span data-count="78">0</span>/86</div><div class="l">判档准确率 90.7%（该给哪种回答形态）</div><div class="src">来源：outputs/eval_summary_20260930-052517.md</div></div>
+        <div class="card kpi reveal"><div class="n"><span data-count="75">0</span>/86</div><div class="l">反向断言通过率 87.2%（不许编数字/不许泄漏内部名词）</div><div class="src">来源：同上（含逐条失败清单）</div></div>
+        <div class="card kpi reveal"><div class="n"><span data-count="60">0</span>/60</div><div class="l">数字可信度 100%（答案里每个数字都有出处）</div><div class="src">来源：同上（复用 number_guard 判定）</div></div>
+        <div class="card kpi reveal"><div class="n"><span data-count="243">0</span>×</div><div class="l">启动提速（101.95s → 0.42s，六项指纹逐位一致）</div><div class="src">来源：tests/test_loader_disk_cache.py · 决策 D28</div></div>
+        <div class="card kpi reveal"><div class="n"><span data-count="47">0</span></div><div class="l">笔提交 · 18 个功能迭代（每笔写清"没做到的"）</div><div class="src">来源：git log</div></div>
+        <div class="card kpi reveal"><div class="n"><span data-count="3">0</span>.6 万行</div><div class="l">产品代码（另加 2.1 万行测试）</div><div class="src">来源：仓库统计（app/ 60 文件 · tests/ 45 文件）</div></div>
+        <div class="card kpi reveal"><div class="n"><span data-count="86">0</span> 条</div><div class="l">真实问法评测集（全部取自真实提问）</div><div class="src">来源：scripts/eval_set.jsonl</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 流程 ============ -->
+  <section id="flow">
+    <div class="wrap">
+      <span class="eyebrow reveal">How I work</span>
+      <h2 class="title reveal">我的工作流程（可复制成标准动作）</h2>
+      <p class="lead reveal">这套流程解决的是"AI 说完成了，但东西其实不对"。每一步都有它的产出物，不是口号。</p>
+      <div class="flow">
+        <div class="step reveal"><div class="i">01</div><h4>需求变验收</h4><p>先把目标翻译成"什么算通过"，写下来再动手。</p></div>
+        <div class="step reveal"><div class="i">02</div><h4>先摸清现状</h4><p>读真实代码与运行状态，不靠猜；口径冲突先列事实。</p></div>
+        <div class="step reveal"><div class="i">03</div><h4>方案先评审</h4><p>动代码之前先送双审；两家都过才放行，单审不算。</p></div>
+        <div class="step reveal"><div class="i">04</div><h4>真实页面核对</h4><p>打开页面亲手点，核对数据与文案；不看产物不算验证。</p></div>
+        <div class="step reveal"><div class="i">05</div><h4>独立复验</h4><p>用自己的素材去问，不用它自测的样本——自测全过不等于能用。</p></div>
+        <div class="step reveal"><div class="i">06</div><h4>归因与留痕</h4><p>失败样本逐条归因；结论写进提交与验收记录，可复核。</p></div>
+      </div>
+      <div class="note reveal" style="margin-top:22px">停止条件只有四类：跨模块方案分叉 · 业务规则冲突 · 超出授权 · 实际阻断。普通编码/测试/提交/汇报都不构成停下来等指令的理由。</div>
+    </div>
+  </section>
+
+
+  <!-- ============ 真实案例回放 ============ -->
+  <section id="replay">
+    <div class="wrap">
+      <span class="eyebrow reveal">Real replay</span>
+      <h2 class="title reveal">真实案例回放（非实时 AI）</h2>
+      <p class="lead reveal">下面每一条都是本机真实运行留下的记录。点问题，看它当时到底怎么走的：判了哪一档、走了哪个取数工具、算出了什么、最后说了什么。
+      有成功的，也有没通过的 —— 我不删没通过的样本。</p>
+      <div class="guide" style="margin-top:30px">
+        <div>
+          <div class="chat" style="min-height:0">
+            <div class="head"><div class="av">▷</div><div><b>销售分析助手真实调用 trace</b><small>点下面的问题，重放当时的执行链路</small></div></div>
+            <div id="replayBody"></div>
+          </div>
+          <div class="qs" id="replayQs" style="border:1px solid var(--line);border-top:0;border-radius:0 0 16px 16px;padding:14px 16px"></div>
+        </div>
+        <div>
+          <div class="panel reveal">
+            <h3>这些记录从哪来</h3>
+            <ul class="clean">
+              <li><b>问答链路</b>：本机 <code>POST /api/chat</code> 的真实调用（含判路档位、取数工具与确定性计算耗时）</li>
+              <li><b>评测集</b>：86 条真实问法的跑分记录（含 11 条没通过的，一条没删）</li>
+              <li><b>资料问答</b>：外部文件导入后的检索与出处记录（含"没找到"的那次）</li>
+              <li><b>独立复验</b>：我自己造素材抓出的缺陷前后对照（修前 0 字回答 → 修后带出处）</li>
+            </ul>
+          </div>
+          <div class="panel reveal" style="margin-top:18px">
+            <h3>为什么不做成"实时试用"？</h3>
+            <ul class="clean">
+              <li>实时服务需要 24 小时在线的机器，而且<b>每个访客的每次提问都会真实消耗 API 额度</b></li>
+              <li>放出去还要防陌生人刷 —— 这是我要先做限流和鉴权隔离的原因，不是偷懒</li>
+              <li>所以线上先给<b>真实回放</b>；面试现场可以直接开本机真实系统当场操作</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 问答 ============ -->
+  <section id="guide">
+    <div class="wrap">
+      <span class="eyebrow reveal">Ask me</span>
+      <h2 class="title reveal">问一问（离线预置问答）</h2>
+      <p class="lead reveal">这一版是<b>明确标注的离线预置答案</b>，不是实时模型——不为演示造假。面试后接独立的本地导览（只读脱敏后的项目资料，不接入个人记忆与执行工具）。</p>
+      <div class="guide">
+        <div class="chat">
+          <div class="head"><div class="av">AI</div><div><b>作品集导览（离线）</b><small>预置答案 · 点击问题即回答</small></div></div>
+          <div class="body" id="chatBody"></div>
+          <div class="qs" id="chatQs"></div>
+        </div>
+        <div>
+          <div class="panel reveal">
+            <h3>为什么用"离线问答"而不是直接上模型？</h3>
+            <ul class="clean">
+              <li><b>可信</b>：给出的每条答案都写死在数据文件里，能被逐条核对，不会现场编。</li>
+              <li><b>可解释</b>：它同时演示了"Agent 控制页面"的思路——回答里带跳转，把人带到证据所在页面。</li>
+              <li><b>不越界</b>：不接入个人记忆、技能库与执行工具，避免把私有工作流和公司数据混进来。</li>
+            </ul>
+          </div>
+          <div class="panel reveal" style="margin-top:18px">
+            <h3>它可以带你去哪</h3>
+            <ul class="clean">
+              <li>项目详情页：背景 / 我的职责 / AI 协作部分 / 结果 / 局限</li>
+              <li>每个指标的来源文件与样本口径</li>
+              <li>项目的本地演示入口（真实服务，不是截图）</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 局限 ============ -->
+  <section id="limits">
+    <div class="wrap">
+      <span class="eyebrow reveal">Limits</span>
+      <h2 class="title reveal">这个项目现在还不是什么</h2>
+      <p class="lead reveal">写清楚边界，比写亮点更能说明我知道自己在做什么。</p>
+      <div class="two" style="margin-top:30px">
+        <div class="card reveal">
+          <h3 style="margin-bottom:12px">如实说明</h3>
+          <ul class="clean">
+            <li>是<b>本地可运行的演示原型</b>，不是生产系统；数据是公开的电商交易数据集（UCI Online Retail，2010-12 ~ 2011-12）。</li>
+            <li>指标来自<b>评测集</b>，样本量有限（86 条真实问法），不等于线上表现；剩下 11 条没通过的样本一条没删。</li>
+            <li><b>数据只有收入侧</b>：没有成本字段，所以 ROI / 毛利一律明说"给不了"，不拿行业平均凑。</li>
+            <li><b>检索是字面匹配</b>（中文 2-gram + 轻量 BM25）：换个说法可能漏，但它选择说"没找到"，不会编。</li>
+            <li>代码由 <b>AI 协作实现</b>：我负责需求拆解、方案取舍、验收判据与复验；这一点我从不含糊。</li>
+            <li>做不动的问题我会写"未解决"，而不是用"基本可用"糊过去。</li>
+          </ul>
+        </div>
+        <div class="card reveal">
+          <h3 style="margin-bottom:12px">下一步计划</h3>
+          <ul class="clean">
+            <li>把评测失败清单剩下的 7 条治完（判档边界 / 相对时间正文写明日期）。</li>
+            <li>移动端：一套移动布局 + 打包成可安装的 App（要引依赖，会先送评审）。</li>
+            <li>做上公网的可访问版本（要加注册闸门、限流与 HTTPS，会先做安全评估）。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap row">
+    <div>唐宇 · AI Agent 应用开发 · 在线作品集 · 内容与本地演示版一致</div>
+    <div>指标均可追溯到项目评测结果文件 · 为本地可运行的演示原型，非生产系统</div>
+  </div>
+</footer>
+
+<script>
+/* 本地打开（file:// 或 localhost/127.0.0.1）→ local 模式：卡片会真实探测本机服务并给「打开演示 ↗」；
+   部署到公网 → public 模式：只展示脱敏说明与指标（不含内网地址）。 */
+window.SITE_MODE = window.SITE_MODE || (location.protocol === "file:" || /^(127\.0\.0\.1|localhost)$/.test(location.hostname)) ? "local" : "public";
+</script>
+<script src="assets/data.js"></script>
+<script src="assets/replays.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
