@@ -1,0 +1,48 @@
+﻿# ═══════════════════════════════════════════════════════════
+# 总仓库 .gitignore
+# ★ 最重要的一条：**绝不提交 .env**
+#   里面有模型 API Key 与认证密钥，一旦 push 上去，
+#   即使随后删除，GitHub 的历史记录里永远还在。
+# ═══════════════════════════════════════════════════════════
+
+# 环境与密钥
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# 运行期产物
+*.log
+logs/
+backend/uploads/
+uploads/
+state/cache/
+data/uploads/
+data/.cache/
+outputs/
+.wrangler/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
