@@ -1,0 +1,30 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <!--
+    AI供应链 · 应用图标
+
+    ★★ 这份图形与 frontend/src/components/BrandLogo.tsx 的 BrandLogo 是**同一份图形**
+       （HTML 与 TSX 是两套运行环境，无法互相引用，只能各存一份）。
+       改动图形时**两处都要改** —— 已记进 docs/DECISIONS.md D50。
+
+    构图：三层叶鞘叠成笋形（靠不透明度 1/.88/.76 分层，不用描边）
+         + 左上「三节点相连网络」（相连=供应链环环相扣；网络形态=AI/数据）
+    配色：黄绿 #A3D65C（竹笋本色/供应）→ 蓝 #0E7FC4（科技/AI）
+  -->
+  <defs>
+    <linearGradient id="xs" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A3D65C"/>
+      <stop offset="1" stop-color="#0E7FC4"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="48" height="48" rx="11" fill="url(#xs)"/>
+
+  <path d="M11.7 29.6 C11.7 36.1 17.1 40.2 24 40.2 C30.9 40.2 36.3 36.1 36.3 29.6 C32.9 32.4 27.6 33.5 24 33.5 C20.4 33.5 15.1 32.4 11.7 29.6 Z" fill="#FFFFFF"/>
+  <path d="M14.2 22.4 C14.2 29.9 18.7 33.5 24 33.5 C29.3 33.5 33.8 29.9 33.8 22.4 C30.7 25.9 27 27.1 24 27.1 C21 27.1 17.3 25.9 14.2 22.4 Z" fill="#FFFFFF" opacity="0.88"/>
+  <path d="M18.2 17.2 C18.2 25.4 21 27.4 24 27.4 C27 27.4 29.8 25.4 29.8 17.2 C29.8 12.4 27.6 8.2 24 4.9 C20.4 8.2 18.2 12.4 18.2 17.2 Z" fill="#FFFFFF" opacity="0.76"/>
+
+  <path d="M7.4 8.3 L13.3 5.7 M7.4 8.3 L11.4 13.6" stroke="#FFFFFF" stroke-width="1.2" stroke-linecap="round" opacity="0.9"/>
+  <circle cx="7.4" cy="8.3" r="2.3" fill="#FFFFFF"/>
+  <circle cx="13.5" cy="5.6" r="1.65" fill="#FFFFFF" opacity="0.9"/>
+  <circle cx="11.5" cy="13.7" r="1.65" fill="#FFFFFF" opacity="0.9"/>
+</svg>

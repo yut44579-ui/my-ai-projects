@@ -1,0 +1,18 @@
+﻿# AI 助手增强后（TASK-013）验收断言
+AI 助手面板存在|document.body.innerText.includes('AI 助手')
+能力清单含"风险"|document.body.innerText.includes('待处理的风险')
+能力清单含"访问"|document.body.innerText.includes('客户访问情况')
+边界说明出现|document.body.innerText.includes('答不了：')
+边界含竞争对手|document.body.innerText.includes('竞争对手与市场份额')
+硬性转人工说明|document.body.innerText.includes('硬性转人工')
+输入框可用|!!document.querySelector('input[placeholder*="尽管问我"]') && !document.querySelector('input[placeholder*="尽管问我"]').disabled
+工作台主区仍在|document.body.innerText.includes('今日重点任务')
+无 [object Object]|!document.body.innerText.includes('[object Object]')
+无 undefined|!document.body.innerText.includes('undefined')
+无 NaN|!document.body.innerText.includes('NaN')
+快捷入口卡存在|document.body.innerText.includes('快捷入口')
+★ 快捷入口不再有「待接入」占位|!document.body.innerText.includes('待接入')
+快捷入口：连接数据源|document.body.innerText.includes('连接数据源')
+快捷入口：导入文件|document.body.innerText.includes('导入文件')
+快捷入口：生成报告|document.body.innerText.includes('生成报告')
+快捷入口：问 AI 助手|document.body.innerText.includes('问 AI 助手')

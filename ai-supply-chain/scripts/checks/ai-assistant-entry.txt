@@ -1,0 +1,16 @@
+﻿# AI助手独立页（TASK-036，需求 §八 主导航项）验收断言
+# ★ 此前「AI助手」是重定向回工作台，本断言文件也就跟着写错了 ——
+#   现在它是独立页面，断言必须验证"它确实是另一页"，否则等于没测。
+侧栏「AI助手」可点|(() => { const el = [...document.querySelectorAll('.ant-menu-item')].find(n => n.innerText.includes('AI助手')); return el && !el.classList.contains('ant-menu-item-disabled'); })()
+★ 地址停在 /ai-assistant（不是被重定向回工作台）|location.pathname === '/ai-assistant'
+★ 页面标题是 AI助手|document.body.innerText.includes('AI助手')
+★ 有独立的页面说明|document.body.innerText.includes('基于系统里的真实业务数据回答')
+能力清单出现|document.body.innerText.includes('列出今天需要人工处理的客户') || document.body.innerText.includes('能力') || document.body.innerText.includes('查')
+边界说明出现（答不了什么）|document.body.innerText.includes('答不了')
+硬性转人工说明|document.body.innerText.includes('硬性转人工')
+★ 常见问题可点|document.body.innerText.includes('可以这样问')
+问答输入框可用|!!document.querySelector('input, textarea')
+无 [object Object]|!document.body.innerText.includes('[object Object]')
+无 undefined|!document.body.innerText.includes('undefined')
+无 NaN|!document.body.innerText.includes('NaN')
+无 markdown 星号裸露|!document.body.innerText.includes('**')

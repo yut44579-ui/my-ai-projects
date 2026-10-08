@@ -1,0 +1,24 @@
+# AI 商业项目助理 —— 后端依赖（Python 3.11+）
+# 技术选型已冻结，见 docs/DECISIONS.md D2。禁止引入 PostgreSQL/Redis/MinIO/Celery 等重型组件。
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32
+SQLAlchemy>=2.0.36,<2.1
+alembic>=1.14
+PyMySQL>=1.1.1
+cryptography>=43.0          # MySQL 8 caching_sha2_password 认证所需
+pydantic>=2.9
+pydantic-settings>=2.6
+python-dotenv>=1.0
+tzdata>=2024.1             # Windows 上 zoneinfo 需要（D6：Asia/Shanghai）
+
+# --- TASK-001 数据接入新增（理由见下，其余一律不引）---
+# openpyxl：xlsx 是 zip+XML 二进制容器，标准库没有解析器。用成熟库，不自己造轮子。
+#           CSV 走标准库 csv，★ 刻意不引 pandas，天然杜绝"自动类型推断把电话读成科学计数"。
+openpyxl>=3.1,<4.0
+# python-multipart：FastAPI 接收 multipart/form-data 文件上传的必需依赖。
+python-multipart>=0.0.20
+
+# --- 测试 ---
+pytest>=8.3
+httpx>=0.27                 # fastapi.testclient 依赖
