@@ -9,7 +9,24 @@
      页面静态部分是"骨架 + 空状态"；后端没数据时显示的就是空状态，不会被填充。 -->
 <!-- 内联 data: 图标：不引外部资源，也省掉浏览器对 /favicon.ico 的 404 请求（控制台干净） -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http%3A//www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230F1622'/%3E%3Cpath d='M7 21l5-6 4 4 8-9' stroke='%232563EB' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="style.css">
+<!-- ════════════════════════════════════════════════════════════════
+     子路径部署支持（TASK-044）
+     ────────────────────────────────────────────────────────────────
+     原来所有资源与接口都用**绝对路径**（/style.css、/api/...），
+     只能部署在域名/端口的根下。每多一个系统就要多占一个端口，
+     而多开端口在云服务器上要改防火墙、手机网络放行还不一致。
+
+     现在改成"运行期算前缀"：
+       本地          http://127.0.0.1:8536/            → 前缀 ''
+       子路径部署    https://host/demo/sales/          → 前缀 '/demo/sales'
+     这样**同一份代码**在两种环境下都对，不需要维护两份。
+     ★ 资源改用相对路径（下面的 script src 也不带前导斜杠），
+       浏览器会基于当前页面的路径自动解析。
+     ════════════════════════════════════════════════════════════════ -->
+<script>
+  window.__APP_BASE__ = new URL(".", location.href).pathname.replace(/\/$/, "");
+</script>
 </head>
 <body>
 
@@ -1457,8 +1474,9 @@
 
 <!-- session.js 必须排在 app.js 之前：先决定"要不要先给登录页"，
      再让 app.js 去读后端数据（未登录时 app.js 的初始化会被挂住，不会白读一遍）。 -->
-<script src="/session.js"></script>
-<script src="/api.js"></script>
-<script src="/app.js"></script>
+<!-- ★ TASK-044：改成相对路径（去掉前导斜杠），这样部署在 /demo/sales/ 下也能正确加载 -->
+<script src="session.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

@@ -45,6 +45,22 @@ const API = (() => {
     }
   }
 
+  /**
+   * 部署前缀（TASK-044）。
+   * ★ 本地开发时 window.__APP_BASE__ 为 ''（页面就在根下）；
+   *   部署到子路径 /demo/sales/ 时为 '/demo/sales'。
+   *   所有接口路径都带上它 —— **同一份代码两种环境都对**。
+   *   不这么做就只能把项目部署在端口根下，每加一个系统多占一个端口，
+   *   而多开端口要改云防火墙、手机网络放行还不一致。
+   */
+  function basePrefix() {
+    try {
+      return (typeof window !== "undefined" && window.__APP_BASE__) || "";
+    } catch (err) {
+      return "";
+    }
+  }
+
   async function request(path, options = {}) {
     let response;
     const withSession = {
@@ -52,7 +68,7 @@ const API = (() => {
       headers: { ...sessionHeaders(), ...((options && options.headers) || {}) },
     };
     try {
-      response = await fetch(path, withSession);
+      response = await fetch(basePrefix() + path, withSession);
     } catch (err) {
       // 「压根连不上」与「这次请求超时了」要分开说 —— 用户能采取的动作不一样
       // （前者得去起服务，后者只要等一等再试）
