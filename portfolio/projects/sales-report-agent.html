@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="index,follow">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>项目详情 · 唐宇作品集</title>
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="唐宇 · AI Agent 应用开发">
+<meta property="og:title" content="项目详情 · 唐宇作品集">
+<meta property="og:description" content="销售报表 Agent（企业销售分析助手）：数字全部由程序算、LLM 只负责听懂和说话。指标可追溯，案例可回放。">
+<meta name="twitter:card" content="summary">
+<meta name="description" content="唐宇 · AI Agent 应用开发作品集：销售报表 Agent 项目详情（背景 / 职责 / 指标与来源 / 取舍与放弃的方案 / 局限）。">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-slug="sales-report-agent">
+<div class="bg-fx"><i></i><i></i><i></i></div>
+<div class="grain"></div>
+
+<header class="nav">
+  <div class="wrap inner">
+    <a class="brand" href="../index.html" style="text-decoration:none;color:inherit">
+      <span class="dot"></span>
+      <span>唐宇<small>AI AGENT · 应用开发</small></span>
+    </a>
+    <nav class="links">
+      <a class="lnk" href="../index.html#projects">项目</a>
+      <a class="lnk" href="../index.html#replay">案例回放</a>
+      <a class="lnk" href="../index.html#kpi">指标</a>
+      <a class="lnk" href="../index.html#flow">工作流程</a>
+      <a class="lnk" href="../index.html#guide">问一问</a>
+      <a class="lnk" href="../index.html#limits">局限</a>
+    </nav>
+  </div>
+  <div class="progress"></div>
+</header>
+
+<main>
+  <section class="detail-hero">
+    <div class="wrap">
+      <div class="crumb"><a href="../index.html">← 返回全部项目</a></div>
+      <span class="eyebrow">Project detail</span>
+      <h1 class="title" id="dTitle" style="margin-top:14px">…</h1>
+      <p class="lead" id="dSub"></p>
+      <div class="meta" id="dTags" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px"></div>
+      <p class="lead" id="dSummary" style="margin-top:20px"></p>
+      <div id="dDemo" style="margin-top:22px;display:flex;gap:14px;flex-wrap:wrap;align-items:center"></div>
+    </div>
+  </section>
+
+  <section style="padding-top:20px">
+    <div class="wrap two">
+      <div>
+        <div class="panel reveal">
+          <h3>界面实拍（本机真实运行）</h3>
+          <div class="shots" id="dShots"></div>
+        </div>
+        <div class="panel reveal" style="margin-top:20px">
+          <h3>指标（可追溯）</h3>
+          <div id="dMetrics"></div>
+          <div class="note">测试集表现 ≠ 生产准确率；每条都标了来源文件或记录，可逐条复核。</div>
+        </div>
+        <div class="panel reveal" style="margin-top:20px">
+          <h3>取舍与放弃的方案</h3>
+          <ul class="clean" id="dTradeoffs"></ul>
+        </div>
+        <div class="panel reveal" style="margin-top:20px">
+          <h3>做得比较硬的地方</h3>
+          <ul class="clean" id="dHighlights"></ul>
+        </div>
+        <div class="panel reveal" style="margin-top:20px">
+          <h3>真实案例回放（非实时 AI）</h3>
+          <div id="dReplay"></div>
+        </div>
+        <div class="panel reveal" style="margin-top:20px">
+          <h3>局限与没做的事</h3>
+          <ul class="clean" id="dLimits"></ul>
+        </div>
+      </div>
+      <div>
+        <div class="panel reveal">
+          <h3>我的职责</h3>
+          <p style="color:var(--fg-dim);font-size:14.6px" id="dRole"></p>
+          <h3 style="margin-top:20px">AI 协作部分</h3>
+          <p style="color:var(--fg-dim);font-size:14.6px" id="dAiRole"></p>
+          <h3 style="margin-top:20px">技术栈</h3>
+          <div id="dStack" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+        </div>
+        <div class="panel reveal" style="margin-top:18px">
+          <h3>怎么讲这个项目（30 秒版）</h3>
+          <p style="color:var(--fg-dim);font-size:14.4px">
+            先说我解决的真实问题，再说我做了什么判断，最后给一个能被验证的证据。
+            被追问就往下钻一层：为什么这么做、放弃过什么方案、失败样本怎么归因。
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap row">
+    <div>唐宇 · AI Agent 应用开发 · 在线作品集 · 内容与本地演示版一致</div>
+    <div>指标均可追溯到项目评测结果文件 · 为本地可运行的演示原型，非生产系统</div>
+  </div>
+</footer>
+
+<script>
+window.SITE_MODE = window.SITE_MODE || (location.protocol === "file:" || /^(127\.0\.0\.1|localhost)$/.test(location.hostname)) ? "local" : "public";
+</script>
+<script src="../assets/data.js"></script>
+<script src="../assets/replays.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>
