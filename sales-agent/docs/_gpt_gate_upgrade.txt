@@ -1,0 +1,898 @@
+Gate 评审结论
+
+Gate：APPROVED_WITH_CONDITIONS
+
+这个升级方向本身成立，现有系统也有相当好的确定性计算、任务、审计和真实前端基础；但当前 15 TASK 路线需要调整，不能原样开工。
+
+核心判断：
+
+不是推倒重做，而是把现有“确定性销售报表引擎”升级成“确定性分析内核 + LLM Agent 编排层 + 企业分析 UI”。
+
+其中最重要的架构原则应固定为：
+
+LLM 不负责算数字；LLM 负责理解意图、选择分析能力、组织解释和行动建议。
+
+1. 这个升级是否真的需要？
+结论：需要，但“升级产品定位”与“15 TASK”是两个问题。
+
+现有系统已经证明：
+
+Excel → 数据解析
+
+Spec → 冻结
+
+确定性计算
+
+Excel 输出
+
+task / execution
+
+SHA256 / code version / validation
+
+浏览器真实业务闭环
+
+这些能力已经形成了一个可靠的报表计算底座。
+
+但新定位要求：
+
+数据 + 业务文档 → 自然语言 → 销售/客户/产品分析 → 异常 → 行动计划 → 周报
+
+现有系统明显缺少：
+
+NL 问答入口
+
+分析维度
+
+文档输入
+
+Agent 编排
+
+异常分析
+
+行动计划
+
+企业级工作区
+
+权限/审计
+
+因此升级是必要的。
+
+但不应该理解成：
+
+“旧项目不适用了 → 全部重做”。
+
+而应该是：
+
+现有确定性内核
+        ↓
+分析能力层
+        ↓
+Agent / LLM 编排
+        ↓
+企业分析 UI
+        ↓
+安全 / 权限 / 审计
+2. 是否过度设计？15 TASK 是否太多？
+结论：15 个 TASK 作为完整路线没问题，但作为 MVP 主线偏长。
+
+真正的 MVP 不需要一次做完：
+
+客户
+
+产品
+
+区域
+
+异常
+
+行动计划
+
+周报
+
+权限
+
+黑白名单
+
+熔断
+
+操作日志
+
+否则很容易出现：
+
+基础能力还没验证，就开始建设企业平台外围设施。
+
+建议把 15 TASK 分成三个优先级
+P0：必须形成第一个可用 Agent
+TASK-002 UI 骨架
+TASK-003 数据/文档输入
+TASK-004 自然语言入口
+TASK-005 销售分析
+TASK-006 客户/产品分析（可合并）
+TASK-008 异常发现
+
+形成：
+
+上传数据
+ ↓
+提问
+ ↓
+理解问题
+ ↓
+调用确定性分析
+ ↓
+得到数字
+ ↓
+LLM 解释
+ ↓
+异常
+P1：产品完整度
+TASK-007
+TASK-009 行动计划
+TASK-010 周报
+P2：企业化
+TASK-011 权限
+TASK-012 黑白名单
+TASK-013 熔断
+TASK-014 操作日志
+TASK-015 总体验收
+
+所以：
+
+15 TASK 可以保留为 Roadmap，但不要把它们都当成 MVP 的连续强制施工链。
+
+3. 会不会破坏现有功能？
+结论：目前迁移原则是正确的，风险可控。
+
+尤其这几个东西必须视为不可回归资产：
+
+12 个既有 API
+
+D16 销售额口径
+
+metrics.py 确定性计算
+
+Excel renderer
+
+task/execution
+
+SHA256 / code version / validation
+
+十步真实浏览器闭环
+
+你的：
+
+“新能力只加端点，不改既有语义”
+
+这个原则我支持。
+
+但建议进一步升级成：
+
+Legacy Contract Freeze
+
+在 TASK-002 开始前冻结：
+
+/api/upload
+/api/schema
+/api/execute
+/api/download/{execution_id}
+/api/executions
+/api/tasks
+/api/tasks/{task_id}
+/api/tasks/{task_id}/run
+/api/tasks/{task_id}/runs
+/api/health
+
+然后：
+
+后续 TASK 不得修改既有 endpoint 的请求/响应语义；如确需改变，必须单独开架构变更 Gate。
+
+否则“向后兼容”很容易最后变成一句口号。
+
+4. 有没有更简单方案？
+
+有，而且我认为应该采用。
+
+不要一开始建设：
+
+LLM
++ RAG
++ Agent framework
++ Vector DB
++ MySQL
++ RBAC
++ Workflow engine
++ Redis
++ MQ
+
+这会严重超出个人/小团队第一阶段需要。
+
+建议：
+
+FastAPI
+│
+├── deterministic analysis engine
+│
+├── task/execution
+│
+├── document parser
+│
+├── LLM adapter
+│
+└── Agent service
+        │
+        ├── intent
+        ├── tool selection
+        └── answer composition
+
+前端：
+
+原生 JS
+   ↓
+继续演进
+
+暂时也不需要为了“企业感”强制引入 React/Vue。
+
+如果后续 UI 状态复杂到原生 JS 明显成为瓶颈，再迁移框架。
+
+5. 当前实现是否符合新项目定位？
+结论：作为基础内核符合；作为最终产品明显不符合。
+
+这是一个很重要的区别。
+
+当前系统实际上已经具备：
+
+企业销售分析 Agent 的 Deterministic Core
+
+但还不是 Agent。
+
+现在是：
+
+数据
+ ↓
+固定 Spec
+ ↓
+固定计算
+ ↓
+固定报表
+
+目标是：
+
+数据 + 文档
+ ↓
+自然语言问题
+ ↓
+Intent
+ ↓
+选择分析工具
+ ↓
+确定性计算
+ ↓
+事实结果
+ ↓
+LLM解释
+ ↓
+异常
+ ↓
+行动建议
+
+所以我不会建议推翻当前 engine。
+
+恰恰相反：
+
+当前 engine 是这个新产品最应该保留下来的部分。
+
+6. 是否需要调整架构？
+6A. JSON → 数据库：什么时候迁？
+
+这是这次 Gate 最重要的架构决策之一。
+
+我的结论：
+
+不要现在因为“未来需要数据库”就全量迁移。
+
+但也不建议一直拖到 TASK-009 才第一次考虑数据库抽象。
+
+最佳方案是：
+
+TASK-002～008
+
+继续 JSON，但：
+
+先抽象 Repository / Store 接口。
+
+例如：
+
+TaskRepository
+ExecutionRepository
+UploadRepository
+
+当前实现：
+
+JsonTaskRepository
+JsonExecutionRepository
+JsonUploadRepository
+
+未来：
+
+SqlTaskRepository
+SqlExecutionRepository
+SqlUploadRepository
+
+这样：
+
+业务层
+  ↓
+Repository
+  ↓
+JSON
+
+未来：
+
+业务层
+  ↓
+Repository
+  ↓
+SQLite/MySQL
+TASK-009 前后再正式迁移
+
+因为 TASK-009 行动计划需要：
+
+CRUD
+
+用户关联
+
+状态
+
+时间
+
+可能的权限
+
+这时数据库的收益明显超过 JSON。
+
+SQLite 还是 MySQL？
+
+当前阶段：
+
+SQLite 更合理。
+
+原因不是 MySQL 不好，而是目前还没有真正的多用户/多实例数据库需求。
+
+SQLite 足以承担：
+
+task
+
+execution
+
+uploads
+
+analysis
+
+action plans
+
+reports
+
+users（早期）
+
+如果后续明确：
+
+多用户并发
+
+云服务器
+
+多进程/多实例
+
+更复杂权限
+
+再切 MySQL。
+
+所以我的建议是：
+
+先 Repository 抽象 → SQLite → 真正出现企业部署需求后再 MySQL。
+
+不要为了“企业级”提前引入数据库服务器。
+
+7. TASK-002 / 003 / 004 应该怎么验收？
+
+这里我建议特别严格，因为这是升级后的第一个产品闭环。
+
+TASK-002：企业级 UI 骨架
+不应该验收“页面好不好看”。
+
+而应该验收：
+
+A. 布局真实存在
+左侧导航
+│
+├── 总览
+├── 销售分析
+├── 客户
+├── 产品
+├── 异常
+└── 周报
+
+中间工作区
+
+右侧 AI 结论
+B. 每个区域有明确状态
+
+必须至少存在：
+
+loading
+
+empty
+
+success
+
+error
+
+disabled
+
+C. 必须使用真实 API
+
+至少：
+
+/api/health
+/api/tasks
+/api/executions
+
+不能使用静态 JSON。
+
+D. 必须保持旧功能可访问
+
+至少证明：
+
+旧上传
+旧任务
+旧执行
+旧下载
+
+没有被 UI 重构破坏。
+
+E. 浏览器真实验收
+
+Hermes CDP：
+
+打开页面
+→ 导航
+→ 调用真实 API
+→ 页面状态变化
+→ 刷新
+→ 状态恢复
+TASK-002 的核心判据：
+
+不是“企业风格页面做出来了”，而是“新的 UI 壳已经可以承载真实业务状态”。
+
+TASK-003：数据 / 文档输入
+
+必须至少验证：
+
+Excel
+真实 Excel
+→ 上传
+→ file_id
+→ rows
+→ columns
+→ sha256
+Word/PDF
+
+分别：
+
+真实 docx
+→ 文本提取
+→ 文本长度 > 0
+真实 PDF
+→ 文本提取
+→ 文本长度 > 0
+
+并且：
+
+原始文件和解析结果都不能由前端伪造。
+
+建议第一版文档处理非常克制：
+
+文件
+ ↓
+文本提取
+ ↓
+normalized text
+ ↓
+metadata
+
+暂时不要做 RAG。
+
+TASK-004：自然语言入口
+
+这是整个升级最容易走偏的地方。
+
+第一版最稳方案：
+
+不要直接做“万能 Agent”。
+
+先做：
+
+用户问题
+ ↓
+LLM
+ ↓
+结构化 Intent
+ ↓
+确定性 Tool
+ ↓
+metrics
+ ↓
+结果
+ ↓
+LLM 组织回答
+
+例如用户：
+
+“11 月第三周销售额是多少？”
+
+LLM 只负责得到类似：
+
+{
+  "intent": "sales_summary",
+  "date_range": {
+    "start": "2011-11-21",
+    "end": "2011-11-27"
+  }
+}
+
+然后：
+
+Agent
+ ↓
+sales_summary tool
+ ↓
+metrics.py
+ ↓
+£316,412.16
+
+最后 LLM：
+
+本周销售额为 £316,412.16……
+
+绝对不要让 LLM：
+Excel
+ ↓
+LLM
+ ↓
+“我算出来销售额是 £xxx”
+
+也不要：
+
+用户问题
+ ↓
+LLM 自己生成 SQL / pandas
+ ↓
+直接执行
+
+第一版应该是白名单 Tool Calling：
+
+sales_summary
+sales_trend
+customer_summary
+product_summary
+anomaly_summary
+
+LLM 只能选择工具和提供参数。
+
+A. 存储迁移最终判断
+现在不做数据库迁移。
+
+但：
+
+现在就做 Repository 抽象。
+
+最终路线：
+
+TASK-002
+    ↓
+Repository 抽象
+    ↓
+TASK-003～008
+    ↓
+JSON 继续运行
+    ↓
+TASK-009
+    ↓
+SQLite
+    ↓
+后续根据部署需求决定 MySQL
+
+这是我认为当前成本/风险最平衡的方案。
+
+B. 前端重做会不会违反“不得为 UI 重写后端”？
+不会，只要边界严格。
+
+允许：
+
+旧后端
+   ↑
+   │ API
+   ↓
+新 UI
+
+允许：
+
+新导航
+
+新布局
+
+新组件
+
+新页面状态
+
+新 API 调用
+
+新分析展示
+
+新 AI 结论面板
+
+不允许：
+
+为了 UI
+ ↓
+修改 metrics
+ ↓
+修改 executor
+ ↓
+修改旧 API 语义
+ ↓
+破坏旧测试
+
+所以应把规则写成：
+
+UI 可以重新组织业务体验，但不得要求后端改变既有确定性业务语义。新增 UI 能力只能通过新增 API 或既有 API 的合法组合实现。
+
+这就是“不能为 UI 重写后端”的真正边界。
+
+C. TASK-004 最稳的第一步
+不要先做“Agent”。
+
+先做一个：
+
+NL → Intent → Tool → Result → Answer
+
+最小闭环。
+
+例如只支持 3 个 Intent：
+
+sales_summary
+sales_trend
+top_products
+
+流程：
+
+用户：
+“上周销售额多少？”
+
+        ↓
+
+LLM Parser
+
+        ↓
+
+Intent JSON
+
+        ↓
+
+Schema 校验
+
+        ↓
+
+Tool Registry
+
+        ↓
+
+metrics.py
+
+        ↓
+
+确定性结果
+
+        ↓
+
+LLM
+
+        ↓
+
+最终回答
+
+并强制回答结构：
+
+【发生了什么】
+程序计算出的事实
+
+【为什么】
+基于数据/文档的推断
+
+【建议行动】
+LLM 生成的建议
+
+第一版甚至可以暂时没有“为什么”和“行动”，先保证：
+
+自然语言 → 正确指标 → 正确数字
+
+这是 TASK-004 最重要的 Gate。
+
+最终 15 TASK 路线建议
+
+我建议保留你的编号体系，但调整依赖关系：
+
+002  企业 UI 骨架
+ ↓
+003  数据 + Word/PDF 输入
+ ↓
+004  NL → Intent → Tool
+ ↓
+005  销售分析
+ ↓
+006  客户/产品分析
+ ↓
+008  异常发现
+ ↓
+009  行动计划 + SQLite
+ ↓
+010  周报
+ ↓
+011  权限
+ ↓
+012  白名单/黑名单
+ ↓
+013  熔断/降级
+ ↓
+014  操作日志
+ ↓
+015  总体验收
+
+007 如果只是某个独立分析能力，可以插回 006～008；不要为了凑 15 个任务强行拆任务。
+
+Gate 最终判定
+Gate 问题	判定
+1. 升级是否需要	需要
+2. 15 TASK 是否过度	作为 Roadmap 可以，作为 MVP 偏重
+3. 是否破坏现有功能	当前方案可避免，但必须冻结 Legacy Contract
+4. 是否有更简单方案	有：确定性内核 + Tool Agent + 轻量 UI
+5. 当前实现是否符合新定位	作为内核符合，作为完整产品不符合
+6. 是否调整架构	需要 Repository 抽象；数据库暂缓至 TASK-009/之前
+7. 早期 TASK 验收	必须以真实业务闭环，而非视觉完成度为核心
+Gate：APPROVED_WITH_CONDITIONS
+开工前必须锁定 4 条：
+
+冻结现有 12 个 API + D16 + 确定性计算为 Legacy Contract。
+
+TASK-002 不做数据库迁移，只做 Repository 抽象准备。
+
+TASK-004 必须采用 NL → Intent → 白名单 Tool → 确定性计算 → Answer，禁止 LLM 自己算数字。
+
+MVP 不追求 15 TASK 全部完成；先打通 数据 → 提问 → 分析 → 事实结果 主链。
+
+TASK-002 具体验收标准
+
+我建议直接把下面作为 TASK-002 Gate 的基础 AC：
+
+AC-01：真实页面入口
+
+/ 正常加载新企业级深色 UI，不存在静态 demo 数据。
+
+AC-02：三栏结构
+
+浏览器真实显示：
+
+左导航 | 中央工作区 | AI 结论区
+
+并能正常响应窗口尺寸变化。
+
+AC-03：真实 API
+
+页面至少真实调用：
+
+/api/health
+/api/tasks
+/api/executions
+
+禁止 mock/fake。
+
+AC-04：真实导航
+
+左侧导航至少可以切换：
+
+总览
+
+销售分析
+
+客户
+
+产品
+
+异常
+
+周报
+
+每个页面必须具有明确的 empty state，禁止只有标题。
+
+AC-05：真实状态
+
+至少验证：
+
+loading
+empty
+success
+error
+disabled
+
+五种状态中的实际 UI 表现。
+
+AC-06：旧业务不回归
+
+通过浏览器真实完成：
+
+已有 Excel
+→ 上传
+→ 建任务
+→ 查看 Spec
+→ 执行
+→ 下载
+
+至少证明旧 12 个 API 没被 UI 重构破坏。
+
+AC-07：刷新恢复
+
+完成一次真实任务后：
+
+刷新浏览器
+→ 页面重新请求后端
+→ 能恢复任务/执行记录
+
+不得依赖 JS 内存状态。
+
+AC-08：无伪造
+
+代码审查确认：
+
+无 mock 数据
+
+无 fake API
+
+无硬编码业务金额
+
+无假任务 ID
+
+无假执行状态
+
+无 setTimeout 模拟业务完成
+
+AC-09：前后端边界
+
+确认 TASK-002 没有修改：
+
+metrics.py
+
+executor.py
+
+renderer 核心逻辑
+
+既有 API 请求/响应语义
+
+AC-10：回归
+
+现有测试保持通过；如果不跑全量 pytest，至少必须执行与：
+
+API
+
+task
+
+execution
+
+web
+
+直接相关的定向测试 + Hermes CDP 真实浏览器验收。
+
+AC-11：Git Scope
+
+git status --short 只出现 TASK-002 明确允许修改的文件。
+
+一句话 Gate 判断：
+
+这次升级可以开工，但不要把“企业级 Agent”理解成全面换血；先保护已经验证过的确定性内核，用最小的 Intent → Tool → Deterministic Result 链把它变成 Agent，再逐步企业化。

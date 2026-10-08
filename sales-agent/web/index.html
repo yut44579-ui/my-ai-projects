@@ -1,0 +1,1482 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>销售报表 Agent · 企业销售分析平台</title>
+<!-- 设计规格：docs/设计规格-深色企业级.md（三层明度阶梯 / 1px 描边替代阴影 / 高密度小字 + 单点大数字）
+     本页面**不含任何业务数字**：所有金额、行数、任务、执行记录一律由 app.js 从后端接口读出来再渲染。
+     页面静态部分是"骨架 + 空状态"；后端没数据时显示的就是空状态，不会被填充。 -->
+<!-- 内联 data: 图标：不引外部资源，也省掉浏览器对 /favicon.ico 的 404 请求（控制台干净） -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http%3A//www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230F1622'/%3E%3Cpath d='M7 21l5-6 4 4 8-9' stroke='%232563EB' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<!-- ════════════════════════════════════════════════════════════════
+     子路径部署支持（TASK-044）
+     ────────────────────────────────────────────────────────────────
+     原来所有资源与接口都用**绝对路径**（/style.css、/api/...），
+     只能部署在域名/端口的根下。每多一个系统就要多占一个端口，
+     而多开端口在云服务器上要改防火墙、手机网络放行还不一致。
+
+     现在改成"运行期算前缀"：
+       本地          http://127.0.0.1:8536/            → 前缀 ''
+       子路径部署    https://host/demo/sales/          → 前缀 '/demo/sales'
+     这样**同一份代码**在两种环境下都对，不需要维护两份。
+     ★ 资源改用相对路径（下面的 script src 也不带前导斜杠），
+       浏览器会基于当前页面的路径自动解析。
+     ════════════════════════════════════════════════════════════════ -->
+<script>
+  window.__APP_BASE__ = new URL(".", location.href).pathname.replace(/\/$/, "");
+</script>
+</head>
+<body>
+
+<!-- ═══ 登录页 ═══════════════════════════════════════════════════════
+     打开页面先看到它；登录成功后收起来，刷新靠本机记录保持登录态，
+     退出登录再回来。左边是这套系统能干什么，右边是三个入口：
+     账号登录 / 注册 / 游客登录。
+
+     账号是真的：注册会把账号写进这台机器的账号表，密码由后端存成不可还原的校验值，
+     登录时由后端核对 —— 密码原文不落盘、不比对、不进页面。这是**单机自用**级别：
+     没有多用户数据隔离、不发令牌（那些留待后续）。
+     角色只有一条规则：**第一个注册的账号是管理员**，能批准后来的人；
+     不是管理员的人登录后看不到「账号管理」。
+     要不要等人批准看本机设置（FR-002A）：**默认的本机单用户模式注册即可登录**，
+     自己开的机器不需要别人批；把本机设为需要管理员审批时才走"待批准 → 管理员批"那条路。
+     游客是"本机随机取个名字"，不进账号表，
+     退出后名字会变 —— 游客能提问、看表格、看周报，导入/导出/改任务/账号管理会被拦下（带 ⚠ 记号）。
+
+     页面上的数字（交易行数 / 客户编号数 / 地区数）都从当前数据源读出来，
+     不写死在页面里 —— 换数据源它们会跟着变。 -->
+<div class="login-gate" id="login-gate" hidden>
+  <div class="login-shell">
+    <!-- 封面左区**只留两样**：品牌（SR）+ 产品名 + 一句 ≤12 字定位。
+         营销 slogan、特性胶囊、统计数字卡一律不放 —— 它们不是用户此刻要做的判断，
+         用户此刻只做一件事：把这几行填完进去。层级越少，专业感越强。 -->
+    <section class="login-brand">
+      <div class="login-brand-inner">
+        <div class="brand">
+          <div class="brand-logo">SR</div>
+          <div class="brand-text">
+            <div class="brand-title">销售分析平台</div>
+          </div>
+        </div>
+        <p class="login-tagline">企业销售数据分析与报告</p>
+      </div>
+    </section>
+
+    <section class="card login-card">
+      <div class="login-card-inner">
+      <h3 class="login-title" id="login-title">账号登录</h3>
+      <p class="login-sub" id="login-sub">登录后使用完整功能</p>
+
+      <div class="login-tabs">
+        <button class="login-tab is-on" id="ltab-account" type="button">账号登录</button>
+        <button class="login-tab" id="ltab-register" type="button">注册</button>
+        <button class="login-tab" id="ltab-guest" type="button">游客登录</button>
+      </div>
+
+      <!-- 首次使用引导：这台机器上一个账号都没有时出现（由 session.js 按后端回的账号数决定）。
+           点一下直接切到注册那一栏 —— 比"进去发现登不上再猜"少一步。 -->
+      <button class="login-firstrun" id="login-firstrun" type="button" hidden>
+        本机暂无账号，<b>点这里先注册一个</b>；也可使用游客登录。
+      </button>
+
+      <form class="login-form" id="login-form" novalidate>
+        <div class="field">
+          <!-- id 仍叫 login-name（本机记录 / 验收脚本都按它找），但对面看到的是「账号」 -->
+          <label class="field-label" for="login-name">账号</label>
+          <input id="login-name" type="text" maxlength="40" autocomplete="username"
+                 placeholder="手机号 / 邮箱 / 用户名">
+          <p class="field-msg" id="login-name-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="login-pwd">密码</label>
+          <div class="pwd-wrap">
+            <input id="login-pwd" type="password" autocomplete="current-password" placeholder="至少 6 位">
+            <!-- 睁眼 = 点了就显示明文；闭眼（眼睛加斜线）= 明文已显示，点了藏回去。
+                 两个图标都在页面里，靠 .is-shown 切换 —— 不引图标库，也不靠 JS 拼字符串。 -->
+            <button class="pwd-eye" id="btn-pwd-eye" type="button"
+                    aria-pressed="false" aria-label="显示密码" title="显示密码">
+              <svg class="eye eye-open" viewBox="0 0 20 20" width="16" height="16" fill="none"
+                   stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true" focusable="false">
+                <path d="M1.8 10S4.6 4.7 10 4.7 18.2 10 18.2 10 15.4 15.3 10 15.3 1.8 10 1.8 10Z"/>
+                <circle cx="10" cy="10" r="2.6"/>
+              </svg>
+              <svg class="eye eye-off" viewBox="0 0 20 20" width="16" height="16" fill="none"
+                   stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true" focusable="false">
+                <path d="M1.8 10S4.6 4.7 10 4.7 18.2 10 18.2 10 15.4 15.3 10 15.3 1.8 10 1.8 10Z"/>
+                <circle cx="10" cy="10" r="2.6"/>
+                <path d="M3.7 3.7 16.3 16.3"/>
+              </svg>
+            </button>
+          </div>
+          <p class="field-msg" id="login-pwd-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="login-captcha">验证码</label>
+          <div class="captcha-row">
+            <input id="login-captcha" type="text" maxlength="4" autocomplete="off"
+                   spellcheck="false" placeholder="输入图中的 4 个字符">
+            <!-- 图就是按钮：看不清点一下换一张（必须给这个出路，否则用户卡死）。
+                 图本身由本机现画现发，不缓存、不落地。 -->
+            <button class="captcha-btn" id="login-captcha-btn" type="button"
+                    title="看不清时可点击更换" aria-label="验证码图片，可点击更换">
+              <img id="login-captcha-img" alt="验证码图片，可点击更换">
+            </button>
+          </div>
+          <p class="field-msg" id="login-captcha-msg" hidden></p>
+        </div>
+        <div class="login-row">
+          <label class="check"><input type="checkbox" id="login-remember"> 记住账号</label>
+          <button class="link-btn" id="link-forgot" type="button">忘记密码？</button>
+        </div>
+        <!-- 记住账号（FR-002C）：勾了才记**账号名**，只记最近 1 个，密码连碰都不碰。
+             已经记着的时候才亮出这一行 —— 记的是谁看得见，点「清除」就能真的清掉，
+             不用去翻浏览器设置。冻结原则：记住账号 ≠ 记住登录状态 ≠ 记住密码。 -->
+        <p class="remember-note" id="remember-note" hidden>
+          已记住账号 <span class="remember-who" id="remember-who"></span>
+          <button class="link-btn" id="btn-forget-account" type="button">清除</button>
+        </p>
+        <button class="btn btn-primary login-submit" id="btn-login" type="submit">
+          <span class="spinner" id="login-spinner" hidden></span>
+          <span>登 录</span>
+        </button>
+      </form>
+
+      <!-- 注册表单：账号 / 显示名（可不填）/ 密码 / 再填一次密码 / 验证码。
+           ★ 注册成功后按**后端给的状态**分成两种结果（FR-002A）：可用的账号（第一个管理员 /
+             本机单用户模式下的注册即生效）照常进系统；只有"等待批准"的那种就地告诉用户等批准。
+           唯一的例外是这台机器上的第一个账号 —— 它自动是管理员，注册完立即可用。
+           账号框失焦会去问一次"这个名字有没有被注册"，就地给「✓ 可用」或「已被注册」。
+           密码强度提示只是提醒（弱/中/强，不拦人）；两次不一致就地人话提示。 -->
+      <form class="login-form" id="register-form" novalidate hidden>
+        <div class="field">
+          <label class="field-label" for="reg-name">账号</label>
+          <input id="reg-name" type="text" maxlength="40" autocomplete="username"
+                 placeholder="2~40 个字符，中文 / 字母 / 数字">
+          <p class="field-msg" id="reg-name-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-display">显示名（选填）</label>
+          <input id="reg-display" type="text" maxlength="40" autocomplete="nickname"
+                 placeholder="不填则与账号相同">
+          <p class="field-msg" id="reg-display-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-pwd">密码</label>
+          <input id="reg-pwd" type="password" autocomplete="new-password" placeholder="至少 6 位">
+          <p class="field-msg" id="reg-pwd-msg" hidden></p>
+          <p class="pwd-strength" id="reg-strength" hidden>
+            <span class="pwd-strength-bar"><i id="reg-strength-fill"></i></span>
+            <span class="pwd-strength-text" id="reg-strength-text"></span>
+          </p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-pwd2">确认密码</label>
+          <input id="reg-pwd2" type="password" autocomplete="new-password" placeholder="请再次输入密码">
+          <p class="field-msg" id="reg-pwd2-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="reg-captcha">验证码</label>
+          <div class="captcha-row">
+            <input id="reg-captcha" type="text" maxlength="4" autocomplete="off"
+                   spellcheck="false" placeholder="输入图中的 4 个字符">
+            <button class="captcha-btn" id="reg-captcha-btn" type="button"
+                    title="看不清时可点击更换" aria-label="验证码图片，可点击更换">
+              <img id="reg-captcha-img" alt="验证码图片，可点击更换">
+            </button>
+          </div>
+          <p class="field-msg" id="reg-captcha-msg" hidden></p>
+        </div>
+        <button class="btn btn-primary login-submit" id="btn-register" type="submit">
+          <span class="spinner" id="register-spinner" hidden></span>
+          <span>注 册</span>
+        </button>
+        <!-- 注册的结果有两种（FR-002A）：默认**本机单用户 = 注册即生效**，直接进来；
+             只有把本机设置为「需要管理员审批」时才是"等批准"。
+             这句要短：登录页只说"接下来会发生什么"，"为什么要批、谁是管理员"收进帮助。 -->
+        <p class="login-hint">注册后即可登录使用；把本机设为需要管理员审批时，则需等待批准。</p>
+      </form>
+
+      <!-- 注册结果：**等待批准**（不是"已经进来了"）。
+           注册表单收起来换成这一张，说清三件事：谁会批、批完怎么登、现在还能干什么。 -->
+      <div class="login-form login-pending" id="register-pending" hidden>
+        <div class="pending-ico" aria-hidden="true">✓</div>
+        <h4 class="pending-title">注册成功，等待管理员批准</h4>
+        <p class="pending-name" id="reg-pending-name"></p>
+        <p class="login-hint">管理员在「系统设置 → 账号管理」中批准后，即可使用该账号登录。
+          本机第一个注册的账号自动成为管理员。</p>
+        <p class="login-hint">等待批准期间可使用游客登录。</p>
+        <button class="btn" id="btn-reg-pending-back" type="button">返回登录</button>
+      </div>
+
+      <div class="login-form" id="guest-pane" hidden>
+        <p class="guest-lede">无需账号密码，系统将随机分配一个游客名称。</p>
+        <p class="guest-lede">可提问、查看表格与周报；导入数据、导出报表、修改任务需登录后使用。</p>
+        <div class="guest-name" id="guest-name">游客xxxxx</div>
+        <button class="btn btn-primary login-submit" id="btn-guest" type="button">
+          <span class="spinner" id="guest-spinner" hidden></span>
+          <span>以游客身份进入</span>
+        </button>
+        <p class="login-hint">游客不留身份：名称由本机随机分配，退出后再次进入将更换。</p>
+      </div>
+
+      <!-- ── 忘记密码：单页四步（① 账号+验证码 ② 恢复码 ③ 新密码 ④ 完成）──────
+           评审冻结的形态：**一个页面里的四个步骤**，不做四个弹窗。
+           ★ 第①步**绝不**显示"账号不存在"或"该账号没有恢复码" —— 一律同一句话：
+             「如果账户信息有效且满足恢复条件，将继续下一步。」
+             （能区分就等于给了一个"这个账号在不在"的探测口。）
+           ★ 三步各自的权限是分开的：验证码只允许"进入流程"、恢复码才证明"这是你的账号"、
+             一次性票据只允许"改密码" —— 合并任何两步都会留下越权路径，所以界面上也是四步。
+           每一步的问与答都由后端决定，页面只负责"显示状态 + 递凭证"。 -->
+      <div class="login-form reset-pane" id="reset-pane" hidden>
+        <ol class="reset-steps">
+          <li class="reset-step is-on" id="reset-dot-1">账号</li>
+          <li class="reset-step" id="reset-dot-2">恢复码</li>
+          <li class="reset-step" id="reset-dot-3">新密码</li>
+          <li class="reset-step" id="reset-dot-4">完成</li>
+        </ol>
+
+        <div id="reset-step-1">
+          <div class="field">
+            <label class="field-label" for="reset-name">账号</label>
+            <input id="reset-name" type="text" maxlength="40" autocomplete="username"
+                   placeholder="要找回的账号">
+            <p class="field-msg" id="reset-name-msg" hidden></p>
+          </div>
+          <div class="field">
+            <label class="field-label" for="reset-captcha">验证码</label>
+            <div class="captcha-row">
+              <input id="reset-captcha" type="text" maxlength="4" autocomplete="off"
+                     spellcheck="false" placeholder="输入图中的 4 个字符">
+              <button class="captcha-btn" id="reset-captcha-btn" type="button"
+                      title="看不清时可点击更换" aria-label="验证码图片，可点击更换">
+                <img id="reset-captcha-img" alt="验证码图片，可点击更换">
+              </button>
+            </div>
+            <p class="field-msg" id="reset-captcha-msg" hidden></p>
+          </div>
+          <button class="btn btn-primary login-submit" id="btn-reset-step1" type="button">下一步</button>
+        </div>
+
+        <div id="reset-step-2" hidden>
+          <p class="reset-lede">请输入你的恢复码（20 位，空格与连字符可省略）。</p>
+          <div class="field">
+            <label class="field-label" for="reset-code">恢复码</label>
+            <input id="reset-code" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="例如 J7KD-X4PM-Q8TW-2NFC-9H3M">
+            <p class="field-msg" id="reset-code-msg" hidden></p>
+          </div>
+          <p class="login-hint">没有恢复码？本机无法自助补发，请联系管理员发一张临时密码。</p>
+          <button class="btn btn-primary login-submit" id="btn-reset-step2" type="button">验证恢复码</button>
+        </div>
+
+        <div id="reset-step-3" hidden>
+          <div class="field">
+            <label class="field-label" for="reset-pwd">新密码</label>
+            <input id="reset-pwd" type="password" autocomplete="new-password" placeholder="至少 6 位">
+            <p class="field-msg" id="reset-pwd-msg" hidden></p>
+          </div>
+          <div class="field">
+            <label class="field-label" for="reset-pwd2">确认新密码</label>
+            <input id="reset-pwd2" type="password" autocomplete="new-password" placeholder="请再次输入新密码">
+            <p class="field-msg" id="reset-pwd2-msg" hidden></p>
+          </div>
+          <button class="btn btn-primary login-submit" id="btn-reset-step3" type="button">设置新密码</button>
+        </div>
+
+        <div id="reset-step-4" hidden>
+          <div class="pending-ico" aria-hidden="true">✓</div>
+          <h4 class="pending-title" id="reset-done-title">密码已更新</h4>
+          <p class="login-hint" id="reset-done-note">请用新密码登录。</p>
+          <button class="btn" id="btn-reset-done" type="button">返回登录</button>
+        </div>
+
+        <p class="login-hint" id="reset-note-1">忘记密码时用恢复码重置。恢复码要在登录后自己生成。</p>
+        <button class="link-btn" id="btn-reset-back" type="button">返回登录</button>
+      </div>
+
+      <!-- ── 临时密码登录后必须先改密 ─────────────────────────────────────
+           这条**不是**前端说了算：后端把这条会话标记成"只准改密码与退出登录"，
+           其它接口一律 403（见 app/api.py 的 must_change_guard）。页面只是把人引到这一步。 -->
+      <div class="login-form" id="pwd-change-form" hidden>
+        <p class="login-hint" id="pwd-change-who"></p>
+        <div class="field">
+          <label class="field-label" for="pc-old">临时密码</label>
+          <input id="pc-old" type="password" autocomplete="current-password" placeholder="管理员给你的那串临时密码">
+          <p class="field-msg" id="pc-old-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="pc-new">新密码</label>
+          <input id="pc-new" type="password" autocomplete="new-password" placeholder="至少 6 位">
+          <p class="field-msg" id="pc-new-msg" hidden></p>
+        </div>
+        <div class="field">
+          <label class="field-label" for="pc-new2">确认新密码</label>
+          <input id="pc-new2" type="password" autocomplete="new-password" placeholder="请再次输入新密码">
+          <p class="field-msg" id="pc-new2-msg" hidden></p>
+        </div>
+        <button class="btn btn-primary login-submit" id="btn-pwd-change" type="button">设置新密码并继续</button>
+        <p class="login-hint">临时密码只能登录一次。设置新密码后，用它登录会失效。</p>
+      </div>
+
+      <!-- 登录页**不写**解释实现细节的长句（用户要的是 QQ 那种：几行填完就登）。
+           需要解释的事（密码怎么存、忘记密码怎么办、注册为什么要等管理员批）都收进「帮助」抽屉，
+           点一下就能看；登录页只留一行到哪去找。 -->
+      <div class="login-foot">
+        <button class="link-btn" id="link-register" type="button">注册账号</button>
+        <span class="login-foot-sep">·</span>
+        <button class="link-btn" id="link-help" type="button">帮助</button>
+        <span class="login-foot-sep">·</span>
+        <button class="link-btn" id="link-privacy" type="button">隐私</button>
+      </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<!-- ═══ 「需要先登录」弹窗 ══════════════════════════════════════════════
+     游客点到受限功能（导入数据 / 导出报表 / 保存或改任务 / 账号管理 / 删除）时出现。
+     为什么是弹窗而不是页面上一直挂着的横幅：**只在被拦下的那一刻**说一次，
+     用户点「去登录」直接退出游客、回到登录页的账号那一栏。
+     它与「游客提示条」是两条不同的提示：提示条说"现在是什么模式"（一直很轻），
+     弹窗说"刚才那个动作为什么没做成"（一次一发，不挡别的地方）。 -->
+<div class="guard-modal" id="guard-modal" hidden>
+  <div class="guard-backdrop" id="guard-backdrop"></div>
+  <div class="guard-card" id="guard-card" role="dialog" aria-modal="true" aria-labelledby="guard-title">
+    <div class="guard-big-ico" aria-hidden="true">⚠</div>
+    <h3 class="guard-title" id="guard-title">需要您先登录才能使用完整服务</h3>
+    <p class="guard-text" id="guard-text">登录后即可使用该功能。</p>
+    <div class="guard-actions">
+      <button class="btn btn-primary" id="guard-login" type="button">去登录</button>
+      <button class="btn" id="guard-cancel" type="button">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 帮助 / 隐私 抽屉 ═══════════════════════════════════════════════
+     登录页底部的「帮助」「隐私」点开就是这个抽屉（右侧滑出，不跳页、不弹窗居中）。
+     为什么放在这里（而不是 .app 里）：登录时主界面整块不渲染，抽屉必须能独立盖在
+     登录页之上；所以它是 body 的直接子元素，层级高于登录页。
+     **里面的每个数字都是从后端读出来的**（数据源名 / 覆盖范围 / 行数 / 客户数 / 地区数 /
+     币种 / 能问什么 / 不能问什么 / 报告能导出成什么格式）—— 换数据源这些字会跟着变，
+     不写死在页面里。文字一律业务话，不出现接口路径、字段名这类词。 -->
+<div class="info-drawer" id="info-drawer" hidden>
+  <div class="info-backdrop" id="info-backdrop"></div>
+  <aside class="info-panel" role="dialog" aria-modal="true"
+         aria-labelledby="info-title">
+    <header class="info-head">
+      <h2 class="info-title" id="info-title">帮助</h2>
+      <button class="icon-btn" id="btn-info-close" type="button" title="关闭" aria-label="关闭">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true" focusable="false">
+          <path d="M6 6l12 12M18 6L6 18"/>
+        </svg>
+      </button>
+    </header>
+
+    <div class="info-body">
+      <!-- ── 帮助 ─────────────────────────────────────────────────── -->
+      <section class="info-pane" id="info-pane-help">
+        <h3 class="info-h">一、能问什么</h3>
+        <p class="info-p">用大白话提问即可，以下六类问题均支持（也可点击页面上的示例直接提问）：</p>
+        <ul class="info-list">
+          <li><b>销售汇总</b> —— 2011年11月一共卖了多少？</li>
+          <li><b>销售趋势</b> —— 2011年11月的销售趋势，按日看</li>
+          <li><b>产品排行</b> —— 2011年11月卖得最好的5个产品</li>
+          <li><b>两区间比较</b> —— 2011年11月和2011年10月的销售额哪个高？</li>
+          <li><b>客户分析</b> —— 2011年11月销售额最高的10个客户</li>
+          <li><b>商品分析</b> —— 2011年11月各商品的退货情况，前10名</li>
+        </ul>
+        <p class="info-p"><b>地区分布</b> —— 导入带地区列的数据后，可以按省份/大区看销售额
+          （当前这份数据里没有地区列，所以这一项要换成你自己的数据才能用）。</p>
+        <p class="info-p">另外还可以直接说「<b>做一份销售周报</b>」——系统会生成一份结构化报告
+          （环比、逐日趋势、地区与商品结构），可下载导出。</p>
+
+        <h3 class="info-h">二、数据从哪来</h3>
+        <dl class="info-kv">
+          <div><dt>当前数据源</dt><dd id="help-source">读取中…</dd></div>
+          <div><dt>覆盖范围</dt><dd id="help-range">—</dd></div>
+          <div><dt>交易行数</dt><dd id="help-rows">—</dd></div>
+          <div><dt>客户编号数</dt><dd id="help-customers">—</dd></div>
+          <!-- 地区数是**按数据源动态决定显不显示**的一行：数据源真的带地区字段才出现，
+               只有 Country 就整行不显示（绝不把国家数标成地区数）。由 session.js 填充。 -->
+          <div id="help-region-row" hidden><dt id="help-region-label">地区数</dt><dd id="help-countries">—</dd></div>
+          <div><dt>金额单位</dt><dd id="help-currency">—</dd></div>
+        </dl>
+        <p class="info-p">这几个数字都是<b>当前</b>从数据源读取的：更换数据源后，它们会随之变化。</p>
+
+        <h3 class="info-h">三、数据里没有什么</h3>
+        <p class="info-p">这份数据只有交易本身的信息，<b>没有</b>下面这些：</p>
+        <ul class="info-list" id="help-unsupported"></ul>
+        <p class="info-p">问到这里，系统会直接说明"数据不支持"，<b>不会用别的字段替代</b> ——
+          例如不会用「国家」代替「区域」，也不会用「卖得最多」代替「最重要的客户」。</p>
+
+        <h3 class="info-h">四、数字是怎么算出来的</h3>
+        <ul class="info-list">
+          <li><b>同一套口径</b>：问答、报表、导出的表格使用同一套规则，不存在"页面上一个数、导出里另一个数"的情况。</li>
+          <li><b>日期含首尾</b>：提问「11月1日到11月30日」时，首尾两天均计入（按整天计算，而不是到当天 0 点为止）。</li>
+          <li><b>剔除三类</b>：已取消的订单、数量为负、单价为负的记录，均不计入销售额。</li>
+          <li><b>客户维度只统计有客户编号的成交</b>：部分记录未填客户号（散客、退货、补录），
+            不计入"客户数"与客户排行 —— 每次客户分析的结果中都会写明本次的覆盖率。</li>
+          <li><b>金额单位是人民币「元」</b>：该单位是声明值，并非从数据中读取（文件中没有货币列），数值不做换算。</li>
+        </ul>
+
+        <h3 class="info-h">五、常见问题</h3>
+        <dl class="info-faq">
+          <div>
+            <dt>为什么某天是空的、最后几天数据不全？</dt>
+            <dd>这份数据记录到 <span id="help-last-day">—</span> 中午（最后一天只记录了半天），
+              因此最后一天的数值偏小；某天没有成交记录即为空值 ——
+              不会用相邻日期的数值替代，也不会把空值绘成折线。</dd>
+          </div>
+          <div>
+            <dt>为什么客户数比订单数少？</dt>
+            <dd>客户维度只统计已记录客户编号的成交。当前数据源中有部分记录未填客户号，
+              这些记录仍计入销售额，但不计入"客户数" —— 因此客户数小于实际发生交易的次数，
+              也小于实际购买过商品的人数。</dd>
+          </div>
+          <div>
+            <dt>报表在哪导出？能导出成什么？</dt>
+            <dd>提问完成后即生成报告，旁边有下载入口，可选择 <span id="help-report-formats">—</span>；
+              数据表本身也可导出为表格文件。导出的数字与页面上看到的完全一致。</dd>
+          </div>
+          <div>
+            <dt>为什么换个数据源，数字就变了？</dt>
+            <dd>数字是<b>现算</b>的：每次提问都按当前数据源重新计算。更换数据源、或导入了新的表之后，
+              口径不变但数据变了，结果自然会变 —— 页面上方始终显示当前使用的是哪一份数据。</dd>
+          </div>
+        </dl>
+
+        <!-- ── 六、账号（登录页上那些"解释性长句"收在这里）─────────────────
+             登录页只留"填账号、填密码、注册、游客"这几步（用户要的是 QQ 那种简洁形态）；
+             需要解释的事 —— 账号存哪、为什么要等批准、谁是管理员、忘记密码怎么办 ——
+             全部收进这一节。所以这里的措辞要**经得起看**，不能含糊。 -->
+        <h3 class="info-h">六、账号与管理员审批</h3>
+        <ul class="info-list">
+          <li><b>第一个账号自动是管理员</b>：本机<b>第一个</b>注册的账号即为管理员、
+            注册完可直接登录。这样规定的原因：如果没有人具备批准权限，后续注册的账号将无法登录。</li>
+          <li><b>之后的账号</b>：本机单用户模式（默认）下，注册完<b>即可登录，不需要任何人批准</b>
+            —— 自己给自己开的机器，不该被一句"等别人批准"锁在门外。
+            把本机设置为「需要管理员审批」之后，后续账号才是「等待批准」状态，登录时会明确提示
+            「账号正在等待管理员批准」；管理员在「系统设置 → 账号管理」中批准后即可登录，
+            若被拒绝，登录时提示「该账号未通过审批」。</li>
+          <li><b>谁能管账号</b>：仅管理员。管理员登录后，「系统设置」中会显示「账号管理」：
+            待批准列表（可批准 / 拒绝）、已批准列表（可停用 / 删除）。</li>
+          <li><b>两种"不能登录"分得清</b>：等待批准、未通过审批、密码不对，是<b>三句不同的提示</b> ——
+            不会把"还在等批准"说成"账号或密码不对"，避免反复尝试密码。</li>
+          <li><b>管理员账号不会被锁在外面</b>：无法拒绝、停用或删除本机唯一的管理员账号 ——
+            否则将没有账号可以再批准新用户。</li>
+        </ul>
+
+        <h3 class="info-h">七、忘记密码怎么办</h3>
+        <p class="info-p">密码只保存成<b>不可还原的校验值</b>，本机没有原文，
+          也没有邮件服务 —— 所以<b>无法用邮件找回</b>，无法还原出原来的密码。
+          忘记密码时可以这样做：</p>
+        <ul class="info-list">
+          <li><b>① 用恢复码自助重置</b>（推荐，登录时就能自己办）：登录后到
+            「系统设置 → 账号安全」<b>生成恢复码</b>并抄下来保存。
+            忘记密码时点登录页的「忘记密码？」，依次填<b>账号 + 验证码 → 恢复码 → 新密码</b>
+            即可。恢复码只显示一次、且只存不可还原的摘要 —— 生成后请立刻抄走。
+            重新生成会让旧的那串<b>立刻失效</b>（换新不换旧，避免两串同时有效）。</li>
+          <li><b>② 找管理员发临时密码</b>（没有恢复码时唯一的路）：管理员在
+            「系统设置 → 账号管理」里给账号发一张<b>一次性临时密码</b>。
+            用它在登录页登录后，系统会要求你<b>先设置新密码</b> ——
+            在改密之前，其它功能一律不可用（这条由服务端拦住，不是页面上的提示）。
+            临时密码只能登录一次、30 分钟内有效。</li>
+          <li><b>③ 注册新账号</b>（更换账号名；本机单用户模式下注册即可登录，设为需要管理员审批时则要等批准）；
+            或<b>使用游客登录</b>。</li>
+        </ul>
+        <p class="info-p">若管理员自己忘记密码，只能删除本机账号文件后重新注册、
+          再次走一遍"第一个账号"的流程 —— 这一步会清空全部账号，操作前请确认。
+          本机<b>没有</b>邮件找回、手机验证码、密保问题这几种方式，也没有"管理员查看原密码"这种能力。</p>
+
+        <h3 class="info-h">八、游客能用什么、不能用什么</h3>
+        <ul class="info-list">
+          <li><b>可使用</b>：提问、查看表格、查看周报 —— 均为只读浏览。</li>
+          <li><b>不可使用</b>：导入数据（更换数据源）、导出报表、保存或修改任务、账号管理、删除操作。</li>
+          <li><b>如何识别</b>：受限功能带一个 ⚠ 记号；点击后提示「需要您先登录才能使用完整服务」，
+            并提供「去登录」按钮。未受限的功能不显示该记号。</li>
+        </ul>
+      </section>
+
+      <!-- ── 隐私 ─────────────────────────────────────────────────── -->
+      <section class="info-pane" id="info-pane-privacy" hidden>
+        <h3 class="info-h">一、你的数据存在哪</h3>
+        <p class="info-p">全部保存在这台电脑上，分为四类：</p>
+        <ul class="info-list">
+          <li><b>账号信息</b>：账号名、显示名、密码的加密摘要、建号时间与上次登录时间。</li>
+          <li><b>提问与回答记录</b>：你问过什么、系统算出了什么数、回了什么话（用于翻历史与核对数字）。</li>
+          <li><b>你上传的数据文件</b>：导入的表格原样留一份，供之后重复取数。</li>
+          <li><b>报表产出</b>：生成的报告与导出文件。</li>
+        </ul>
+        <p class="info-p">没有云端备份，也没有第三方存储：本机数据删除后不可恢复。</p>
+
+        <h3 class="info-h">二、密码怎么存</h3>
+        <p class="info-p">只保存<b>加密摘要</b>，不保存密码原文 —— 摘要不可还原，
+          即使有人把这台电脑上的账号文件整体拷走，也读不出你的密码。
+          登录时是用你输入的密码重新计算后再比对，而不是取出原文核对。
+          这也是<b>忘记密码无法找回原文</b>的原因：本机没有、也不应有原文，
+          而且本机没有邮件服务 —— <b>无法用邮件找回</b>。
+          确实忘记时只有两条路：<b>注册新账号</b>，或者使用<b>游客</b>登录。</p>
+
+        <h3 class="info-h">三、会不会把数据发到外面去</h3>
+        <p class="info-p"><b>会，但只发送一小部分，如实说明如下：</b></p>
+        <ul class="info-list">
+          <li><b>会发出去</b>：你提的问题原话，以及<b>本机算好的结果</b>（几个数字与它们的说明），
+            发送给模型服务，用于"理解你在问什么"和"把结论写成一段解读"。</li>
+          <li><b>不会发出去</b>：你上传的数据文件本身 —— 明细行不会上传，
+            模型看到的是本机算完之后的几个结果，不是原始表格。</li>
+          <li><b>数字不由模型算</b>：所有金额、行数、排行都是本机程序按固定口径算出来的；
+            模型只负责组织语言，它编出来的数字会被核对挡掉。</li>
+          <li><b>不想外发时</b>：页面上会显示模型是否接通；未接通时系统照常计算，
+            只是不再生成那段文字解读。</li>
+        </ul>
+
+        <h3 class="info-h">四、怎么清掉</h3>
+        <ul class="info-list">
+          <li><b>退出登录</b>：清除"这次是谁"的本机记录，回到登录页（账号本身仍在，下次仍可登录）。</li>
+          <li><b>彻底清除</b>：删除这台电脑上存放数据的目录，账号、提问记录、上传的文件、
+            报表产出将一并清除 —— 本机没有其他副本，删除后不可恢复。</li>
+        </ul>
+        <p class="info-p">尚未实现的能力也一并说明：没有多用户数据隔离（任务、数据源不分属某个账号，
+          本机的账号看到的是同一份数据），也没有云端同步 —— 这是单机自用模式。
+          角色只有一条：管理员可批准新账号；游客身份下导入、导出、修改任务与账号管理受限，
+          登录后均可使用。</p>
+      </section>
+    </div>
+  </aside>
+</div>
+
+<div class="app">
+
+  <!-- ═══ 顶栏 60px ═══════════════════════════════════════════════════
+       只留 5 个元素：Logo / 数据源 / 提问框（吃满剩余宽度） / ☰ 菜单 / 用户区。
+       其余入口（历史、设置、导入数据、原始数据）都收进 ☰ 菜单或左侧导航 ——
+       挤成一排的结果就是按钮被压成单字（用户反馈过的问题）。
+       窄窗口下：提问框先缩、数据源文字用「…」截断（hover 看全），**任何按钮都不切字**。 -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-logo">SR</div>
+      <div class="brand-text">
+        <div class="brand-title">销售报表 Agent</div>
+        <div class="brand-sub">企业销售分析平台</div>
+      </div>
+    </div>
+
+    <div class="chip" id="datasource-chip" title="当前数据源">
+      <span class="dot" id="datasource-dot"></span>
+      <span id="datasource-label">数据源：读取中…</span>
+    </div>
+
+    <!-- 提问框**吃满剩余宽度**：能力清单那种长文案不在顶栏里铺 ——
+         它会把「分析」按钮挤成竖排单字（用户反馈过的遮挡问题）。
+         能力说明放在首页「本版支持…」那一行（hero-nl-note），由后端能力清单填充。 -->
+    <div class="nl-entry">
+      <input id="nl-input" type="text" placeholder="用自然语言提问，例如「2011年11月卖了多少」" autocomplete="off">
+      <button id="nl-ask" class="btn btn-primary btn-sm">分析</button>
+    </div>
+
+    <div class="topbar-actions">
+      <button class="icon-btn" id="btn-menu" title="菜单" aria-haspopup="true" aria-expanded="false">☰</button>
+      <div class="menu" id="topbar-menu" hidden>
+        <button class="menu-item" id="menu-item-history">历史提问</button>
+        <button class="menu-item" id="menu-item-raw">原始数据</button>
+        <button class="menu-item" id="menu-item-import" data-guard="import">导入数据</button>
+        <button class="menu-item" id="menu-item-report">生成销售报告</button>
+        <button class="menu-item" id="menu-item-settings">系统设置</button>
+        <!-- 登录后也要能看帮助与隐私说明（登录页底部那两个入口进了主界面就点不到了）：
+             与登录页底部那两项打开的是**同一只抽屉**，内容一份，不另写一份。 -->
+        <button class="menu-item" id="menu-item-help">帮助</button>
+        <button class="menu-item" id="menu-item-privacy">隐私说明</button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" id="menu-item-notify" title="通知：暂未提供">通知（暂未提供）</button>
+      </div>
+      <!-- 用户区：头像（账号首字符）+ 账号名 + 状态点 + 状态文字，点一下出用户菜单。
+           账号名来源是登录时填的那个；状态是本机状态（在线/忙碌中/离开/离线），
+           由登录、分析请求、长时间没操作、退出这几个**真实动作**驱动。 -->
+      <div class="user-area">
+        <button class="user-btn" id="btn-user" aria-haspopup="true" aria-expanded="false" title="账号与状态">
+          <span class="avatar" id="avatar">未</span>
+          <span class="user-name" id="user-name">未登录</span>
+          <span class="user-status" id="user-status">
+            <span class="dot st-offline" id="user-dot"></span>
+            <span class="user-status-text" id="user-status-text">离线</span>
+          </span>
+        </button>
+        <div class="menu user-menu" id="user-menu" hidden>
+          <div class="user-menu-head">
+            <div class="user-menu-name" id="um-name">未登录</div>
+            <div class="user-menu-kind" id="um-kind">未登录</div>
+          </div>
+          <div class="menu-sep"></div>
+          <div class="user-menu-label">我的状态</div>
+          <button class="menu-item um-status" id="um-status-online" role="menuitemradio" aria-checked="false">
+            <span class="dot st-online"></span>在线</button>
+          <button class="menu-item um-status" id="um-status-busy" role="menuitemradio" aria-checked="false">
+            <span class="dot st-busy"></span>忙碌中</button>
+          <button class="menu-item um-status" id="um-status-away" role="menuitemradio" aria-checked="false">
+            <span class="dot st-away"></span>离开</button>
+          <button class="menu-item um-status" id="um-status-offline" role="menuitemradio" aria-checked="false">
+            <span class="dot st-offline"></span>离线</button>
+          <div class="menu-sep"></div>
+          <button class="menu-item" id="um-settings">个人设置</button>
+          <button class="menu-item" id="um-logout">退出登录</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══ 左侧导航 200px ══════════════════════════════════════════════ -->
+  <aside class="sidebar">
+    <nav class="nav">
+      <a class="nav-item" id="nav-overview" href="#/overview"><span class="nav-ico">▦</span>首页</a>
+      <a class="nav-item" id="nav-sales" href="#/sales"><span class="nav-ico">◔</span>销售分析</a>
+      <a class="nav-item" id="nav-customers" href="#/customers"><span class="nav-ico">◍</span>客户分析</a>
+      <a class="nav-item" id="nav-products" href="#/products"><span class="nav-ico">◈</span>产品分析</a>
+      <a class="nav-item" id="nav-anomaly" href="#/anomaly"><span class="nav-ico">⚠</span>异常发现</a>
+      <a class="nav-item" id="nav-weekly" href="#/weekly"><span class="nav-ico">▤</span>周报中心</a>
+      <div class="nav-sep"></div>
+      <a class="nav-item" id="nav-raw" href="#/raw"><span class="nav-ico">▦</span>原始数据</a>
+      <a class="nav-item" id="nav-data" href="#/data"><span class="nav-ico">⛁</span>数据管理</a>
+      <a class="nav-item" id="nav-settings" href="#/settings"><span class="nav-ico">⚙</span>系统设置</a>
+    </nav>
+
+    <!-- 左下角不做版本号 / 角色 / 权限声明：那些是实现细节，不是用户要看的东西。 -->
+  </aside>
+
+  <!-- ═══ 中央工作区 ══════════════════════════════════════════════════ -->
+  <main class="workspace" id="workspace">
+
+    <!-- 游客提示条：**一条轻量提示**，不是满屏遮罩、不挡任何操作。
+         只在游客身份下出现（账号登录时不显示），文案与「哪些功能受限」的清单
+         在 web/session.js 里，两处同一个出处 —— 页面不自己再写一份。 -->
+    <div class="guest-bar" id="guest-bar" hidden>
+      <span class="guest-bar-ico" aria-hidden="true">⚠</span>
+      <span class="guest-bar-text" id="guest-bar-text">游客模式 · 部分功能受限</span>
+      <button class="link-btn guest-bar-link" id="guest-bar-login" type="button">去登录</button>
+    </div>
+
+    <!-- 全局状态条：loading / error 两种全局态在这里体现 -->
+    <div class="banner" id="banner" hidden></div>
+
+    <!-- ── 页面：首页 ─────────────────────────────────────────────── -->
+    <section class="page" id="page-overview">
+      <!-- 区块A · AI 工作台 -->
+      <div class="card hero">
+        <div class="hero-main">
+          <h1 class="hero-title">你好，我是你的销售报表 Agent</h1>
+          <p class="hero-sub">导入销售数据 → 说明要看的指标 → 由程序计算准确数字，再解读发生了什么。</p>
+          <div class="hero-input">
+            <input id="hero-nl-input" type="text" placeholder="例如：2011年11月卖得最好的5个产品" autocomplete="off">
+            <button id="hero-nl-btn" class="btn btn-primary">开始分析</button>
+          </div>
+          <div class="hero-quick">
+            <button class="chip-btn" id="chip-summary" data-question="2011年11月一共卖了多少？">销售汇总</button>
+            <button class="chip-btn" id="chip-trend" data-question="2011年11月的销售趋势，按日看">销售趋势</button>
+            <button class="chip-btn" id="chip-products" data-question="2011年11月卖得最好的5个产品">产品排行</button>
+            <button class="chip-btn" id="chip-customers" data-question="2011年11月销售额最高的10个客户">客户排行</button>
+            <button class="chip-btn" id="chip-returns" data-question="2011年11月各商品的退货情况，前10名">退货分析</button>
+            <span class="muted-sm" id="hero-nl-note">本版支持汇总 / 趋势 / 产品排行 / 两区间比较 / 客户分析 / 商品分析；带地区字段的数据源可在「数据管理 → 按地区」里看地区分布；问数据里没有的维度（如区域、VIP 等级）会被明确拒绝。</span>
+          </div>
+        </div>
+        <div class="hero-facts" id="hero-facts">
+          <div class="fact-row" id="fact-data">数据源：读取中…</div>
+          <div class="fact-row" id="fact-template">模板：读取中…</div>
+          <div class="fact-row" id="fact-state">状态文件：读取中…</div>
+          <div class="fact-row" id="fact-code">数据校验：读取中…</div>
+        </div>
+      </div>
+
+      <!-- 区块A2 · 自然语言问答：完整链路，可折叠 -->
+      <div class="card" id="chat-panel">
+        <div class="card-head">
+          <h2>自然语言问答</h2>
+        </div>
+
+        <div class="empty" id="chat-empty">
+          <div class="empty-ico">✦</div>
+          <div class="empty-title">还没有提问</div>
+          <div class="empty-hint">在任意一个输入框里用大白话提问。回答会分【发生了什么】【主要贡献】【为什么】【建议行动】几段：事实由程序算出，推断会标注，建议由模型给出。</div>
+        </div>
+
+        <div class="chat-state" id="chat-state" hidden></div>
+
+        <div id="chat-body" hidden>
+          <div class="chat-meta">
+            <span class="badge" id="chat-status-badge">—</span>
+            <span class="muted-sm" id="chat-created">—</span>
+            <span class="muted-sm" id="chat-llm"></span>
+          </div>
+
+          <details class="chain" id="chat-step-question" open>
+            <summary>① 你问的问题</summary>
+            <div class="chain-body" id="chat-question"></div>
+          </details>
+
+          <details class="chain" id="chat-step-facts">
+            <summary>② 算出来的事实（数字的出处）</summary>
+            <div class="chain-body" id="chat-facts"></div>
+          </details>
+
+          <details class="chain" id="chat-step-answer" open>
+            <summary>③ 回答</summary>
+            <div class="chain-body" id="chat-answer"></div>
+          </details>
+
+          <div class="chat-notice" id="chat-notice"></div>
+        </div>
+      </div>
+
+      <!-- 区块A3 · 历史提问（刷新后仍可查） -->
+      <div class="card" id="chat-history-wrap">
+        <div class="card-head">
+          <h2>历史提问</h2>
+        </div>
+        <div class="empty" id="chat-history-empty">
+          <div class="empty-title">还没有历史提问</div>
+          <div class="empty-hint">提过的问题都会保留，刷新页面后仍能在这里查到。</div>
+        </div>
+        <div class="rows" id="chat-history"></div>
+      </div>
+
+      <!-- 区块B · KPI 行 + 趋势图 -->
+      <div class="kpi-row">
+        <div class="card kpi">
+          <!-- 币种图标由 capabilities.currency 决定（¤ 只是"后端还没声明"时的中性符号，不预设任何具体币种） -->
+          <div class="kpi-head"><span class="kpi-ico ico-blue" id="kpi-currency">¤</span><span class="kpi-label">最近一次成功销售额</span></div>
+          <div class="kpi-value" id="kpi-amount">—</div>
+          <div class="kpi-sub" id="kpi-amount-sub">尚无成功执行记录</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-head"><span class="kpi-ico ico-purple">▤</span><span class="kpi-label">覆盖行数</span></div>
+          <div class="kpi-value" id="kpi-rows">—</div>
+          <div class="kpi-sub" id="kpi-rows-sub">尚无成功执行记录</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-head"><span class="kpi-ico ico-orange">⊘</span><span class="kpi-label">排除行数</span></div>
+          <div class="kpi-value" id="kpi-excluded">—</div>
+          <div class="kpi-sub" id="kpi-excluded-sub">尚无成功执行记录</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-head"><span class="kpi-ico ico-green">◈</span><span class="kpi-label">任务总数</span></div>
+          <div class="kpi-value" id="kpi-tasks">—</div>
+          <div class="kpi-sub" id="kpi-tasks-sub">来自系统状态统计</div>
+        </div>
+        <div class="card chart-card">
+          <div class="card-head">
+            <h2>销售额走势（真实执行记录）</h2>
+            <span class="muted-sm" id="trend-caption">数据来源：历史执行记录</span>
+          </div>
+          <div class="chart-wrap">
+            <svg id="trend-chart" viewBox="0 0 560 150" preserveAspectRatio="none" hidden>
+              <defs>
+                <linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#3B82F6" stop-opacity="0.35"></stop>
+                  <stop offset="100%" stop-color="#3B82F6" stop-opacity="0"></stop>
+                </linearGradient>
+              </defs>
+              <path id="trend-area" d="" fill="url(#trend-fill)"></path>
+              <polyline id="trend-line" points="" fill="none" stroke="#3B82F6" stroke-width="2"></polyline>
+              <g id="trend-dots"></g>
+            </svg>
+            <div class="empty" id="trend-empty">
+              <div class="empty-ico">◔</div>
+              <div class="empty-title">还没有可画走势的执行记录</div>
+              <div class="empty-hint">至少需要 2 次成功执行才能看出走势。去「数据管理」跑一次真实任务。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 区块C · 三栏 -->
+      <div class="tri-row">
+        <div class="card">
+          <div class="card-head"><h2>核心结论</h2><span class="muted-sm">事实来自执行记录</span></div>
+          <ul class="conclusion-list" id="conclusions-list"></ul>
+          <div class="empty" id="conclusion-empty">
+            <div class="empty-ico">▤</div>
+            <div class="empty-title">还没有任何执行记录</div>
+            <div class="empty-hint">核心结论只从真实执行记录里提取（销售额 / 覆盖行数 / 排除行数 / 耗时）。</div>
+          </div>
+        </div>
+        <!-- 这两张卡片是**真表格**（按销售额取前 5 名，数字与排序都来自后端），
+             不是一句"去别处看"的说明 —— 首页就该一眼看到客户与产品的真实情况。 -->
+        <div class="card">
+          <div class="card-head"><h2>客户 TOP5</h2><a class="muted-sm" href="#/customers">查看全部客户</a></div>
+          <div id="ov-customers"></div>
+          <div class="empty" id="ov-customers-empty">
+            <div class="empty-ico">◍</div>
+            <div class="empty-title">还没有读到客户数据</div>
+            <div class="empty-hint">按销售额取前 5 名客户；完整客户表（可按客户号搜索、翻页、导出）在「客户分析」页。</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>产品排行 TOP5</h2><a class="muted-sm" href="#/products">查看全部产品</a></div>
+          <div id="ov-products"></div>
+          <div class="empty" id="ov-products-empty">
+            <div class="empty-ico">◈</div>
+            <div class="empty-title">还没有读到商品数据</div>
+            <div class="empty-hint">按销售额取前 5 名商品；完整产品表（含退货列，可搜索、翻页、导出）在「产品分析」页。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 区块D · 两栏 -->
+      <div class="duo-row">
+        <div class="card">
+          <div class="card-head"><h2>行动计划</h2></div>
+          <div class="empty">
+            <div class="empty-ico">✦</div>
+            <div class="empty-title">行动计划尚未接入</div>
+            <div class="empty-hint">行动计划需要先有异常发现，当前没有任何条目。</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>生成周报</h2>
+            <span class="muted-sm">在下面的自然语言入口说一句即可生成</span>
+          </div>
+          <div class="row">
+            <button class="btn btn-primary btn-sm" id="btn-ov-report">去生成周报</button>
+            <a class="btn btn-sm" href="#/weekly">查看已生成的报告</a>
+          </div>
+          <!-- 这段是纯说明文字，没有任何 JS 去填它 —— 所以不给 id（`test_no_static_ornament_ids_in_html`
+               钉的就是「别留只有装饰作用的 id」）。 -->
+          <div class="muted-sm">
+            例如「帮我根据本星期的销售数据做一份销售周报」或「出一份 2011 年 11 月的月报」；
+            报告里的数字与上面的问答是同一套计算，生成后可预览、可下载 Markdown。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 页面：销售分析（真表格：维度 × 指标，全部由后端算）─────────── -->
+    <section class="page" id="page-sales" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>销售分析</h2>
+          <span class="muted-sm" id="sales-scope-note"></span>
+        </div>
+        <!-- 表格外壳由 app.js 按后端给的列定义生成（列名/对齐/格式只有后端一处定义） -->
+        <div id="tbl-sales"></div>
+        <div class="empty" id="tbl-sales-empty">
+          <div class="empty-ico">▦</div>
+          <div class="empty-title">还没有读到数据</div>
+          <div class="empty-hint">在「数据管理」里确认数据源状态；也可能是这个时间范围里确实没有记录。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 页面：客户分析（真表格）──────────────────────────────────── -->
+    <section class="page" id="page-customers" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>客户分析</h2>
+          <span class="muted-sm" id="cust-scope-note"></span>
+        </div>
+        <div id="tbl-customers"></div>
+        <div class="empty" id="tbl-customers-empty">
+          <div class="empty-ico">▦</div>
+          <div class="empty-title">还没有读到数据</div>
+          <div class="empty-hint">在「数据管理」里确认数据源状态；也可能是这个时间范围里确实没有记录。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 页面：产品分析（真表格）──────────────────────────────────── -->
+    <section class="page" id="page-products" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>产品分析</h2>
+          <span class="muted-sm" id="prod-scope-note"></span>
+        </div>
+        <div id="tbl-products"></div>
+        <div class="empty" id="tbl-products-empty">
+          <div class="empty-ico">▦</div>
+          <div class="empty-title">还没有读到数据</div>
+          <div class="empty-hint">在「数据管理」里确认数据源状态；也可能是这个时间范围里确实没有记录。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 页面：原始数据（第二层：原始行浏览器，默认只给一页）────────── -->
+    <section class="page" id="page-raw" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>原始数据</h2>
+          <span class="muted-sm" id="raw-scope-note"></span>
+        </div>
+        <p class="note">
+          这里是数据源里的原样行：含取消单、负数量等未套用分析口径的记录。
+          要按业务口径看数字，请用「销售分析 / 客户分析 / 产品分析」三张表。
+        </p>
+        <div id="tbl-raw"></div>
+        <div class="empty" id="tbl-raw-empty">
+          <div class="empty-ico">▦</div>
+          <div class="empty-title">还没有读到数据</div>
+          <div class="empty-hint">在「数据管理」里确认数据源状态；也可能是这个时间范围里确实没有记录。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 页面：异常发现 ─────────────────────────────────────────── -->
+    <section class="page" id="page-anomaly" hidden>
+      <div class="card">
+        <div class="card-head"><h2>异常发现</h2></div>
+        <div class="empty">
+          <div class="empty-ico">⚠</div>
+          <div class="empty-title">异常发现尚未接入</div>
+          <div class="empty-hint">销售额/销量的周环比异常、突增突降与离群点尚未接入；本页当前不放任何异常结论。</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>行动计划（依赖异常结论）</h2></div>
+        <div class="empty">
+          <div class="empty-ico">▶</div>
+          <div class="empty-title">还没有行动计划</div>
+          <div class="empty-hint">先有异常发现，才谈得上行动计划；右栏的「行动计划」面板读的是同一份结论。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 页面：周报中心 ─────────────────────────────────────────── -->
+    <section class="page" id="page-weekly" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>销售报告</h2>
+          <span class="muted-sm" id="wk-reports-hint">在问答里说「做一份销售周报」即可生成；下面的列表是已生成过的报告，可查看、可下载 Markdown。</span>
+        </div>
+        <div class="rows" id="wk-reports-body"></div>
+        <div class="empty" id="wk-reports-empty">
+          <div class="empty-ico">▤</div>
+          <div class="empty-title">还没有生成过报告</div>
+          <div class="empty-hint">在提问框中说一句「帮我根据本星期的销售数据做一份销售周报」，或「出一份 2011 年 11 月的月报」——报告里的数字与那五类问答使用同一套计算。</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>已有任务（可作为周报的数据来源）</h2></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>任务</th><th>时间范围</th><th>状态</th><th>执行次数</th></tr></thead>
+            <tbody id="wk-tasks-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="wk-tasks-empty">
+          <div class="empty-ico">▤</div>
+          <div class="empty-title">还没有任务</div>
+          <div class="empty-hint">任务在「数据管理」里创建；创建后这里会真实列出（刷新也不会丢）。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 页面：数据管理（数据源 + 导入 + 文档；旧的报表链路收在最后）──── -->
+    <section class="page" id="page-data" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>数据源</h2>
+          <span class="muted-sm">业务表格里的数字都来自这里的某一个数据源</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr>
+              <th>数据源</th><th class="num">行数</th><th class="num">列数</th>
+              <th>数据范围</th><th>更新时间</th><th>状态</th>
+            </tr></thead>
+            <tbody id="datasets-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="datasets-empty">
+          <div class="empty-ico">⛁</div>
+          <div class="empty-title">还没有读到数据源</div>
+          <div class="empty-hint">系统内置的销售数据源会显示在这里；导入的表格也会登记成新的数据源。</div>
+        </div>
+        <p class="note" id="datasets-note"></p>
+      </div>
+
+      <!-- 统一导入（FR-003）：六种格式走**同一个入口**。
+           「预览」只读不写库；「导入」才真的解析 → 物化入库 → 留一份原文件。
+           每一步的结果都照实显示（哪份文件成了文档、哪份成了数据集、哪份被拒）。 -->
+      <div class="card">
+        <div class="card-head">
+          <h2>导入资料</h2>
+          <span class="muted-sm">Excel / CSV / Markdown / PPT / Word / PDF</span>
+        </div>
+        <div class="row">
+          <input id="imp-file-input" type="file" multiple
+                 accept=".xlsx,.xlsm,.csv,.md,.markdown,.pptx,.docx,.pdf">
+          <button id="btn-imp-preview" class="btn" data-guard="import">预览</button>
+          <button id="btn-imp-run" class="btn btn-primary" data-guard="import">导入</button>
+          <span class="muted-sm" id="imp-state">选择文件后先「预览」看看会被识别成什么，确认无误再「导入」。</span>
+        </div>
+        <div id="imp-preview" hidden></div>
+        <div id="imp-result" hidden></div>
+      </div>
+
+      <!-- 导入记录（FR-009-A2）：**每一次导入都留一条**，成功的、失败的都在这里。
+           这张表读的是落库的真实记录（不是本次会话的内存态），所以刷新页面之后
+           「我导过哪些文件、成了什么、失败的原因是什么」仍然看得到。
+           字数 / 行数由后端给（页面自己不算任何数）。 -->
+      <div class="card">
+        <div class="card-head">
+          <h2>导入记录</h2>
+          <span class="muted-sm">每一次导入都留一条：成功的、失败的都在这里</span>
+        </div>
+        <div class="row">
+          <button id="btn-imp-refresh" class="btn">刷新记录</button>
+          <span class="muted-sm" id="imp-list-state"></span>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr>
+              <th>文件名</th><th>类型</th><th>状态</th><th>时间</th>
+              <th>落成了什么</th><th class="num">字数或行数</th><th>操作</th>
+            </tr></thead>
+            <tbody id="imports-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="imports-empty">
+          <div class="empty-ico">⇪</div>
+          <div class="empty-title">还没有导入记录</div>
+          <div class="empty-hint">用上面的「导入资料」导入一份文件，无论成功还是失败，这里都会留下一条记录。</div>
+        </div>
+        <!-- 单条记录的详情（含它落了哪些数据集 / 文档）：点「详情」才出现 -->
+        <div id="import-detail" hidden></div>
+      </div>
+
+      <!-- 已入库数据源（FR-003B）：与上面那份「数据源」列表语义不同 ——
+           那边的数据还在原文件里（引用式登记、分析未开通），这里的行**已经在库里**。
+           两块都保留，各自照实标注状态，不合并成一句含糊的「导入成功」。 -->
+      <div class="card">
+        <div class="card-head">
+          <h2>已入库数据源</h2>
+          <span class="muted-sm">行已存入本机库，可直接参与计算；原始文件另存一份留底</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr>
+              <th>数据源</th><th class="num">行数</th><th class="num">表数</th>
+              <th>来源文件</th><th>地区字段</th><th>入库时间</th><th>状态</th>
+            </tr></thead>
+            <tbody id="sources-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="sources-empty">
+          <div class="empty-ico">⛁</div>
+          <div class="empty-title" id="sources-empty-title">还没有已入库的数据源</div>
+          <div class="empty-hint" id="sources-empty-hint">用上面的「导入资料」导入一份带数据的文件（Excel / CSV / Markdown / PPT），它会出现在这里。</div>
+        </div>
+        <p class="note" id="sources-note"></p>
+      </div>
+
+      <!-- 按地区（FR-003D）：**只有数据源本身带地区字段时才出现**。
+           「地区」不是一个渠道或门店之类的组织维度，也不拿国家顶替 ——
+           没有地区字段的数据源不会出现在这个下拉框里（页面上不存在点了才说没有的入口）。 -->
+      <div class="card" id="region-card" hidden>
+        <div class="card-head">
+          <h2>按地区</h2>
+          <span class="muted-sm">地区字段来自数据源本身；金额按同一套口径由服务端计算</span>
+        </div>
+        <div class="row">
+          <label class="field">数据源<select id="region-source"></select></label>
+          <label class="field">地区<select id="region-dimension"></select></label>
+          <button id="btn-region-query" class="btn btn-primary">查看</button>
+          <span class="muted-sm" id="region-state"></span>
+        </div>
+        <div class="table-wrap" id="region-table-wrap" hidden>
+          <table class="table">
+            <thead><tr>
+              <th id="region-axis-label">地区</th><th class="num">销售额</th><th class="num">占比</th>
+            </tr></thead>
+            <tbody id="region-body"></tbody>
+          </table>
+        </div>
+        <p class="note" id="region-note"></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>导入数据</h2>
+          <span class="muted-sm">Excel / CSV → 登记为数据源</span>
+        </div>
+        <div class="row">
+          <input id="ds-file-input" type="file" accept=".xlsx,.xlsm,.csv">
+          <button id="btn-ds-inspect" class="btn btn-primary" data-guard="import">上传并检查</button>
+          <span class="muted-sm" id="ds-import-state">选择 .xlsx / .xlsm / .csv 后点击「上传并检查」，确认内容后再导入。</span>
+        </div>
+
+        <!-- 第 2 步：工作表 / 编码 / 前 N 行预览 / 字段映射（**全部来自后端真实读取**） -->
+        <div id="ds-inspect" hidden>
+          <div class="inspect-meta" id="ds-inspect-meta"></div>
+          <div class="grid2">
+            <label class="field" id="ds-sheet-field">工作表<select id="ds-sheet"></select></label>
+            <label class="field">数据源名称<input id="ds-name" type="text" placeholder="例如：2026 年销售数据"></label>
+          </div>
+          <div class="field">
+            <span class="field-label">前 <b id="ds-preview-count">0</b> 行预览（只读取这些行，不会把整表载入浏览器）</span>
+            <div class="table-wrap">
+              <table class="table" id="ds-preview-table"></table>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label">字段映射（左边是分析要用的字段，右边选文件里的列）</span>
+            <div class="map-grid" id="ds-mapping"></div>
+          </div>
+          <div class="row">
+            <button id="btn-ds-import" class="btn btn-primary" data-guard="import">确认导入</button>
+            <span class="muted-sm" id="ds-import-note"></span>
+          </div>
+        </div>
+
+        <div id="ds-import-result" hidden></div>
+      </div>
+
+      <!-- 旧链路：按模板出 xlsx 的报表流程。功能一个没少，但收在一处 ——
+           它是"高级用法"，不该和客户/产品/销售这些日常表格混在一起。 -->
+      <details class="legacy" open>
+        <summary>高级：按模板出报表（固化报表任务 / 执行记录）</summary>
+        <div class="card">
+          <div class="card-head"><h2>① 上传数据</h2></div>
+        <div class="row">
+          <input id="file-input" type="file" accept=".xlsx,.xls">
+          <button id="btn-upload" class="btn btn-primary" data-guard="import">上传</button>
+          <span class="muted-sm" id="upload-state">选择真实 Excel 文件（.xlsx / .xls）后点击「上传」。</span>
+        </div>
+        <div class="table-wrap" id="upload-result-wrap" hidden>
+          <table class="table">
+            <tbody id="upload-result"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>已上传的文件</h2><span class="muted-sm">可用作报表任务的数据来源</span></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>文件</th><th class="num">行数</th><th class="num">列数</th><th>上传时间</th></tr></thead>
+            <tbody id="files-table-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="files-empty">
+          <div class="empty-ico">⛁</div>
+          <div class="empty-title">还没有上传过文件</div>
+          <div class="empty-hint">在上面「上传数据」里传一个 Excel，它会出现在这里。</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>② 建任务（把任务口径定下来）</h2></div>
+        <div class="grid2">
+          <label class="field">任务名称<input id="task-name" type="text" placeholder="例如：上周销售汇总"></label>
+          <label class="field">数据文件<select id="task-file-id"><option value="">（还没有上传文件）</option></select></label>
+          <label class="field">开始日期<input id="task-start" type="date"></label>
+          <label class="field">结束日期<input id="task-end" type="date"></label>
+        </div>
+        <div class="field">
+          <span class="field-label">指标（可选范围由系统给出）<span class="muted-sm" id="metrics-source"></span></span>
+          <div class="metrics" id="task-metrics"></div>
+        </div>
+        <div class="row">
+          <button id="btn-create-task" class="btn btn-primary" data-guard="task" disabled>建任务</button>
+          <span class="muted-sm" id="create-task-state"></span>
+        </div>
+        <p class="note" id="create-precondition"></p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>③ 任务口径（建任务时定下来，之后不会变）</h2></div>
+        <div class="row">
+          <label class="field">选择任务
+            <select id="task-select"><option value="">（还没有任务）</option></select>
+          </label>
+          <!-- 图标型按钮：只画图标，意思放进 title / aria-label（鼠标悬停与读屏都读得到） -->
+          <button id="btn-reload-tasks" class="btn icon-only" title="刷新任务列表"
+                  aria-label="刷新任务列表">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+                 stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true" focusable="false">
+              <polyline points="23 4 23 10 17 10"/>
+              <polyline points="1 20 1 14 7 14"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+          </button>
+        </div>
+        <!-- 这里原来直接铺一段规格 JSON —— 用户看到的应该是**业务口径**（用哪个文件、
+             哪段时间、算哪些指标），不是一串参数对象。技术实现留在代码与后端记录里。 -->
+        <div class="table-wrap" id="spec-summary" hidden>
+          <div class="spec-meta" id="spec-meta"></div>
+        </div>
+        <div class="empty" id="spec-empty">
+          <div class="empty-ico">▤</div>
+          <div class="empty-title">还没有选中任何任务</div>
+          <div class="empty-hint">先上传数据并建一个任务；选中后这里显示这条任务定下来的数据口径（刷新后重新读取）。</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>④ 执行结果</h2></div>
+        <div class="row">
+          <button id="btn-run-task" class="btn btn-primary" data-guard="task" disabled>执行这个任务</button>
+          <button id="btn-download" class="btn" data-guard="export" disabled>下载产出 xlsx</button>
+          <span class="muted-sm" id="run-state"></span>
+        </div>
+        <div class="table-wrap" id="run-result-wrap" hidden>
+          <table class="table">
+            <thead><tr><th>指标</th><th class="num">数值</th></tr></thead>
+            <tbody id="run-metrics-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="run-empty">
+          <div class="empty-ico">▶</div>
+          <div class="empty-title">还没有执行过任务</div>
+          <div class="empty-hint">选中任务后点「执行这个任务」，这里显示真实算出的指标与下载按钮。</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>⑤ 执行记录</h2></div>
+        <div class="row">
+          <button id="btn-refresh-exec" class="btn icon-only" title="刷新执行记录"
+                  aria-label="刷新执行记录">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+                 stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true" focusable="false">
+              <polyline points="23 4 23 10 17 10"/>
+              <polyline points="1 20 1 14 7 14"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+          </button>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>记录号</th><th>任务</th><th>状态</th><th class="num">销售额</th><th class="num">行数</th><th>时间</th></tr></thead>
+            <tbody id="exec-table-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="exec-empty">
+          <div class="empty-ico">▤</div>
+          <div class="empty-title">还没有执行记录</div>
+          <div class="empty-hint">每次执行都会留下记录（成功与失败都记），刷新页面也不会丢。</div>
+        </div>
+      </div>
+
+      </details>
+
+      <!--
+        ── 文档资料（Word / PDF）──────────────────────────────────────────
+        与上面 ①~⑤ 那条"表格 → 算数 → 出 xlsx"的报表链路**不是一个东西**：
+        这里收的是 Word / PDF 这类**文字资料**，产物是**可读的正文**（不是报表文件）。
+        所以它单独一张卡片、单独一条管道，上面那条报表链路的字段一个都没动。
+      -->
+      <div class="card">
+        <div class="card-head"><h2>文档资料（Word / PDF）</h2><span class="muted-sm">真实文本提取</span></div>
+        <div class="row">
+          <input id="doc-input" type="file" accept=".docx,.pdf">
+          <button id="btn-doc-upload" class="btn btn-primary" data-guard="import">上传并提取</button>
+          <span class="muted-sm" id="doc-upload-state">选择 .docx / .pdf 后点击「上传并提取」。</span>
+        </div>
+        <div class="table-wrap" id="doc-result-wrap" hidden>
+          <table class="table"><tbody id="doc-result"></tbody></table>
+        </div>
+
+        <!-- 这张表是**两个入口进来的文档的合表**：上面「上传并提取」进来的，
+             以及「导入资料」里导入的（Word / PDF / Markdown / PPT 带正文的那些）。
+             「来源」那一列说清楚每条是从哪个入口进来的，不需要用户自己去猜。 -->
+        <div class="table-wrap">
+          <table class="table">
+            <!-- 「标题」这一列是 FR-010-B 加的：它显示的是**从文件里提出来、并已可信化**的标题
+                 （乱码解不回来时会退回文件名，见 app/document_title.py）。
+                 没有这一列的话，"标题修好了没有"在页面上根本看不见 —— 用户只能看到文件名。 -->
+            <thead><tr><th>文档</th><th>标题</th><th>来源</th><th class="num">字符数</th><th class="num">块数</th><th>时间</th><th>操作</th></tr></thead>
+            <tbody id="docs-table-body"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="docs-empty">
+          <div class="empty-ico">▤</div>
+          <div class="empty-title">还没有文档资料</div>
+          <div class="empty-hint">用上面「上传并提取」传一份 Word / PDF，或从「导入资料」导入带正文的文件，提取出来的正文都会显示在这里。提不出文字的文件（扫描件、空文档）不算成功，不会被记成一条。</div>
+        </div>
+
+        <!-- 正文查看器：只有点了「看正文」才出现，内容一律来自后端的全文接口 -->
+        <div id="doc-viewer" hidden>
+          <div class="card-head"><h3 id="doc-viewer-title">正文</h3><span class="muted-sm" id="doc-viewer-meta"></span></div>
+          <pre class="code doc-text" id="doc-viewer-text"></pre>
+          <div class="row">
+            <button id="btn-doc-summary" class="btn">生成摘要</button>
+            <a id="doc-viewer-link" class="btn" href="#" target="_blank" rel="noopener">新窗口打开全文</a>
+            <button id="btn-doc-close" class="btn icon-only" title="收起正文" aria-label="收起正文">
+              <svg viewBox="0 0 20 20" width="16" height="16" fill="none"
+                   stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true" focusable="false">
+                <path d="M5.5 12.5 10 8l4.5 4.5"/>
+              </svg>
+            </button>
+            <span class="muted-sm" id="doc-viewer-state"></span>
+          </div>
+          <div id="doc-summary" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 页面：系统设置 ─────────────────────────────────────────── -->
+    <section class="page" id="page-settings" hidden>
+      <div class="card">
+        <div class="card-head"><h2>运行状态</h2></div>
+        <div class="table-wrap">
+          <table class="table"><tbody id="set-health-body"></tbody></table>
+        </div>
+        <div class="empty" id="set-health-empty">
+          <div class="empty-ico">⚙</div>
+          <div class="empty-title">还没读到系统状态</div>
+          <div class="empty-hint">点击顶部「设置」或刷新页面重新读取运行状态。</div>
+        </div>
+        <div class="table-wrap" id="set-problems-wrap" hidden>
+          <div class="field-label">系统上报的问题</div>
+          <ul class="conclusion-list" id="set-problems"></ul>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>存储</h2></div>
+        <div class="table-wrap">
+          <table class="table"><tbody id="set-storage-body"></tbody></table>
+        </div>
+      </div>
+      <!-- ── 账号安全（**登录的用户**看得到，游客看不到）────────────────────
+           这里只做一件事：生成自己的恢复码。它是"忘记密码还能自己回来"的唯一自助凭证。
+           ★ 明文**只显示这一次**（后端只存哈希，关掉就再也拿不回来），页面上一句真话写死。 -->
+      <div class="card" id="set-security-card" hidden>
+        <div class="card-head">
+          <h2>账号安全</h2>
+          <span class="muted-sm">忘记密码时靠恢复码自己找回</span>
+        </div>
+        <p class="note">
+          生成一串恢复码并抄在纸上。忘记密码时用它重置密码；重新生成会让旧的那串<b>立刻失效</b>。
+        </p>
+        <button class="btn btn-primary" id="btn-make-recovery" type="button">生成恢复码</button>
+        <div class="recovery-box" id="set-recovery-box" hidden>
+          <div class="field-label">你的恢复码 —— 只显示这一次</div>
+          <div class="recovery-code" id="set-recovery-code"></div>
+          <p class="field-msg" id="set-recovery-msg" hidden></p>
+          <p class="note">关闭或刷新后无法再次查看。请立刻抄下来，放在只有你能拿到的地方。</p>
+        </div>
+      </div>
+
+      <!-- ── 账号管理（**只有管理员看得到**）───────────────────────────────
+           谁看得到：登录的账号角色是管理员 —— 也就是**这台机器上第一个注册的账号**
+           （第一个注册的自动成为管理员，否则没人能按下"批准"，系统当场死锁）。
+           游客与非管理员看到的是下面那块「受限说明」（带 ⚠），点一下弹窗说要去登录。
+           两个块由 web/app.js 按 Session 的身份二选一显示，页面上永远只出现其中一块。 -->
+      <div class="card" id="set-accounts-card" hidden>
+        <div class="card-head">
+          <h2>账号管理</h2>
+          <span class="muted-sm">批准之后，对方才能用自己的账号登录</span>
+        </div>
+        <div class="field-label">等待批准 <b id="set-pending-count">0</b> 个</div>
+        <div class="table-wrap">
+          <table class="table"><thead><tr><th>账号</th><th>申请时间</th><th>操作</th></tr></thead>
+            <tbody id="set-pending-body"></tbody></table>
+        </div>
+        <div class="empty" id="set-pending-empty">
+          <div class="empty-title">没有等待批准的账号</div>
+          <div class="empty-hint">有人注册之后，会出现在这里等你批准。</div>
+        </div>
+        <div class="field-label">已批准的账号</div>
+        <div class="table-wrap">
+          <table class="table"><thead><tr><th>账号</th><th>状态</th><th>最后登录</th><th>操作</th></tr></thead>
+            <tbody id="set-approved-body"></tbody></table>
+        </div>
+        <div class="empty" id="set-approved-empty">
+          <div class="empty-title">还没有已批准的账号</div>
+          <div class="empty-hint">批准一个账号之后，它会出现在这里。</div>
+        </div>
+        <p class="note" id="set-accounts-note"></p>
+      </div>
+
+      <!-- 非管理员 / 游客在这一页的位置看到的东西：明确说"这里有一项你现在用不了"，
+           并带上 ⚠（与别处受限入口同一个记号）。游客点它会弹「需要您先登录」。 -->
+      <div class="card" id="set-accounts-locked" hidden>
+        <div class="card-head"><h2>账号管理</h2></div>
+        <div class="empty">
+          <div class="empty-ico">⚠</div>
+          <div class="empty-title">需要管理员身份</div>
+          <div class="empty-hint" id="set-accounts-locked-hint">批准新账号、停用或删除账号，只有管理员能做。</div>
+        </div>
+        <button class="btn" id="btn-accounts-locked" type="button" data-guard="accounts">账号管理</button>
+        <p class="note">这台机器上第一个注册的账号就是管理员。</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>企业化能力（尚未开通）</h2></div>
+        <div class="switch-row"><span>用户与权限</span><button class="switch" id="sec-rbac" disabled>尚未开通</button></div>
+        <div class="switch-row"><span>访问控制</span><button class="switch" id="sec-acl" disabled>尚未开通</button></div>
+        <div class="switch-row"><span>服务保护</span><button class="switch" id="sec-circuit" disabled>尚未开通</button></div>
+        <p class="note">这三项能力尚未实现，开关保持禁用；界面不会显示任何不实的状态。</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ═══ 右侧面板 355px ══════════════════════════════════════════════ -->
+  <aside class="rightpanel">
+    <div class="card rp-card">
+      <div class="card-head"><h2>AI 结论</h2><span class="muted-sm" id="ai-conclusion-source">最近一次提问</span></div>
+      <div class="empty" id="ai-conclusion-empty">
+        <div class="empty-ico">✦</div>
+        <div class="empty-title">还没有结论</div>
+        <div class="empty-hint">在顶栏的提问框输入一个问题，这里会显示最近一次回答中由程序算出的事实部分。</div>
+      </div>
+      <div id="ai-conclusion-body" hidden>
+        <div class="rp-conclusion-q" id="ai-conclusion-question"></div>
+        <div class="rp-conclusion-facts" id="ai-conclusion-facts"></div>
+        <div class="rp-conclusion-why" id="ai-conclusion-why"></div>
+        <button class="btn btn-sm" id="btn-ai-conclusion">看完整回答</button>
+      </div>
+    </div>
+
+    <div class="card rp-card">
+      <div class="tabs" id="rp-tabs">
+        <button class="tab" id="rp-tab-perm" data-pane="rp-pane-perm">用户</button>
+        <button class="tab" id="rp-tab-security" data-pane="rp-pane-security">安全</button>
+        <button class="tab" id="rp-tab-circuit" data-pane="rp-pane-circuit">服务保护</button>
+        <button class="tab" id="rp-tab-status" data-pane="rp-pane-status">系统状态</button>
+      </div>
+
+      <div class="pane" id="rp-pane-perm">
+        <div class="kv"><span>当前用户</span><b id="rp-user-name">未登录</b></div>
+        <div class="kv"><span>身份来源</span><b id="rp-user-kind">—</b></div>
+        <p class="note">本地模式：账号存在这台机器上；角色的作用只有一个 —— 管理员能批准新账号。</p>
+      </div>
+
+      <div class="pane" id="rp-pane-security" hidden>
+        <div class="kv"><span>数据源校验</span><b class="ok" id="rp-snapshot">读取中…</b></div>
+        <p class="note">每次分析前都会核对数据源与登记时一致（没被改过）。</p>
+      </div>
+
+      <div class="pane" id="rp-pane-circuit" hidden>
+        <div class="kv"><span>服务保护</span><b class="warn">尚未开通</b></div>
+        <p class="note">服务出问题时的自动保护尚未实现；当前遇到问题会如实报出原因，不会静默跳过。</p>
+      </div>
+
+      <div class="pane" id="rp-pane-status" hidden>
+        <div class="kv"><span>服务</span><b id="rp-service">读取中…</b></div>
+        <div class="kv"><span>数据状态</span><b id="rp-state-readable">读取中…</b></div>
+        <div class="kv"><span>数据源 / 任务 / 执行</span><b id="rp-counts">读取中…</b></div>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+<!-- session.js 必须排在 app.js 之前：先决定"要不要先给登录页"，
+     再让 app.js 去读后端数据（未登录时 app.js 的初始化会被挂住，不会白读一遍）。 -->
+<!-- ★ TASK-044：改成相对路径（去掉前导斜杠），这样部署在 /demo/sales/ 下也能正确加载 -->
+<script src="session.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

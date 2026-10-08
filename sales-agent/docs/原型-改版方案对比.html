@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>销售报表 Agent · 改版方案对比（原型）</title>
+<style>
+  :root{
+    /* TDesign 官方 token（深色） */
+    --brand:#4582e6; --brand-hover:#2667d4; --brand-active:#699ef5; --brand-light:#1b2f51;
+    --success:#059465; --error:#c64751; --warning:#cf6e2d;
+    --g14:#181818; --g13:#242424; --g12:#2c2c2c; --g11:#393939; --g10:#4b4b4b;
+    --g9:#5e5e5e; --g7:#8b8b8b; --g5:#c6c6c6;
+    --t1:rgba(255,255,255,.9); --t2:rgba(255,255,255,.55); --t3:rgba(255,255,255,.35);
+    --r3:3px; --r6:6px; --r999:999px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--g14);color:var(--t1);font:13px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding:24px}
+  h1{font-size:18px;margin-bottom:6px}
+  .sub{color:var(--t2);font-size:12px;margin-bottom:20px}
+  .panel{background:var(--g13);border:1px solid var(--g11);border-radius:var(--r6);padding:16px;margin-bottom:22px}
+  .panel h2{font-size:14px;margin-bottom:4px}
+  .panel .note{color:var(--t3);font-size:11px;margin-bottom:14px}
+  .tagbad{display:inline-block;background:rgba(198,71,81,.15);color:#e88;border:1px solid rgba(198,71,81,.4);
+          border-radius:var(--r3);padding:1px 7px;font-size:11px;margin-left:6px}
+  .taggood{display:inline-block;background:rgba(5,148,101,.15);color:#5d9;border:1px solid rgba(5,148,101,.4);
+          border-radius:var(--r3);padding:1px 7px;font-size:11px;margin-left:6px}
+  hr{border:0;border-top:1px solid var(--g11);margin:18px 0}
+
+  /* ── 顶栏：修复前 ── */
+  .topbar-bad{background:var(--g12);border:1px solid var(--g11);border-radius:var(--r3);padding:6px 10px;
+              display:flex;gap:6px;align-items:center;height:38px;overflow:hidden}
+  .btn{background:var(--brand);color:#fff;border:0;border-radius:var(--r3);padding:6px 12px;font-size:13px;
+       white-space:nowrap;cursor:pointer}
+  .ghost{background:transparent;color:var(--t1);border:1px solid var(--g10);border-radius:var(--r3);
+         padding:5px 8px;font-size:13px;white-space:nowrap;cursor:pointer}
+  .avatar{width:26px;height:26px;border-radius:var(--r999);background:var(--brand-light);border:1px solid var(--brand);
+          display:flex;align-items:center;justify-content:center;font-size:11px;flex:0 0 26px}
+  .hint{color:var(--t3);font-size:12px;white-space:nowrap;overflow:hidden}
+  /* 修复前：宽度不够 → 文字被切 */
+  .bad-clip{height:30px;overflow:hidden}
+  .bad-clip .btn{padding:0 12px;height:44px;display:flex;align-items:center}
+  .squeeze{display:flex;gap:2px;flex:0 1 auto;min-width:0}
+  .squeeze .ghost{padding:5px 2px;overflow:hidden}
+
+  /* ── 顶栏：修复后 ── */
+  .topbar-good{background:var(--g12);border:1px solid var(--g11);border-radius:var(--r3);padding:0 12px;
+               display:flex;gap:14px;align-items:center;height:52px}
+  .logo{width:28px;height:28px;border-radius:var(--r3);background:var(--brand);display:flex;
+        align-items:center;justify-content:center;font-weight:700;font-size:12px;flex:0 0 28px}
+  .brandwrap{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+  .brandtxt b{display:block;font-size:13px}
+  .brandtxt span{display:block;font-size:11px;color:var(--t3)}
+  .ds{display:flex;align-items:center;gap:5px;color:var(--t2);font-size:12px;flex:0 0 auto;
+      border:1px solid var(--g11);border-radius:var(--r999);padding:3px 9px}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--success)}
+  .askwrap{flex:1 1 auto;display:flex;gap:8px;min-width:240px}
+  .askwrap input{flex:1 1 auto;background:var(--g14);border:1px solid var(--g11);border-radius:var(--r3);
+                 color:var(--t1);padding:7px 10px;font-size:13px;min-width:0}
+  .menu{position:relative;flex:0 0 auto}
+  .dropdown{position:absolute;right:0;top:40px;background:var(--g12);border:1px solid var(--g11);
+            border-radius:var(--r6);padding:6px;min-width:168px;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:9}
+  .dropdown div{padding:6px 10px;border-radius:var(--r3);font-size:12px;color:var(--t1)}
+  .dropdown div:hover{background:var(--brand-light);color:var(--brand-active)}
+  .sechead{color:var(--t3);font-size:11px;padding:6px 10px 2px}
+
+  /* ── 表格 ── */
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--g11);white-space:nowrap}
+  th{color:var(--t2);font-weight:500;background:var(--g12);position:sticky;top:0;cursor:pointer;user-select:none}
+  th:hover{color:var(--brand-active)}
+  th .arw{color:var(--t3);font-size:10px;margin-left:3px}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  tbody tr:hover{background:var(--brand-light)}
+  .tblwrap{border:1px solid var(--g11);border-radius:var(--r3);overflow:auto;max-height:300px}
+  .pager{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:12px;color:var(--t2)}
+  .pager .pgbtn{border:1px solid var(--g10);background:transparent;color:var(--t1);border-radius:var(--r3);
+                padding:3px 9px;font-size:12px;cursor:pointer;margin-left:4px}
+  .pager .pgbtn.on{background:var(--brand);border-color:var(--brand);color:#fff}
+  .tools{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+  .tools .sp{flex:1}
+  .scope{background:var(--g12);border:1px solid var(--g11);border-left:3px solid var(--brand);
+         border-radius:var(--r3);padding:9px 12px;font-size:12px;color:var(--t2);margin-bottom:12px}
+  .scope b{color:var(--t1)}
+  .twocol{display:grid;grid-template-columns:1fr 340px;gap:16px}
+  .right{background:var(--g13);border:1px solid var(--g11);border-radius:var(--r6);padding:14px}
+  .right h3{font-size:13px;margin-bottom:10px;color:var(--t1)}
+  .kv{display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px dashed var(--g11)}
+  .kv span:first-child{color:var(--t2)}
+  .kv span:last-child{font-variant-numeric:tabular-nums}
+  ul{margin-left:16px;font-size:12px;color:var(--t2)} li{margin:4px 0}
+</style>
+</head>
+<body>
+
+<h1>销售报表 Agent · 改版方案原型</h1>
+<div class="sub">真实数据来自 UCI Online Retail（2011-11-01 ~ 2011-11-30）· 用 TDesign 官方 token 渲染</div>
+
+<!-- ══════ 问题 1：顶栏遮挡 ══════ -->
+<div class="panel">
+  <h2>① 顶栏：修复前 <span class="tagbad">就是你现在看到的遮挡</span></h2>
+  <div class="note">一行硬塞 8 个元素，宽度不够 → 按钮全被压成单字；「分析」按钮文字被垂直切掉</div>
+  <div class="topbar-bad">
+    <div class="bad-clip"><button class="btn">分析</button></div>
+    <div class="hint">自然语言入口：可问 销售汇总 / 趋势 / 产品排行…</div>
+    <div class="squeeze">
+      <button class="ghost">通知</button><button class="ghost">趋</button><button class="ghost">历史</button>
+      <button class="ghost">排</button><button class="ghost">设置</button><button class="ghost">闻</button>
+      <button class="ghost">本</button>
+    </div>
+    <div class="avatar">国</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>② 顶栏：修复后 <span class="taggood">建议方案</span></h2>
+  <div class="note">只留「Logo + 数据源 + 提问框（吃满剩余宽度）+ 头像菜单」；其余 7 项收进下拉；永不挤压、永不切字</div>
+  <div class="topbar-good">
+    <div class="brandwrap">
+      <div class="logo">SR</div>
+      <div class="brandtxt"><b>销售报表 Agent</b><span>企业销售分析平台</span></div>
+    </div>
+    <div class="ds"><span class="dot"></span>Online Retail.xlsx · 哈希一致</div>
+    <div class="askwrap">
+      <input placeholder="用自然语言提问，例如「2011年11月销售额最高的客户」">
+      <button class="btn">分析</button>
+    </div>
+    <div class="menu">
+      <button class="ghost">☰ 菜单</button>
+      <div class="dropdown">
+        <div class="sechead">工具</div>
+        <div>趋势分析</div><div>产品排行</div><div>历史提问</div>
+        <div class="sechead">系统</div>
+        <div>通知</div><div>设置</div><div>帮助 / 更新</div>
+      </div>
+    </div>
+    <div class="avatar">本</div>
+  </div>
+  <div class="note" style="margin-top:10px;margin-bottom:0">
+    左边那 7 个按钮里，「趋势 / 产品排行」本来就在左侧导航里（重复）；「通知 / 设置」属于低频；
+    「历史」可以进右侧面板；「新闻 / 本地」这类信息性入口没必要占顶栏。
+  </div>
+</div>
+
+<hr>
+
+<!-- ══════ 问题 2：客户分析页要真表格 ══════ -->
+<div class="panel">
+  <h2>③ 客户分析页：现在 vs 建议 <span class="taggood">核心改动</span></h2>
+  <div class="note">
+    现在这一页只有一句话「本页不单独铺一张客户明细表」——业务人员没法核对、没法排序、没法导出。<br>
+    下面是建议形态：<b>真表格 + 客户范围声明 + 分页 + 排序 + 导出</b>。所有数字仍来自同一套确定性计算。
+  </div>
+
+  <div class="scope">
+    <b>客户范围：</b>本次客户分析只覆盖<b>有 CustomerID</b> 的成交（64,531 行 / <b>1,161,817.38元</b>），
+    占该区间全部销售额 <b>76.97%</b>；客户号为空的 18,838 行（347,678.95元）仍计入销售额，但<b>不计入</b>客户维度。
+  </div>
+
+  <div class="twocol">
+    <div>
+      <div class="tools">
+        <button class="ghost">区间：2011-11-01 ~ 2011-11-30</button>
+        <button class="ghost">排序：销售额 ↓</button>
+        <div class="sp"></div>
+        <button class="ghost">导出 Excel</button>
+        <button class="ghost">导出 CSV</button>
+      </div>
+      <div class="tblwrap">
+        <table>
+          <thead><tr>
+            <th>#</th><th>客户号 <span class="arw">▼</span></th><th>销售额 <span class="arw">▼</span></th>
+            <th>订单数</th><th>购买次数</th><th>平均每单</th><th>首次购买</th><th>最后购买</th>
+          </tr></thead>
+          <tbody>
+            <tr><td>1</td><td>17450</td><td class="num">27,869.45</td><td class="num">10</td><td class="num">10</td><td class="num">2,786.95</td><td>2011-11-02</td><td>2011-11-29</td></tr>
+            <tr><td>2</td><td>14096</td><td class="num">27,827.78</td><td class="num">4</td><td class="num">4</td><td class="num">6,956.94</td><td>2011-11-07</td><td>2011-11-25</td></tr>
+            <tr><td>3</td><td>14646</td><td class="num">24,500.11</td><td class="num">3</td><td class="num">3</td><td class="num">8,166.70</td><td>2011-11-14</td><td>2011-11-30</td></tr>
+            <tr><td>4</td><td>18102</td><td class="num">21,940.32</td><td class="num">5</td><td class="num">5</td><td class="num">4,388.06</td><td>2011-11-01</td><td>2011-11-28</td></tr>
+            <tr><td>5</td><td>15311</td><td class="num">18,706.55</td><td class="num">3</td><td class="num">3</td><td class="num">6,235.52</td><td>2011-11-09</td><td>2011-11-22</td></tr>
+            <tr><td>6</td><td>16029</td><td class="num">17,824.90</td><td class="num">6</td><td class="num">6</td><td class="num">2,970.82</td><td>2011-11-03</td><td>2011-11-27</td></tr>
+            <tr><td>7</td><td>16422</td><td class="num">16,318.44</td><td class="num">2</td><td class="num">2</td><td class="num">8,159.22</td><td>2011-11-16</td><td>2011-11-24</td></tr>
+            <tr><td>8</td><td>12346</td><td class="num">15,200.00</td><td class="num">1</td><td class="num">1</td><td class="num">15,200.00</td><td>2011-11-11</td><td>2011-11-11</td></tr>
+            <tr><td>9</td><td>12748</td><td class="num">14,982.13</td><td class="num">45</td><td class="num">45</td><td class="num">332.94</td><td>2011-11-01</td><td>2011-11-30</td></tr>
+            <tr><td>10</td><td>16684</td><td class="num">14,306.77</td><td class="num">4</td><td class="num">4</td><td class="num">3,576.69</td><td>2011-11-08</td><td>2011-11-26</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <span>共 1,664 位有成交客户 · 第 1 / 167 页（每页 10 条）</span>
+        <span>
+          <button class="pgbtn on">1</button><button class="pgbtn">2</button>
+          <button class="pgbtn">3</button><button class="pgbtn">…</button><button class="pgbtn">167</button>
+        </span>
+      </div>
+      <div class="note" style="margin-top:8px">
+        ↑ 这张表能排序（点表头）、能翻页、能导出全量 —— 这才是「核对数据」该有的样子。
+        第 9 行客户 12748 是「购买次数榜首」：45 次购买（注意与订单数、与原始行数的区别，评审特别要求这个口径）。
+      </div>
+    </div>
+
+    <div class="right">
+      <h3>AI 结论 · 最近一次</h3>
+      <div style="font-size:11px;color:var(--t3);margin-bottom:8px">2026-09-24 19:19 · 客户排行</div>
+      <div class="kv"><span>有成交客户</span><span>1,664 位</span></div>
+      <div class="kv"><span>复购客户</span><span>540 位</span></div>
+      <div class="kv"><span>复购率</span><span>32.45%</span></div>
+      <div class="kv"><span>数据集内新客</span><span>323 位</span></div>
+      <div class="kv"><span>TOP5 合计</span><span>120,644.98</span></div>
+      <div class="kv"><span>占客户范围</span><span>10.38%</span></div>
+      <div style="margin-top:12px">
+        <div style="font-size:12px;color:var(--t2);margin-bottom:6px">建议行动（模型生成）</div>
+        <ul>
+          <li>TOP10 客户贡献集中，建议单独维护</li>
+          <li>5,006 行无客户号成交建议补录</li>
+          <li>32.45% 复购率有提升空间</li>
+        </ul>
+      </div>
+      <div style="margin-top:12px;border-top:1px solid var(--g11);padding-top:10px;font-size:11px;color:var(--t3)">
+        表格数据与结论数字同源（同一套确定性计算）
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr>
+
+<!-- ══════ 问题 3：接入渠道 ══════ -->
+<div class="panel">
+  <h2>④ 数据接入：现在 vs 建议 <span class="taggood">你的建议</span></h2>
+  <table style="max-width:900px">
+    <thead><tr><th>来源</th><th>现在支持</th><th>建议补齐</th></tr></thead>
+    <tbody>
+      <tr><td>Excel (.xlsx)</td><td>✅ 上传 + 计算</td><td>多 Sheet 选择（现在只读第一个）</td></tr>
+      <tr><td>CSV</td><td>✅ 上传 + 计算</td><td>编码/分隔符自动识别</td></tr>
+      <tr><td>Word (.docx)</td><td>⚠️ 只提取文本（表格被拉平）</td><td>保留表格结构 → 可当数据源</td></tr>
+      <tr><td>PDF</td><td>✅ 文本提取（无 OCR）</td><td>表格抽取（扫描件仍如实报错）</td></tr>
+      <tr><td>PPT (.pptx)</td><td>❌ 完全没有</td><td>提取文字 + <b>表格</b>（PPT 表格常是数据表）</td></tr>
+      <tr><td>接入后「看得见」</td><td>❌ 只能被计算</td><td>★ 预览前 N 行 + 字段映射 + 转成可查表格</td></tr>
+    </tbody>
+  </table>
+  <div class="note" style="margin-top:12px">
+    核心差别：现在「上传 → 只给结论」；建议「上传 → 先看见表 → 再算」。
+    真实工作里，数据往往先在 Excel 台账、Word 报告、PPT 汇报里 —— 都得能进，而且进来要能看。
+  </div>
+</div>
+
+<div class="panel" style="border-color:var(--brand)">
+  <h2>⑤ 建议的执行顺序</h2>
+  <div class="note" style="margin-bottom:10px">两步走，先解决「看不见数据」，再补「接入面」</div>
+  <table style="max-width:900px">
+    <thead><tr><th>步骤</th><th>内容</th><th>解决</th><th>预估规模</th></tr></thead>
+    <tbody>
+      <tr><td><b>STEP A</b></td><td>客户/产品/销售三页出真表格（分页·排序·导出）+ 顶栏遮挡修复</td><td>你的疑问 1 + 2</td><td>中等</td></tr>
+      <tr><td><b>STEP B</b></td><td>PPT 接入 + Excel 多 sheet + Word 表格保留 + 接入后预览</td><td>你的疑问 3</td><td>较大</td></tr>
+    </tbody>
+  </table>
+</div>
+
+</body>
+</html>

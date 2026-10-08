@@ -1,0 +1,901 @@
+Gate：APPROVED_WITH_CONDITIONS
+
+TASK-006 可以做，而且建议继续坚持上一轮的原则：扩展确定性分析能力，不扩展成“AI 猜客户/预测客户”系统。
+
+但当前草案偏大。我建议把 006 收缩成：
+
+客户画像基础分析 + 产品基础分析
+
+RFM、产品关联、流失预测暂缓。
+
+1. 范围：建议砍什么？
+核心必做
+能力	建议	原因
+客户 TOP N	✅	直接、确定性、价值明确
+客户购买次数/复购	✅	基础客户分析
+新客	✅	可由首次购买日期确定
+沉睡客户	✅	但定义成“规则型沉睡”，不是预测流失
+产品趋势	✅	与现有趋势能力自然延伸
+产品退货率	✅	数据中有 Quantity / C 订单
+top_products 扩展	✅	不新增重复 Intent
+RFM	⏸️	可算，但口径/分箱复杂
+产品-客户关联	❌ 暂缓	组合爆炸，分析口径复杂
+流失预测	❌	已进入预测/ML 范畴
+
+所以我建议 006 最终只保留 7 项：
+
+客户：
+1. 客户 TOP N
+2. 购买频次 / 复购
+3. 新客
+
+4. 沉睡客户（规则型）
+
+产品：
+5. 产品 TOP N 扩展
+6. 产品趋势
+7. 产品退货分析
+2. Intent：新增 2 个就够
+
+不要继续：
+
+customer_top
+customer_repeat
+new_customer
+churn_customer
+rfm
+product_trend
+product_return
+product_association
+...
+
+这样很快又会出现 Intent 爆炸。
+
+建议最终：
+
+现有 5
+├─ sales_summary
+├─ sales_trend
+├─ top_products
+├─ sales_compare
+└─ sales_breakdown_by_country
+
+新增 2
+├─ customer_analysis
+└─ product_analysis
+
+即：
+
+7 个公开 Intent。
+
+customer_analysis
+
+统一通过参数表达：
+
+JSON
+{
+  "analysis": "customer_analysis",
+  "metric": "sales_amount",
+  "operation": "top",
+  "period": {...},
+  "top_n": 10
+}
+
+operation 建议：
+
+top
+purchase_frequency
+repeat_rate
+new_customers
+inactive_customers
+
+再通过参数限制维度：
+
+metric:
+  sales_amount
+  order_count
+  purchase_count
+
+operation:
+  top
+  repeat_rate
+  new_customers
+  inactive_customers
+
+不要让 LLM 自由生成任意 operation。
+
+product_analysis
+
+统一：
+
+operation:
+  top
+  trend
+  return
+
+例如：
+
+operation=top
+metric=sales_amount
+top_n=10
+
+或者：
+
+operation=trend
+product_codes=[A,B,C]
+granularity=day
+
+或者：
+
+operation=return
+top_n=10
+
+这样产品分析以后即使增加：
+
+quantity
+order_count
+return_quantity
+return_rate
+
+也不用继续增加 Intent。
+
+3. CustomerID 空值：这是 TASK-006 的核心口径问题
+
+你这里千万不要把空 CustomerID 当成一个“匿名客户”。
+
+目前：
+
+总行数：541,909
+CustomerID 为空：19,113
+
+空值比例约：
+
+3.53%
+
+但这里真正重要的不是 3.53%，而是：
+
+这 19,113 行对应多少销售金额？
+
+因为你已经发现大额订单可能集中在那里。
+
+所以我建议：
+
+客户分析统一采用：
+
+客户维度指标仅覆盖 CustomerID 非空记录。
+
+销售总额则继续遵循现有口径：
+
+CustomerID 为空的记录仍计入销售额，但不计入客户数及客户维度分析。
+
+这是非常干净的边界。
+
+更进一步：不要让用户自己猜覆盖范围
+
+客户分析结果最好自动带：
+
+JSON
+{
+  "customer_scope": {
+    "rows_with_customer_id": 522796,
+    "rows_without_customer_id": 19113,
+    "sales_amount_all": "...",
+    "sales_amount_customer_scope": "...",
+    "customer_scope_sales_share": "..."
+  }
+}
+
+这样系统可以回答：
+
+本次客户分析覆盖有 CustomerID 的成交记录，占全部销售额 XX%。
+
+这个 XX% 必须代码计算。
+
+不要让 LLM计算。
+
+还有一个非常重要的边界
+
+不能说：
+
+新客 1,234 人。
+
+然后让用户理解成“真实业务历史上的新客”。
+
+因为数据集从：
+
+2010-12-01
+
+才开始。
+
+所以应该叫：
+
+数据集内新客
+
+定义：
+
+CustomerID 非空
+且该客户在整个数据集中的首次有效购买日期落在目标区间
+
+而不是：
+
+这个客户人生第一次购买。
+
+这是 TASK-006 必须写入 AC 的。
+
+4. “复购”必须先把定义锁死
+
+这是另一个很容易产生争议的地方。
+
+建议：
+
+购买次数
+
+定义为：
+
+CustomerID + distinct InvoiceNo
+
+而不是：
+
+行数
+
+否则一个订单包含 20 个商品行，会被误认为购买 20 次。
+
+复购客户
+
+例如：
+
+purchase_count >= 2
+
+则：
+
+repeat_customer = true
+复购率
+
+建议定义：
+
+复购客户数 / 目标客户总数
+
+但必须把“目标客户”写死：
+
+目标期间内至少有一次有效购买的 CustomerID 非空客户
+
+否则：
+
+复购率 32%
+
+这个数字实际上没有可复核意义。
+
+5. “沉睡/流失”：只做沉睡，不做流失预测
+
+这是我明确建议修改的地方。
+
+不要叫：
+
+流失客户
+
+因为“流失”很容易被理解成预测结论。
+
+改成：
+
+沉睡客户 / 长期未购买客户
+
+定义成规则：
+
+reference_date - last_purchase_date >= inactivity_days
+
+例如：
+
+inactivity_days = 90
+
+完全确定性。
+
+不要做：
+客户 A 流失概率 87%
+
+也不要：
+
+预测未来 30 天不会购买
+
+这就进入 ML / 统计预测了。
+
+当前项目没必要。
+
+6. RFM 能不能做？
+能做，但我建议 TASK-006 不做 RFM 分群。
+
+因为 RFM 本身并不违反你的铁律。
+
+可以确定性计算：
+
+R = reference_date - last_purchase_date
+F = distinct InvoiceNo count
+M = sales amount
+
+完全可以复现。
+
+问题是后面的：
+
+R=5 → 5分
+F=23 → 4分
+M=50000 → 5分
+
+到底怎么分？
+
+你需要定义：
+
+分位数还是固定阈值？
+
+5 档还是 10 档？
+
+并列值怎么处理？
+
+reference date 是数据最大日期还是用户查询结束日？
+
+负销售如何处理？
+
+CustomerID 空值怎么处理？
+
+这些都不是技术难题，但会明显增加口径复杂度和测试量。
+
+所以：
+
+RFM v1 暂缓，不是因为不能确定性算，而是因为当前阶段收益不足以抵消口径复杂度。
+
+以后如果做，建议先做：
+
+R / F / M 原始指标
+
+再固定规则分箱。
+
+不要让 LLM 动态决定分群。
+
+7. 产品关联：暂缓
+
+“买 A 也买 B”其实完全可以确定性计算。
+
+例如：
+
+support(A,B)
+confidence(A→B)
+lift(A,B)
+
+甚至不用 ML。
+
+但问题是它会突然把项目带进：
+
+商品组合
+订单级篮子
+pair generation
+support threshold
+confidence threshold
+lift
+大量组合
+
+541,909 行 × 4,070 StockCode，虽然可以优化，但已经明显偏离当前项目的主线。
+
+因此：
+
+不是做不了，是 TASK-006 不值得做。
+
+暂缓。
+
+8. 产品退货率：一定要把两个口径拆开
+
+你提出：
+
+Quantity < 0
+或 InvoiceNo 以 C 开头
+
+这里不能简单合并成一个“退货率”。
+
+建议至少输出：
+
+negative_quantity_rate
+cancel_invoice_rate
+
+因为：
+
+Quantity < 0
+
+和：
+
+InvoiceNo startswith("C")
+
+是不同业务信号。
+
+同时需要明确：
+
+两者可能重叠
+
+所以不要：
+
+退货率 = A + B
+
+否则会重复计算。
+
+如果要提供一个统一指标，则必须定义去重后的：
+
+return_or_cancel_order_rate
+
+并单独测试。
+
+9. 客户分析还有没有“区域”一样的坑？
+
+有，而且我认为应该专门建立：
+
+业务概念白名单
+
+当前数据可以支持：
+
+CustomerID
+Country
+StockCode
+Description
+InvoiceNo
+InvoiceDate
+Quantity
+UnitPrice
+
+但不能凭空产生：
+
+VIP
+普通客户
+大客户
+企业客户
+个人客户
+客户等级
+会员等级
+渠道
+客户行业
+客户地区
+客户生命周期阶段
+
+尤其是：
+
+“VIP 客户 TOP10”
+
+这是一个典型危险请求。
+
+因为系统没有：
+
+VIP 字段
+客户等级规则
+
+所以应该：
+
+unsupported
+
+而不是偷偷用：
+
+销售额 TOP 10
+
+代替 VIP。
+
+10. 同样，“老客”也要谨慎
+
+可以支持：
+
+数据集内老客
+
+但不要声称：
+
+老客户。
+
+建议定义：
+
+new_customer:
+首次购买日期 ∈ 当前区间
+
+existing_customer:
+首次购买日期 < 当前区间开始
+
+并在 UI/回答中使用：
+
+数据集内新客
+
+避免业务含义扩大。
+
+11. 006 → 008：顺序确认
+是，建议：
+TASK-005
+   ↓
+TASK-006
+   ↓
+TASK-008
+
+不要提前做 008。
+
+因为 006 继续补齐的是：
+
+确定性描述性分析
+
+而 008 异常发现会引入：
+
+baseline
+threshold
+z-score？
+IQR？
+同比异常？
+趋势异常？
+partial bucket？
+异常等级？
+
+这已经是新的规则体系。
+
+所以：
+
+先把客户/产品基础分析闭环，再做异常发现。
+
+12. TASK-006 最终建议范围
+
+我建议 Hermes 施工版冻结成：
+
+TASK-006
+│
+├── customer_analysis
+│   ├── top
+│   ├── purchase_frequency
+│   ├── repeat_rate
+│   ├── new_customers
+│   └── inactive_customers
+│
+└── product_analysis
+    ├── top
+    ├── trend
+    └── return
+
+暂不：
+
+RFM segmentation       → 后续
+product association     → 后续
+churn prediction       → 不做
+ML                      → 不做
+VIP / customer level   → 不支持
+13. TASK-006 AC
+
+下面这些我建议直接作为 Hermes 的验收合同。
+
+AC-01：客户 TOP N
+
+真实 HTTP：
+
+customer_analysis
+operation=top
+metric=sales_amount
+top_n=10
+
+验证：
+
+CustomerID 非空
+
+distinct CustomerID
+
+排序由代码完成
+
+TOP10 与独立参考计算完全一致
+
+并列排序规则固定
+
+AC-02：客户订单次数
+
+请求：
+
+客户购买次数 TOP10
+
+必须按：
+
+CustomerID
++ distinct InvoiceNo
+
+计算。
+
+不能按 DataFrame 行数。
+
+Hermes 使用独立参考程序复算并逐项比对。
+
+AC-03：复购率
+
+固定定义：
+
+repeat_customers
+=
+purchase_count >= 2
+
+repeat_rate
+=
+repeat_customers / customers_with_purchase
+
+HTTP 返回：
+
+total_customers
+repeat_customers
+repeat_rate
+
+三者必须可互相计算验证。
+
+AC-04：新客
+
+请求：
+
+2011-11 的新客数量
+
+必须按：
+
+CustomerID 非空
++
+全数据集首次购买日期
++
+首次购买日期落在目标区间
+
+计算。
+
+并明确：
+
+数据集内新客。
+
+AC-05：CustomerID 空值覆盖
+
+每个客户分析结果必须包含：
+
+customer_scope
+
+至少包括：
+
+customer_id_null_rows
+customer_id_nonnull_rows
+customer_scope_sales_amount
+total_sales_amount
+customer_scope_sales_share
+
+所有金额和比例由代码计算。
+
+AC-06：客户维度与总销售额不能混淆
+
+验证：
+
+total sales
+
+仍包含：
+
+CustomerID IS NULL
+
+而：
+
+customer analysis
+
+不包含空 CustomerID。
+
+两套口径必须同时成立。
+
+AC-07：沉睡客户
+
+固定：
+
+inactive_days = N
+
+例如 N=90。
+
+定义：
+
+reference_date - last_purchase_date >= N
+
+不得出现：
+
+churn_probability
+churn_prediction
+AC-08：产品 TOP
+
+现有：
+
+top_products
+
+回归必须保持。
+
+新增 product_analysis(operation=top) 时：
+
+对同一参数必须与原 top_products 结果一致。
+
+这是非常重要的兼容性 AC。
+
+AC-09：产品趋势
+
+测试：
+
+product_codes = [A, B]
+granularity = day/week
+
+验证：
+
+每个产品分别聚合
+
+时间桶完整
+
+partial bucket 标记保持现有规则
+
+独立参考值逐桶比对
+
+AC-10：退货分析
+
+分别验证：
+
+Quantity < 0
+InvoiceNo startswith("C")
+
+两个指标不能混为一谈。
+
+如果提供统一退货/取消指标：
+
+必须去重
+
+并增加重叠样本测试。
+
+AC-11：不支持的客户维度
+
+至少 HTTP 测试：
+
+VIP客户
+客户等级
+大客户
+客户行业
+客户地区
+客户渠道
+客户生命周期
+
+必须拒绝。
+
+尤其：
+
+销售额TOP10
+
+不能自动解释成：
+
+VIP TOP10
+AC-12：区域边界回归
+
+TASK-005 已有：
+
+华南区
+华东区
+上海
+门店
+销售员
+
+全部继续：
+
+unsupported
+
+不得因为 TASK-006 加入 CustomerID 后改变拒绝行为。
+
+AC-13：LLM 不接触原始客户/产品数据
+
+LLM 输入只能包含：
+
+structured facts
+
+不得包含：
+
+DataFrame
+raw rows
+SQL result
+完整客户明细
+完整产品明细
+AC-14：LLM 不负责 TOP / 排序
+
+例如事实：
+
+A 10000
+B 8000
+C 3000
+
+LLM 即使产生：
+
+B 是销售额最高产品
+
+也不能成为事实来源。
+
+最终 TOP 顺序必须来自代码。
+
+AC-15：数字闸门回归
+
+人为制造：
+
+facts:
+A = 10000
+
+让 LLM 输出：
+
+A = 99999
+
+必须触发现有数字闸门。
+
+AC-16：真 HTTP + CDP
+
+Hermes 最终必须能够通过：
+
+真实服务
++
+真实数据
++
+真实 HTTP
++
+CDP 页面
+
+独立验证至少：
+
+客户 TOP
+客户复购
+数据集内新客
+沉睡客户
+产品 TOP
+产品趋势
+产品退货
+unsupported VIP
+unsupported 客户地区
+
+不能依赖 mock。
+
+AC-17：全量回归
+
+TASK-006 完成后：
+
+pytest
+
+必须全部通过。
+
+当前基线：
+
+276 passed
+
+新增测试应覆盖新 Intent，同时保证 TASK-002～005、TASK-010 不回归。
+
+最终结论
+
+Gate：APPROVED_WITH_CONDITIONS
+
+我建议冻结后的 TASK-006 就是：
+
+新增 2 个 Intent：
+
+customer_analysis
+product_analysis
+
+核心做：
+
+客户 TOP
+购买频次
+复购率
+数据集内新客
+规则型沉睡客户
+
+产品 TOP 扩展
+产品趋势
+退货/取消分析
+
+明确暂缓：
+
+RFM 分群
+产品关联
+流失预测
+任何 ML
+VIP/客户等级
+
+其中 CustomerID 空值必须成为 TASK-006 的一等公民口径：客户维度只统计有 ID 的成交，但总销售额仍包含空 ID；系统应自动给出客户分析覆盖的销售额比例，而不是让用户自己猜。
+
+这样 006 做完后，整个项目会形成比较完整的三层：
+
+销售总体
+  ├─ summary / trend / compare
+  ├─ country / attribution
+  │
+客户
+  ├─ TOP
+  ├─ frequency / repeat
+  ├─ new
+  └─ inactive
+  │
+产品
+  ├─ TOP
+  ├─ trend
+  └─ return
+
+然后再进入 TASK-008 异常发现，边界会非常清楚。

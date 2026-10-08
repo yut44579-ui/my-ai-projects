@@ -1,0 +1,857 @@
+Gate：APPROVED_WITH_CONDITIONS
+
+整体方向成立，而且和当前项目的核心铁律一致：新增能力可以扩大，但“计算权”必须继续留在确定性代码侧。
+
+我建议 TASK-005 不延期，但收缩一下范围并调整 Intent 边界。尤其不要把“归因”做成 LLM 自由分析能力。
+
+UCI 官方资料确认该数据集确实覆盖 2010-12-01 至 2011-12-09，且 Country 是实际存在的字段；因此你目前坚持“Country ≠ 区域”的边界是正确的。
+UCI机器学习库
+
+1. 范围是否合适？有没有过度设计？
+结论：基本合适，但建议砍掉“独立同比能力的强制支持”，以及暂缓复杂归因扩展。
+
+我建议 TASK-005 定义成：
+
+能力	建议
+两区间销售额/订单数/客户数/客单价对比	✅ 必做
+环比	✅ 必做
+同比	⚠️ 做“可用性判断”，不强制所有窗口支持
+Country 分布 TOP N	✅ 必做
+Country 对变化的贡献	✅ 做，但严格代码化
+StockCode 对变化的贡献	⚠️ 建议作为归因框架的一种维度，暂不扩展更多维度
+自动解释/自然语言“原因推断”	❌ 不做
+区域/省/城市/门店等	❌ 明确拒绝
+复杂多维交叉分析	❌ 暂不做
+
+核心原因是：005 应该继续扩展“可验证分析”，而不是开始进入开放式商业分析。
+
+当前数据本身也存在明显的时间边界：最后只有 2011-12-09，不能把完整 2011 年当作完整年度数据。这个限制已有外部数据分析资料明确指出。
+RStudio Pubs
+
+2. 两个 Intent 怎么划分？
+
+你的：
+
+sales_compare
+sales_breakdown_by_country
+
+总体合理，但我建议稍微重新定义。
+
+sales_compare
+
+负责：
+
+A 区间 vs B 区间
+├── sales_amount
+├── order_count
+├── customer_count
+├── avg_order_value
+├── change_amount
+├── change_rate
+└── attribution（可选）
+
+例如：
+
+本月比上月销售额增长多少？
+
+或者：
+
+本月销售额变化主要来自哪些国家？
+
+都可以进入：
+
+sales_compare
+
+然后由结构化参数决定：
+
+comparison:
+  current_period
+  previous_period
+
+attribution:
+  null
+  country
+  stock_code
+sales_breakdown_by_country
+
+只负责：
+
+某个时间段，各 Country 销售额怎么分布？
+
+例如：
+
+英国：82%
+德国：5%
+法国：4%
+...
+
+不要让它承担“变化归因”。
+
+因为：
+
+“某时间段谁卖得最多”
+
+和：
+
+“两个时间段之间谁造成了变化”
+
+是两个不同的问题。
+
+是否需要第三个 sales_attribution？
+我的建议：暂时不要作为第三个公开 Intent。
+
+保留：
+
+sales_compare
+sales_breakdown_by_country
+
+内部把：
+
+attribution_dimension
+
+作为 sales_compare 的一个受控参数。
+
+这样既避免 Intent 爆炸，又保持语义清晰。
+
+最终：
+
+sales_compare
+  ├─ 普通比较
+  ├─ country attribution
+  └─ stock_code attribution
+
+而不是：
+
+sales_compare
+sales_attribution
+sales_country_attribution
+sales_product_attribution
+...
+
+后者很容易开始造大量重复 executor。
+
+3. 归因分析最大的风险，以及怎么保证 LLM 碰不到数字
+
+这是 TASK-005 最重要的架构要求。
+
+你的思路是对的，但我建议再推进一步：
+
+不仅数字不能由 LLM 判断，“主要是 X 和 Y”也不要让 LLM 决定。
+
+因为：
+
+哪个国家贡献最大？
+
+本质上已经是一个排序/判断问题。
+
+既然代码完全可以确定：
+
+Python
+运行
+sorted(contributions, key=abs(delta), reverse=True)
+
+就没必要让 LLM 再做一次。
+
+推荐的数据流
+Step 1：代码计算
+
+假设：
+
+本期 Country 销售额
+上期 Country 销售额
+
+代码计算：
+
+delta = current - previous
+
+得到：
+
+JSON
+{
+  "country": "Germany",
+  "current": 12000,
+  "previous": 9000,
+  "delta": 3000
+}
+
+然后代码排序。
+
+Step 2：代码决定“主要贡献者”
+
+例如规定：
+
+positive_contributors_top_n = 3
+negative_contributors_top_n = 3
+
+或者：
+
+按 abs(delta) 排序
+取 Top 3
+
+最终 facts：
+
+JSON
+{
+  "total_delta": 10000,
+
+  "positive_contributors": [
+    {
+      "dimension": "Country",
+      "name": "Germany",
+      "delta": 3000
+    },
+    {
+      "dimension": "Country",
+      "name": "France",
+      "delta": 2100
+    }
+  ],
+
+  "negative_contributors": [
+    {
+      "dimension": "Country",
+      "name": "Spain",
+      "delta": -1800
+    }
+  ]
+}
+Step 3：LLM 只能消费 facts
+
+LLM 收到的不是原始数据，而是：
+
+FACTS ONLY
+
+总变化：
++10,000
+
+正贡献：
+Germany
+France
+
+负贡献：
+Spain
+
+然后只能生成：
+
+销售额增长主要由 Germany 和 France 的增长贡献，同时 Spain 出现负向贡献。
+
+Step 4：最好连“主要”都代码生成
+
+更严格的设计是：
+
+【发生了什么】
+代码生成
+
+【主要贡献】
+代码生成
+
+【解释/措辞】
+LLM 生成
+
+也就是：
+
+代码：
+Germany、France 是主要正贡献者
+
+LLM：
+负责把这句话说得自然
+
+这样你的安全边界就非常漂亮：
+
+LLM 不负责事实判断，只负责事实的语言表达。
+
+4. 还有一个非常重要的归因数学约束
+
+必须加入一个 AC：
+
+贡献和必须能够解释总变化
+
+对于同一指标：
+
+Total Δ = Current Total - Previous Total
+
+对于所有维度：
+
+Σ Dimension Δ = Total Δ
+
+允许存在：
+
++贡献
+-贡献
+
+例如：
+
+Germany   +3000
+France    +2100
+Spain     -1800
+...
+----------------
+Total     +10000
+
+这是非常重要的内部一致性校验。
+
+如果：
+
+sum(country_delta) != total_delta
+
+则：
+
+整个归因结果不得进入回答。
+
+这比单纯测试几个数字更重要。
+
+还要注意“贡献率”不要简单叫百分比
+
+例如：
+
+Total Δ = +1000
+Germany Δ = +1500
+Spain Δ = -500
+
+那么：
+
+Germany contribution = 150%
+Spain contribution = -50%
+
+数学上没有问题，但用户很容易误解成：
+
+Germany 占全部销售额 150%。
+
+所以建议 UI / API 明确区分：
+
+delta_amount
+contribution_share_of_change
+
+而不要只叫：
+
+percentage
+
+并且允许：
+
+>100%
+<0%
+
+这是正常现象。
+
+5. 同比：我的明确建议
+① 如实判断是否有可比窗口，而不是彻底删除同比。
+
+也不要简单做：
+
+所有“同比”都 unsupported。
+
+因为项目以后换数据集，或者增加两年以上数据，sales_compare 本身完全可以继续使用。
+
+应该设计成：
+
+comparison_type:
+  wow
+  mom
+  yoy
+  custom
+
+然后由代码判断：
+
+当前数据是否存在完整可比窗口？
+当前数据集
+
+UCI 官方给出的时间范围是：
+
+2010-12-01 → 2011-12-09
+
+所以 2011 年后段明显是不完整的。
+UCI机器学习库
+
+例如用户问：
+
+2011 年 12 月同比 2010 年 12 月？
+
+系统不能直接说：
+
+同比增长 XX%
+
+因为：
+
+2011-12 只有到 12-09
+
+这时应该：
+
+2011-12-01 ~ 2011-12-09
+vs
+2010-12-01 ~ 2010-12-09
+
+如果用户明确要求等长窗口，那么可以计算。
+
+如果用户要求：
+
+2011 年 12 月 vs 2010 年 12 月整月
+
+则：
+
+comparison_status = insufficient_data
+
+返回：
+
+无法进行完整月度同比：2011 年 12 月数据仅覆盖至 12 月 9 日。
+
+这非常符合你项目的价值观：
+
+不猜、不补、不偷偷截断。
+
+6. Country 分布与“区域不支持”如何共存？
+
+这里建议你把数据维度白名单写得非常明确。
+
+当前：
+
+支持：
+Country
+
+不支持：
+Region
+Province
+State
+City
+Store
+Salesperson
+Channel
+...
+
+并且在 Intent 层做语义映射：
+
+英国 / 德国 / 法国
+        ↓
+Country
+
+但是：
+
+华南区
+华东区
+北美区
+华东
+上海
+北京门店
+线上渠道
+张三销售
+        ↓
+unsupported
+
+绝不能因为 Country 存在，就把“区域”映射到 Country。
+
+你现在已有的：
+
+不会用 Country 代替区域
+
+应该继续保留，而且我建议把它写进 TASK-005 AC。
+
+7. TASK-006 客户/产品分析还是 TASK-008 异常发现？
+我的建议：不要为了“顺序”而提前 006 或 008。005 直接做。
+
+理由很简单：
+
+当前已有：
+
+sales_summary
+sales_trend
+top_products
+
+005 扩展：
+
+sales_compare
+sales_breakdown_by_country
+
+它们仍然属于同一条：
+
+确定性销售指标计算链
+
+所以技术风险最低。
+
+而：
+
+TASK-008 异常发现
+
+明显是另一类能力：
+
+什么叫异常？
+阈值？
+统计基线？
+季节性？
+partial bucket？
+异常严重程度？
+
+这会引入新的定义问题。
+
+因此 008 不应该插队。
+
+TASK-006 客户/产品分析
+
+如果 006 只是：
+
+客户 TOP
+产品 TOP
+复购
+客单价
+
+可以在 005 后自然继续。
+
+所以我的推荐顺序：
+
+TASK-005
+  ↓
+TASK-006
+  ↓
+TASK-008
+
+而不是：
+
+005 → 008 → 006
+8. 我建议的 TASK-005 最终范围
+
+建议 Hermes 最终按这个施工：
+
+TASK-005 销售分析扩展
+
+A. sales_compare
+   ├── 自定义两区间比较
+   ├── WoW
+   ├── MoM
+   ├── YoY（有完整可比窗口才计算）
+   ├── change_amount
+   ├── change_rate
+   └── attribution_dimension
+         ├── country
+         └── stock_code
+
+B. sales_breakdown_by_country
+   ├── TOP N
+   ├── amount
+   ├── share
+   └── total consistency
+
+C. 严格拒绝
+   ├── region
+   ├── province
+   ├── city
+   ├── store
+   ├── channel
+   └── salesperson
+
+D. LLM 边界
+   ├── 不计算
+   ├── 不排序
+   ├── 不判断主要贡献者
+   ├── 不产生事实数字
+   └── 只负责受限事实的语言表达
+9. TASK-005 验收标准 AC
+
+这是我认为最关键的部分。建议直接交给 Hermes。
+
+AC-01：普通两区间比较
+
+真实 HTTP 请求：
+
+POST /api/chat
+
+输入：
+
+比较 2011-11 和 2011-10 的销售额
+
+必须：
+
+正确识别 sales_compare
+
+产生两个明确时间区间
+
+executor 确定性计算
+
+返回 current / previous / delta / rate
+
+HTTP 200
+
+页面可正常展示
+
+AC-02：自定义区间
+
+例如：
+
+比较 2011-11-01 到 2011-11-15 与 2011-10-01 到 2011-10-15 的销售额
+
+必须：
+
+两个区间均进入结构化参数
+
+不允许 LLM 自行解释日期
+
+结果可通过独立 Python/SQL/pandas 复算
+
+AC-03：环比
+
+至少验证：
+
+本周 vs 上周
+本月 vs 上月
+
+要求：
+
+delta = current - previous
+rate = delta / previous
+
+并规定：
+
+previous == 0
+
+时不得产生：
+
+Infinity
+NaN
+
+而应该进入明确的：
+
+not_available / undefined
+AC-04：同比
+
+至少测试三种情况：
+
+可比较
+
+存在完整等长窗口：
+
+计算
+数据不足
+明确返回 insufficient_data
+不允许偷偷截断
+
+不能把：
+
+2011-12-01 ~ 2011-12-09
+
+偷偷当成：
+
+2011 年 12 月
+AC-05：Country 分布
+
+请求：
+
+2011年11月各国家销售额TOP5
+
+必须返回：
+
+Country
+amount
+share
+rank
+
+并验证：
+
+Country ∈ dataset.Country
+AC-06：Country 不得变成区域
+
+分别发送：
+
+华南区销售额
+华东区销售额
+上海销售额
+北美区域销售额
+门店销售额
+
+必须：
+
+unsupported
+
+并明确：
+
+当前数据集只有 Country 维度，不支持区域/城市/门店等维度。
+
+尤其禁止：
+
+华南区 → China
+
+这种隐式映射。
+
+AC-07：正/负贡献
+
+例如：
+
+2011年11月相比10月，哪些国家推动了销售额变化？
+
+必须返回：
+
+positive_contributors[]
+negative_contributors[]
+
+并且全部由代码产生。
+
+至少验证：
+
+Germany delta > 0
+Spain delta < 0
+
+这种正负方向。
+
+AC-08：贡献守恒
+
+这是强制 AC：
+
+sum(all_country_deltas)
+≈
+total_delta
+
+浮点允许极小误差，但不能存在业务级偏差。
+
+如果校验失败：
+
+禁止生成归因回答
+AC-09：LLM 数字闸门继续有效
+
+构造测试：
+
+facts:
+total_delta = 1000
+positive = Germany
+
+人为让 LLM 生成：
+
+Germany 贡献了 99999 英镑。
+
+最终回答必须被数字闸门拦截/作废。
+
+同时：
+
+Germany
+
+也必须来自 facts，而不是 LLM 自己编造。
+
+AC-10：LLM 不得决定“主要贡献者”
+
+测试方式：
+
+将 facts 明确设置成：
+
+A +10000
+B +100
+C -50
+
+最终“主要贡献者”集合必须由代码决定：
+
+A
+
+而不是让 LLM 根据提示自行判断。
+
+AC-11：LLM 不接触原始 DataFrame
+
+代码审查 + 测试：
+
+LLM input
+
+只能看到：
+
+structured facts
+
+不能出现：
+
+DataFrame
+raw rows
+pandas Series
+SQL result set
+
+这条建议加入架构级测试，而不仅仅是人工审查。
+
+AC-12：事实段代码生成
+
+回答必须继续保持：
+
+【发生了什么】
+代码生成
+
+【变化原因/贡献】
+代码生成或受限模板
+
+【补充说明】
+LLM
+
+不要因为 005 加了归因，就退回：
+
+把全部结果扔给 LLM → 让它写分析
+AC-13：HTTP 独立复验
+
+Hermes 必须能够只通过：
+
+浏览器
++
+真实 HTTP
++
+真实数据集
+
+完成：
+
+summary
+compare
+country breakdown
+country attribution
+unsupported region
+YoY insufficient
+
+验证。
+
+不能依赖：
+
+mock
+假 API
+前端静态数据
+手工修改数据库
+AC-14：回归测试
+
+原有：
+
+181 tests
+
+全部通过。
+
+TASK-005 完成后不得出现：
+
+原有 Intent 行为变化
+原有拒绝路径变化
+原有数字闸门失效
+原有事实段变化
+最终评审意见
+Gate：APPROVED_WITH_CONDITIONS
+
+条件不是让你重做，而是要求 Hermes 按下面 5 条施工：
+
+005 保留，不需要让 006/008 插队。
+
+保留两个公开 Intent：sales_compare + sales_breakdown_by_country。
+
+归因不要做第三个公开 Intent；作为 sales_compare 的受控 attribution 能力。
+
+“主要贡献者”必须由代码排序/选取，LLM 不得自行判断；LLM 只负责语言表达。
+
+同比采用“可比则算、不可比则明确数据不足”，绝不偷偷截断或补齐。
+
+其中最重要的一条是：
+
+TASK-005 不是让 Agent 开始“分析原因”，而是让确定性计算引擎多产生几种经过验证的事实。LLM 仍然只是事实的语言层。
+
+这样做之后，项目的核心架构实际上会变得更完整：
+
+NL
+ ↓
+Intent
+ ↓
+白名单参数
+ ↓
+确定性 Executor
+ ↓
+Facts
+ ↓
+代码级事实校验
+ ↓
+代码决定 Top / 排序 / 主要贡献
+ ↓
+LLM 受限表达
+ ↓
+数字闸门
+ ↓
+最终回答
+
+这条链路我认为可以继续作为 sales-report-agent 后续所有分析能力的统一施工红线。

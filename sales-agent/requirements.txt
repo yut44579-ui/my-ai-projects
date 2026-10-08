@@ -1,0 +1,78 @@
+# -*- coding: utf-8 -*-
+# ════════════════════════════════════════════════════════════════════════
+# sales-report-agent · 依赖基线
+# ════════════════════════════════════════════════════════════════════════
+# ★ 第一行那行 coding 声明**不许删**（这不是装饰，是修过的一个真 bug）：
+#   pip 读 requirements 文件时走 auto_decode：有 BOM 就用 BOM，前两行有 PEP 263
+#   coding 声明就用声明的编码，**两者都没有就退回系统 locale**。中文 Windows 的
+#   locale 是 GBK，而本文件的注释是 UTF-8 → 解码炸在注释上，整个安装直接失败：
+#       UnicodeDecodeError: 'gbk' codec can't decode byte 0xac in position 479
+#   加了这行声明后 pip 明确按 UTF-8 读，任何 locale 都能装（已实测）。
+#   等价做法是把文件存成 UTF-8 with BOM，但那会在文件里留不可见字节，不如声明清楚。
+
+# 本清单冻结的是【项目声明的依赖】，不是【某台机器 venv 的快照】。
+#
+# 两者不是一回事：把 `pip freeze` 的全部输出倒进来，会把"这个项目需要什么"和
+# "这台电脑恰好装过什么"混成一份无法解释的清单 —— 别人看不懂哪条能删、哪条不能删。
+# 所以这里只写：
+#   · 代码真的 import 的直接依赖（runtime direct）
+#   · 加上少量必须钉住的关键传递依赖（显式写出的理由逐条见下）
+# 其余传递依赖交给解析器自己拉，它们不是"项目选择了它们"，是"上面这些包选择了它们"。
+#
+# 版本来源：当前 `.venv` 实测（Python 3.11.15），**不升不降**，只如实记录已验证过的版本。
+#
+# 安装：
+#     python -m venv .venv
+#     .venv/Scripts/python.exe -m pip install -r requirements.txt      # Windows
+#     .venv/bin/python -m pip install -r requirements.txt              # macOS / Linux
+#
+# 只有一个文件、不拆 requirements-dev.txt：现在只有一套环境（本机自用），
+# 拆开只会立刻增加安装步骤、README 说明和维护关系。真出现运行/开发/CI 三套环境再说。
+# ════════════════════════════════════════════════════════════════════════
+
+
+# ── runtime direct ─────────────────────────────────────────────────────
+# 代码里真的 import 的包
+fastapi==0.141.1          # Web 框架（app/api*.py 全部路由）
+uvicorn==0.53.0           # ASGI 服务器（scripts/serve.py 的引擎）
+pydantic==2.13.5          # 请求/响应模型校验
+pandas==3.0.6             # 全部数字计算（口径唯一来源，见 CLAUDE.md 铁律 1）
+openpyxl==3.1.5           # 写 Excel 保样式（铁律 2：原地改，不用 pandas 重建）
+httpx==0.28.1             # 出站 HTTP（聊天/接口调用与各 e2e 脚本）
+openai==3.19.0            # LLM SDK（DeepSeek 走 OpenAI 兼容协议，app/ai/llm.py）
+python-dotenv==1.2.3      # 读项目根 `.env`（app/ai/llm.py::load_env）
+python-docx==1.2.0        # Word 输入/导出（app/api_documents.py）
+pypdf==6.19.0             # PDF 输入（app/api_documents.py）
+# FR-003 新增（评审 #2 批准"有条件新增"）：PPTX 解析（app/importer/parsers.py）。
+# 评审明确否决了"自己用 zipfile + XML 解析 PPTX"这条路：文本框/表格/合并单元格/异常文件
+# 会变成隐性维护成本。**只允许这一个新依赖** —— 不许为了 PPT 顺带引入
+# OCR / LibreOffice / Pandoc / Office COM / Java / 浏览器运行时（这条是红线）。
+python-pptx==1.0.2        # PPTX 正文与表格（app/importer/parsers.py::_parse_pptx）
+
+
+# ── runtime transitive (pinned for reproducibility) ────────────────────
+# 以下都是上面的包带进来的**传递依赖**，正常不该由我们选。显式钉住它们只有两个理由：
+#   ① 它们直接决定服务能不能起、行为对不对（换个大版本可能就是一次事故）；
+#   ② 复现时"装出来是哪一版"必须是确定的，而不是"看 PyPI 今天怎么解析"。
+# 没写进这里的传递依赖不表示不重要，只表示它们没有强到需要为复现性单独钉住。
+starlette==1.6.0          # FastAPI 的 ASGI 基建；中间件/TestClient 行为随它变
+anyio==4.15.1             # starlette 的异步后端；TestClient 并发语义靠它
+numpy==2.4.6              # pandas 的底层数组；跨大版本有 ABI 兼容问题
+python-dateutil==2.9.0.post0  # pandas 解析 InvoiceDate 用的日期库
+# ★ 代码里**不 import** 它，但没有它 /api/upload 直接挂：
+#   FastAPI 解析 multipart/form-data（文件上传）时按需 import python-multipart，
+#   它是"运行时能力依赖"而不是"源码依赖"，所以 `pip freeze` 之外的清单最容易漏掉它。
+#   删掉症状：上传接口抛 RuntimeError("Form data requires 'python-multipart'")。
+python-multipart==0.0.32
+# ★ python-pptx 的两条硬依赖：一个读 OOXML 的 XML（lxml）、一个读 PPT 里的图片（Pillow）。
+#   它们不是"我们选的"，但版本换大号会影响解析行为（lxml 的解析宽容度、Pillow 的解码路径），
+#   所以照钉（理由与上面几条传递依赖相同）。（python-pptx 还声明了 XlsxWriter，
+#   只在写图表时用到，本 TASK 不生成 PPT，交给解析器自己拉。）
+lxml==6.1.3               # python-pptx 的 XML 解析后端
+Pillow==12.3.0            # python-pptx 的图片处理后端
+
+
+# ── dev / test ─────────────────────────────────────────────────────────
+# 开发与测试依赖。本 TASK 不拆文件（见文件头），所以它留在这里，
+# 但【跑服务不需要它】—— 部署/运行环境不需要安装 pytest。
+pytest==9.1.1             # 全量测试（tests/）
