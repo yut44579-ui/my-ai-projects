@@ -1,0 +1,13 @@
+# 登录与鉴权（TASK-019）验收断言
+# ★ 品牌名按 TASK-034/035 改为「AI供应链」（副标题为公司名「小笋供应链」）
+登录页标题|document.body.innerText.includes('AI供应链')
+登录页副标题（公司名）|document.body.innerText.includes('小笋供应链')
+登录页显示品牌图标|!!document.querySelector('svg[aria-label]')
+用户名输入框|!!document.querySelector('input[placeholder="用户名"]')
+密码输入框|!!document.querySelector('input[type="password"]')
+登录按钮存在|!!document.querySelector('button[type="submit"]')
+登录按钮文案含"登"|[...document.querySelectorAll('button')].some(b => b.innerText.replace(/\s/g,'').includes('登录'))
+如实说明不开放自助注册|document.body.innerText.includes('不开放自助注册')
+提示联系管理员重置|document.body.innerText.includes('请联系管理员')
+登录页不显示侧栏|!document.body.innerText.includes('工作台')
+登录页不显示数据后台的菜单|!document.body.innerText.includes('客户管理')

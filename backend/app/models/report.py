@@ -26,17 +26,32 @@ REPORT_TIMEZONE = "Asia/Shanghai"
 
 
 class ReportType(str, Enum):
-    """报告类型。V1 只区分这三种，没有其它。"""
+    """报告类型。
+
+    ★ TASK-023 补 MONTHLY：需求 §十八 明确要求支持「本月汇报」，
+      原先只有 DAILY/WEEKLY/MANUAL，无法表达月报。
+      ★ MANUAL 保留：用于"非固定周期"的手工汇报（既有枚举值，删了会破坏数据）。
+    """
 
     DAILY = "DAILY"
     WEEKLY = "WEEKLY"
+    MONTHLY = "MONTHLY"
     MANUAL = "MANUAL"
 
 
 class ReportSourceType(str, Enum):
-    """报告数字的来源类型（与 D4 SourceType 对齐）。V1 只有 IMPORT 一种。"""
+    """报告数字的来源类型（与 D4 SourceType 对齐）。
 
+    ★ TASK-021 起与 SourceType 的 8 个取值保持一致（含 SYNC/WEB/TEST/DEMO），
+      这样报告快照能如实标注"这份报告的数字来自哪类数据源"。
+    """
+
+    REAL = "REAL"
     IMPORT = "IMPORT"
+    SYNC = "SYNC"
+    WEB = "WEB"
+    TEST = "TEST"
+    DEMO = "DEMO"
     MANUAL = "MANUAL"
     SYSTEM = "SYSTEM"
 
@@ -66,10 +81,10 @@ class Report(Base):
     source_type: Mapped[ReportSourceType] = mapped_column(
         SAEnum(ReportSourceType, name="report_source_type", values_callable=_enum_values),
         nullable=False,
-        default=ReportSourceType.IMPORT,
+        default=ReportSourceType.SYSTEM,
     )
     generated_by: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="system", comment="V1 无登录体系，固定 system"
+        String(64), nullable=False, default="system", comment="生成者；TASK-019 起可记登录用户名"
     )
     excluded_test_count: Mapped[int] = mapped_column(
         BigInteger,

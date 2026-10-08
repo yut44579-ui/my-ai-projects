@@ -15,14 +15,18 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.evidence import SourceType, build_evidence, no_data_evidence
+from app.services.errors import ApiErrorCode, ApiFailure
 from app.schemas.messages import (
     MessageCreateRequest,
     MessageItem,
+    MessageReadRequest,
     MessageTimelineResponse,
 )
 from app.services.messaging import (
+    READ_SOURCES,
     assert_api_writable,
     list_messages,
+    mark_read,
     require_customer,
     write_message,
 )
@@ -92,3 +96,34 @@ def list_customer_messages(
         page_size=page_size,
         total=total_evidence,
     )
+
+
+@router.post(
+    "/customers/{customer_id}/messages/{message_id}/read",
+    response_model=MessageItem,
+    summary="标记消息为客户已读（须给出真实回执来源）",
+)
+def mark_message_read(
+    customer_id: int,
+    message_id: int,
+    payload: MessageReadRequest,
+    db: Session = Depends(get_db),
+) -> MessageItem:
+    """客户已读回执（TASK-021，需求 §九 钉钉语义）。
+
+    ★ 必须传 source（白名单：WECHAT / WEBSITE / EMAIL / CRM / MANUAL）：
+      站内没有真实客户渠道（D9 禁止伪造客户行为），所以"已读"只能由真实渠道回传。
+      没有来源的请求一律 400，不允许任何路径凭空造出"客户已读"。
+    ★ 幂等：已读过的消息不会覆盖首次已读时间，也不会重复写事件。
+    ★ 标记成功会**同时写一条 customer_events**，使"客户何时读的"出现在客户时间线上。
+    """
+    require_customer(db, customer_id)
+    # ★ 空字符串/纯空白要返回 400 + empty_content（与项目其它空值错误码一致），
+    #   而不是让 Pydantic 的 min_length 抛 422 —— 422 是"结构不对"，
+    #   这里是"给了但内容为空"，语义不同，也不便于前端按错误码分支处理。
+    if not (payload.source or "").strip():
+        raise ApiFailure(ApiErrorCode.EMPTY_CONTENT, "必须给出已读回执来源（source）")
+    message = mark_read(
+        db, customer_id, message_id, source=payload.source, read_at=payload.read_at
+    )
+    return MessageItem.model_validate(message)

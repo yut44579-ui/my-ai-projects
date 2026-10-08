@@ -23,9 +23,60 @@ class ApiErrorCode(str, Enum):
     INVALID_MESSAGE_TYPE = "invalid_message_type"
     EMPTY_CONTENT = "empty_content"
     MESSAGE_NOT_FOUND = "message_not_found"
+    #: TASK-021：已读回执必须来自真实渠道（白名单），否则就是编造客户行为
+    INVALID_READ_SOURCE = "invalid_read_source"
 
     # —— TASK-004 AI 回复 ——
     LLM_UNAVAILABLE = "llm_unavailable"  # LLM 调用失败：如实告知，禁止编造回复（D10）
+
+    # —— TASK-009 风险事件 ——
+    RISK_NOT_FOUND = "risk_not_found"
+
+    # —— TASK-016 商机 ——
+    OPPORTUNITY_NOT_FOUND = "opportunity_not_found"
+    INVALID_STAGE_TRANSITION = "invalid_stage_transition"
+
+    # —— TASK-017 项目 ——
+    PROJECT_NOT_FOUND = "project_not_found"
+    INVALID_PROJECT_STATUS = "invalid_project_status"
+
+    # —— TASK-018 营销与内容 ——
+    CONTENT_NOT_FOUND = "content_not_found"
+    INVALID_CONTENT_STATUS = "invalid_content_status"
+
+    # —— TASK-019 认证 ——
+    UNAUTHORIZED = "unauthorized"              # 401：没登录 / 令牌无效或已失效
+    FORBIDDEN = "forbidden"                    # 403：已登录但角色不足
+    AUTH_NOT_CONFIGURED = "auth_not_configured"  # 500：服务端未配 AUTH_SECRET_KEY
+    INVALID_CREDENTIALS = "invalid_credentials"  # 401：用户名或口令错误
+    USER_NOT_FOUND = "user_not_found"
+    USERNAME_TAKEN = "username_taken"
+
+    # —— TASK-024 数据连接 ——
+    CONNECTION_NOT_FOUND = "connection_not_found"
+    CONNECTION_INVALID = "connection_invalid"
+
+    # —— TASK-025 线索研究（获客）——
+    RESEARCH_NOT_FOUND = "research_not_found"
+    RESEARCH_INVALID = "research_invalid"
+
+    # —— TASK-042 AI 辅助填写 ——
+    DRAFT_INVALID = "draft_invalid"
+
+    # —— TASK-038 内容 AI 生成 ——
+    CONTENT_GEN_INVALID = "content_gen_invalid"
+
+    # —— TASK-037 个人中心 ——
+    PROFILE_INVALID = "profile_invalid"
+    PROVIDER_INVALID = "provider_invalid"
+
+    # —— TASK-030 方案 ——
+    PROPOSAL_NOT_FOUND = "proposal_not_found"
+    PROPOSAL_INVALID = "proposal_invalid"
+
+    # —— TASK-026 知识库 ——
+    KNOWLEDGE_NOT_FOUND = "knowledge_not_found"
+    KNOWLEDGE_INVALID = "knowledge_invalid"
 
 
 class ApiFailure(Exception):

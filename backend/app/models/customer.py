@@ -34,21 +34,73 @@ class CustomerSourceType(str, Enum):
 
 
 class LifecycleStatus(str, Enum):
-    """客户生命周期状态（TASK-006）。
+    """客户生命周期状态（TASK-006 建立，TASK-021 按需求 §九 补齐）。
 
     ★ 与 TASK-001 评审砍掉的旧 status 列不是一回事：那是没有流程支撑的死列。
       这里的每个取值都由「状态变更接口 + customer_events 事件」驱动，可追溯。
 
+    ★ TASK-021 对照需求文档 §九 的 8 种状态补齐：
+        未联系 / 已联系·未读 / 已读·未回复 / 已回复 / 持续沟通 /
+        暂时沉默 / 明确拒绝 / 已成交
+      对照结果：
+        未联系        -> NEW            （原有）
+        已联系·未读    -> CONTACTED_UNREAD（新增）
+        已读·未回复    -> READ_NO_REPLY   （新增）
+        已回复        -> REPLIED         （原有）
+        持续沟通      -> ENGAGED         （原有）
+        暂时沉默      -> SILENT          （新增）
+        明确拒绝      -> REJECTED        （新增）
+        已成交        -> WON             （原有）
+      ★ QUOTED（已报价）文档没列，但**保留**：
+        它是既有 enum 值且 opportunities 商机阶段与 KPI 口径都在用，
+        删枚举值会破坏已有数据。文档说的是"至少支持"，不是"只能是这些"。
+      ★ LOST（已失效）保留：既有值，语义上覆盖"最终流失"。
+
     流转不做强约束（V1 不写死合法路径），但每次变更都必须留事件。
+    ★ 已读类状态（CONTACTED_UNREAD / READ_NO_REPLY）**只能由真实渠道写入**
+      （企业微信/官网回传），系统不会自己造"客户已读"（D9 禁止伪造客户行为）。
     """
 
     NEW = "NEW"
+    CONTACTED_UNREAD = "CONTACTED_UNREAD"
+    READ_NO_REPLY = "READ_NO_REPLY"
     CONTACTED = "CONTACTED"
     REPLIED = "REPLIED"
     ENGAGED = "ENGAGED"
     QUOTED = "QUOTED"
+    SILENT = "SILENT"
+    REJECTED = "REJECTED"
     WON = "WON"
     LOST = "LOST"
+
+
+class AcquisitionChannel(str, Enum):
+    """**获客渠道**（需求 §九 的 10 种）—— TASK-021 新增。
+
+    ═══════════════════════════════════════════════════════════════════
+    ★ 与 CustomerSourceType 是两个不同的维度，**刻意不合并**：
+        CustomerSourceType (REAL/TEST/MANUAL) 答的是「这份数据可不可信」
+        AcquisitionChannel                    答的是「这个客户怎么来的」
+
+    一次"Excel 导入"的客户：source_type=TEST（数据是测试的），
+    acquisition_channel=EXCEL_IMPORT（渠道是 Excel 导入）—— 两个都有意义。
+    合并会破坏既有血缘语义（报告排除测试数据、前端黄色告警都依赖 source_type）。
+    ═══════════════════════════════════════════════════════════════════
+
+    ★ 可空：既有的 11 个客户没有渠道信息，NULL = 未填写，
+       **不硬套一个"其他"** —— 那会把"不知道"伪装成"知道"。
+    """
+
+    WEBSITE_ORGANIC = "WEBSITE_ORGANIC"    # 官网自然访问
+    WEBSITE_FORM = "WEBSITE_FORM"          # 官网表单
+    CONTENT_MARKETING = "CONTENT_MARKETING"  # 内容宣传
+    SEARCH_DISCOVERY = "SEARCH_DISCOVERY"  # 搜索发现
+    OUTBOUND = "OUTBOUND"                  # 主动开发
+    REFERRAL = "REFERRAL"                  # 老客户转介绍
+    EXHIBITION = "EXHIBITION"              # 展会
+    CRM_IMPORT = "CRM_IMPORT"              # CRM 导入
+    EXCEL_IMPORT = "EXCEL_IMPORT"          # Excel 导入
+    OTHER = "OTHER"                        # 其他
 
 
 class DedupeState(str, Enum):
@@ -95,6 +147,15 @@ class Customer(Base, TimestampMixin):
         SAEnum(CustomerSourceType, name="customer_source_type", values_callable=_enum_values),
         nullable=False,
         default=CustomerSourceType.MANUAL,
+    )
+    # TASK-021：获客渠道（需求 §九 的 10 种）。
+    # ★ 与 source_type 是不同维度：这里答"客户怎么来的"，source_type 答"数据可不可信"。
+    # ★ 可空：存量客户没有这个信息，NULL=未填写，不硬套"其他"。
+    acquisition_channel: Mapped[AcquisitionChannel | None] = mapped_column(
+        SAEnum(AcquisitionChannel, name="acquisition_channel", values_callable=_enum_values),
+        nullable=True,
+        index=True,
+        comment="获客渠道（需求 §九 的 10 种）；NULL=未填写，不是「其他」",
     )
     evidence_ref: Mapped[str | None] = mapped_column(
         String(128), nullable=True, comment="= import_batch:{batch_id}，代码生成"

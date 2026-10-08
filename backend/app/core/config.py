@@ -81,6 +81,14 @@ class Settings(BaseSettings):
     deepseek_model: str = Field(default="deepseek-chat")
     llm_timeout_seconds: float = Field(default=30.0)
 
+    # --- 认证（TASK-019，规格见 docs/AUTH_SPEC.md）---
+    # ★ SECRET 一律从环境变量 / .env 读，源码里不许有默认密钥。
+    #   未配置时**拒绝启动鉴权**而不是偷偷用一个弱默认值：
+    #   那样所有人都能用默认密钥伪造令牌，比不做鉴权更危险。
+    auth_secret_key: str | None = Field(default=None)
+    #: 令牌有效期（小时）；AUTH_SPEC §4 定为 12 小时，不做 refresh token
+    auth_token_ttl_hours: int = Field(default=12, ge=1, le=720)
+
     @field_validator("db_name")
     @classmethod
     def _guard_db_name(cls, v: str) -> str:

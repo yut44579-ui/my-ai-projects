@@ -123,11 +123,18 @@ class CustomerDetailResponse(CustomerItem):
 
 
 class TimelineEventKind(str, Enum):
-    """V1 真实存在的事件类型（全部来自已有数据列，不含任何推断）。"""
+    """V1 真实存在的事件类型（全部来自已有数据列/事件表，不含任何推断）。
+
+    ★ VISIT（TASK-010）：客户访问，来自 customer_events 的 VISIT 事件。
+    ★ NOTE（TASK-021）：系统记录的事件（如"客户已读消息"回执），
+      来自 customer_events 的 NOTE 事件；需求 §十一 要求时间线完整。
+    """
 
     CUSTOMER_CREATED = "CUSTOMER_CREATED"
     SOURCE_IMPORT = "SOURCE_IMPORT"
     DEDUPE_PENDING_REVIEW = "DEDUPE_PENDING_REVIEW"
+    VISIT = "VISIT"
+    NOTE = "NOTE"
 
 
 class TimelineEvent(BaseModel):

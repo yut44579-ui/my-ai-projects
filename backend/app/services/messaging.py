@@ -11,12 +11,18 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.customer import Customer
+from app.models.customer_event import (
+    ActorType,
+    CustomerEvent,
+    CustomerEventType,
+    EventSourceType,
+)
 from app.models.customer_message import (
     AiStatus,
     CustomerMessage,
@@ -155,6 +161,84 @@ def count_for_customer(db: Session, customer_id: int) -> int:
         .select_from(CustomerMessage)
         .where(CustomerMessage.customer_id == customer_id)
     ).scalar_one()
+
+
+# 已读回执允许的渠道（TASK-021）。
+# ★ 做成白名单而不是自由文本：自由文本会让统计碎成一堆同义值，
+#   也无法防止把内部标识当渠道写进来。
+READ_SOURCES: tuple[str, ...] = (
+    "WECHAT",      # 企业微信 / 公众号
+    "WEBSITE",     # 官网
+    "EMAIL",       # 邮件
+    "CRM",         # CRM 系统
+    "MANUAL",      # 人工在界面标注（如客户电话里说看到了）
+)
+
+
+def mark_read(
+    db: Session,
+    customer_id: int,
+    message_id: int,
+    *,
+    source: str,
+    read_at: datetime | None = None,
+) -> CustomerMessage:
+    """标记一条消息为「客户已读」（TASK-021，需求 §九 钉钉语义）。
+
+    ★ 硬边界：必须给**真实回执来源**。
+      站内没有真实客户渠道（D9 禁止伪造客户行为），若允许无来源标记，
+      任何一次误调用都能造出"客户已读"——那是编造客户行为。
+    幂等：重复标记不会覆盖首次已读时间（首次已读才是事实），
+          但会返回当前记录；不重复写事件。
+    """
+    normalized = (source or "").strip().upper()
+    if not normalized:
+        raise ApiFailure(ApiErrorCode.EMPTY_CONTENT, "必须给出已读回执来源（source）")
+    if normalized not in READ_SOURCES:
+        raise ApiFailure(
+            ApiErrorCode.INVALID_READ_SOURCE,
+            f"不支持的已读回执来源 {source!r}；可用：{' / '.join(READ_SOURCES)}",
+        )
+
+    message = db.get(CustomerMessage, message_id)
+    if message is None or message.customer_id != customer_id:
+        raise ApiFailure(
+            ApiErrorCode.MESSAGE_NOT_FOUND,
+            f"客户 {customer_id} 下没有消息 {message_id}",
+            http_status=404,
+        )
+
+    if message.read_at is not None:
+        # 幂等：已读过就不改（首次已读时间才是事实）
+        return message
+
+    message.read_at = read_at or datetime.now(timezone.utc)
+    message.read_source = normalized
+    db.flush()
+
+    # ★ 同时写一条客户事件：满足需求 §十一「所有事件必须记录」，
+    #   让"客户什么时候读的"出现在客户时间线上，而不只藏在消息行里。
+    event = CustomerEvent(
+        customer_id=customer_id,
+        event_type=CustomerEventType.NOTE,
+        actor_type=ActorType.SYSTEM,
+        source_type=EventSourceType.SYSTEM,
+        metadata_json={
+            "note": f"客户已读消息（回执来源 {normalized}）",
+            "message_id": message.id,
+            "read_source": normalized,
+        },
+    )
+    db.add(event)
+    db.flush()
+    event.evidence_ref = f"customer_event:{event.id}"
+
+    # 需求 §十二「是否触发业务事件」：把这条消息与它触发的事件挂上
+    message.triggered_event_ref = event.evidence_ref
+
+    db.commit()
+    db.refresh(message)
+    return message
 
 
 def require_customer(db: Session, customer_id: int) -> Customer:

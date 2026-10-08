@@ -6,9 +6,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api.router import api_router
@@ -17,6 +20,7 @@ from app.core.config import settings
 #   ImportFailure 是 ApiFailure 的子类，由同一个 handler 覆盖。
 from app.services.errors import ApiFailure, ImportFailure
 from app.services.handover import HandoverError
+from app.services.profile import AVATAR_DIR
 
 
 def create_app() -> FastAPI:
@@ -54,6 +58,18 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=exc.http_status, content=exc.to_body())
 
     app.include_router(api_router, prefix=settings.api_prefix)
+
+    # ── 头像静态文件（TASK-037）──
+    # ★ 挂在 /uploads 下而不是 /api 下：它是静态资源，不该走 API 前缀，
+    #   否则前端拼 URL 时容易和业务接口混在一起。
+    # ★ 目录可能还不存在（没人传过头像），所以先 mkdir ——
+    #   否则 StaticFiles 在启动时就报错，整个服务起不来，代价太大。
+    AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        "/uploads",
+        StaticFiles(directory=str(AVATAR_DIR.parent)),
+        name="uploads",
+    )
     return app
 
 

@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import BigInteger, Enum as SAEnum, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Boolean, Enum as SAEnum, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -125,6 +125,38 @@ class CustomerMessage(Base):
         server_default=func.now(),
         nullable=False,
         comment="消息时间（时间线排序键）",
+    )
+
+    # ══════════════════════════════════════════════════════════════════
+    # TASK-021：需求 §十二 要求的三个追溯维度
+    # ══════════════════════════════════════════════════════════════════
+    # ★ 三个都是**可空布尔**，刻意不用 default=False：
+    #   "还没人工确认" 与 "确认了不需要人工" 是两件事；
+    #   "没有触发业务事件" 与 "没记录过" 也是两件事。
+    #   NULL = 未记录/不适用，False = 明确记录为"否"。
+    human_confirmed: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True, comment="是否经人工确认；NULL=未记录，False=明确为否"
+    )
+    auto_sent: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True, comment="是否自动发送；NULL=未记录（§十六：AI建议≠自动发送）"
+    )
+    triggered_event_ref: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        comment="本条消息触发的业务事件锚点（如 customer_event:12）；NULL=未触发",
+    )
+
+    # ── 已读状态（需求 §九「已联系·未读 / 已读·未回复」，用户要求"像钉钉那样显示"）──
+    # ★ 站内没有真实客户渠道（D9 禁止伪造客户行为），因此：
+    #   已读状态**只能由真实渠道回传**（企业微信/官网埋点），系统不自己造。
+    #   没有渠道时这些字段就是 NULL，界面显示「未读」而不是编一个"已读"。
+    read_at: Mapped[datetime | None] = mapped_column(
+        Stamp6, nullable=True, comment="客户已读时间；NULL=未读或渠道不支持回执"
+    )
+    read_source: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        comment="回执来源渠道（如 WECHAT / WEBSITE）；★ 无来源的已读请求一律拒绝",
     )
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用

@@ -24,9 +24,28 @@ class ValueState(str, Enum):
 
 
 class SourceType(str, Enum):
-    """数字来源类型。IMPORT=导入数据；MANUAL=人工录入；SYSTEM=系统计算。"""
+    """数字来源类型（TASK-021 起扩到需求文档 §二 要求的 6 种）。
 
+    ★ 每一种都必须能**如实**标注数据从哪来 —— 没有对应值时不许硬套一个近似的：
+      REAL   —— 真实业务数据（生产数据的默认来源）
+      IMPORT —— 文件导入（Excel/CSV，含历史数据一次性导入）
+      SYNC   —— 外部系统同步（CRM / ERP / 企业微信等）
+      WEB    —— 公开网络数据（经授权的公开信息研究）
+      TEST   —— 测试数据（样本文件、联调造数，★ 不计入业务汇报）
+      DEMO   —— 演示数据（给客户看的样例，★ 同样不计入业务汇报）
+      MANUAL —— 人工录入（人工在界面上填的）
+      SYSTEM —— 系统计算（由已有数据算出来的，如计数、合计）
+
+    ★ IMPORT / MANUAL / SYSTEM 是 TASK-001~020 就在用的值，保留不动；
+      SYNC / WEB / TEST / DEMO 是本次按 §二 补的。
+    """
+
+    REAL = "REAL"
     IMPORT = "IMPORT"
+    SYNC = "SYNC"
+    WEB = "WEB"
+    TEST = "TEST"
+    DEMO = "DEMO"
     MANUAL = "MANUAL"
     SYSTEM = "SYSTEM"
 

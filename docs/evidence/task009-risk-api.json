@@ -1,0 +1,22 @@
+[
+  {
+    "url": "http://127.0.0.1:5173/api/risks?page=1&page_size=50&status=OPEN",
+    "status": 200,
+    "body": "{\"items\":[{\"id\":1,\"customer_id\":652,\"customer_name\":\"林芳\",\"event_type\":\"POLICY_BLOCKED\",\"level\":\"ATTENTION\",\"status\":\"OPEN\",\"source_type\":\"SYSTEM\",\"source_ref\":\"customer_message:348\",\"trigger_text\":\"命中敏感策略「报价」（命中词：报价），已转人工处理；本轮未调用 AI。\",\"reason\":\"命中敏感策略：报价（闸门 D7 判定，未调用模型）\",\"evidence_ref\":\"customer_message:348\",\"resolved_at\":null,\"resolved_note\":null,\"created_at\":\"2026-10-04T01:10:00\"}],\"page\":1,\"page_size\":50,\"total\":{\"value\":1,\"state\":\"VALID\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:list:total\",\"reason\":null}}"
+  },
+  {
+    "url": "http://127.0.0.1:5173/api/risks/summary",
+    "status": 200,
+    "body": "{\"total\":{\"value\":1,\"state\":\"VALID\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:total\",\"reason\":null},\"open_total\":{\"value\":1,\"state\":\"VALID\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:open\",\"reason\":null},\"high_open\":{\"value\":null,\"state\":\"NO_DATA\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:open:high\",\"reason\":\"没有高风险待处理\"},\"attention_open\":{\"value\":1,\"state\":\"VALID\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:open:attention\",\"reason\":null},\"resolved_total\":{\"value\":null,\"state\":\"NO_DATA\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:resolved\",\"reason\":\"还没有处置过风险\"},\"by_type\":[{\"event_type\":\"POLICY_BLOCKED\",\"label\":\"命中敏感策略\",\"count\":1}],\"note\":\"风险只来自两条可复现依据：消息命中策略闸门（D7）、AI 回复失败（D10）。等级由类别决定（资金/不可逆类 = 高风险），不是模型打分。\"}"
+  },
+  {
+    "url": "http://127.0.0.1:5173/api/risks?page=1&page_size=50&status=OPEN",
+    "status": 200,
+    "body": "{\"items\":[{\"id\":1,\"customer_id\":652,\"customer_name\":\"林芳\",\"event_type\":\"POLICY_BLOCKED\",\"level\":\"ATTENTION\",\"status\":\"OPEN\",\"source_type\":\"SYSTEM\",\"source_ref\":\"customer_message:348\",\"trigger_text\":\"命中敏感策略「报价」（命中词：报价），已转人工处理；本轮未调用 AI。\",\"reason\":\"命中敏感策略：报价（闸门 D7 判定，未调用模型）\",\"evidence_ref\":\"customer_message:348\",\"resolved_at\":null,\"resolved_note\":null,\"created_at\":\"2026-10-04T01:10:00\"}],\"page\":1,\"page_size\":50,\"total\":{\"value\":1,\"state\":\"VALID\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:list:total\",\"reason\":null}}"
+  },
+  {
+    "url": "http://127.0.0.1:5173/api/risks/summary",
+    "status": 200,
+    "body": "{\"total\":{\"value\":1,\"state\":\"VALID\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:total\",\"reason\":null},\"open_total\":{\"value\":1,\"state\":\"VALID\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:open\",\"reason\":null},\"high_open\":{\"value\":null,\"state\":\"NO_DATA\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:open:high\",\"reason\":\"没有高风险待处理\"},\"attention_open\":{\"value\":1,\"state\":\"VALID\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:open:attention\",\"reason\":null},\"resolved_total\":{\"value\":null,\"state\":\"NO_DATA\",\"source_type\":\"SYSTEM\",\"evidence_ref\":\"risks:resolved\",\"reason\":\"还没有处置过风险\"},\"by_type\":[{\"event_type\":\"POLICY_BLOCKED\",\"label\":\"命中敏感策略\",\"count\":1}],\"note\":\"风险只来自两条可复现依据：消息命中策略闸门（D7）、AI 回复失败（D10）。等级由类别决定（资金/不可逆类 = 高风险），不是模型打分。\"}"
+  }
+]

@@ -411,8 +411,69 @@ def customer_timeline(customer_id: int, db: Session = Depends(get_db)) -> Custom
             )
         )
 
-    events.sort(key=lambda e: e.occurred_at)
+    # TASK-010：客户访问事件（来自 customer_events 的真实 VISIT 行）
+    # ★ 只取 VISIT：状态变更/消息/接管各自的页面已有呈现，时间线不重复堆，
+    #   避免同一个动作在两个地方出现两次。
+    visit_events = db.scalars(
+        select(CustomerEvent)
+        .where(
+            CustomerEvent.customer_id == customer.id,
+            CustomerEvent.event_type == CustomerEventType.VISIT,
+        )
+        .order_by(CustomerEvent.created_at.desc(), CustomerEvent.id.desc())
+        .limit(50)
+    ).all()
+    from app.schemas.visits import VISIT_CHANNELS
 
+    for ve in visit_events:
+        meta = ve.metadata_json or {}
+        ch = str(meta.get("channel") or "WEBSITE").upper()
+        events.append(
+            TimelineEvent(
+                kind=TimelineEventKind.VISIT,
+                title=f"访问了 {meta.get('page') or '—'}",
+                occurred_at=ve.created_at,
+                evidence_ref=ve.evidence_ref or f"customer_event:{ve.id}",
+                detail=f"来源渠道 {VISIT_CHANNELS.get(ch, ch)}"
+                + (f"｜来源页 {meta['referrer']}" if meta.get("referrer") else ""),
+            )
+        )
+
+    # TASK-021：已读回执等 NOTE 事件进时间线。
+    # ★ 需求 §十一 要求时间线完整；"客户什么时候读的"属于客户行为，必须出现在时间线上，
+    #   不能只藏在消息行的 read_at 里（那样在时间线上看不到）。
+    #   只取**带 note 的 NOTE 事件**，避免把单纯的状态备注也混进来。
+    note_events = db.scalars(
+        select(CustomerEvent)
+        .where(
+            CustomerEvent.customer_id == customer.id,
+            CustomerEvent.event_type == CustomerEventType.NOTE,
+            CustomerEvent.actor_type == ActorType.SYSTEM,
+        )
+        .order_by(CustomerEvent.created_at.desc(), CustomerEvent.id.desc())
+        .limit(50)
+    ).all()
+
+    for ne in note_events:
+        meta = ne.metadata_json or {}
+        note_text = str(meta.get("note") or "")
+        if not note_text:
+            continue
+        events.append(
+            TimelineEvent(
+                kind=TimelineEventKind.NOTE,
+                title=note_text,
+                occurred_at=ne.created_at,
+                evidence_ref=ne.evidence_ref or f"customer_event:{ne.id}",
+                detail=(
+                    f"回执来源 {meta['read_source']}"
+                    if meta.get("read_source")
+                    else "系统记录"
+                ),
+            )
+        )
+
+    events.sort(key=lambda e: e.occurred_at)
     return CustomerTimelineResponse(
         customer_id=customer.id,
         events=events,

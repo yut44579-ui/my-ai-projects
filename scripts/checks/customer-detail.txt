@@ -1,0 +1,18 @@
+# 客户详情页（含 TASK-010 访问事件）验收断言
+#
+# ★ 必须用**有访问记录**的客户来测访问时间线。
+#   访问数据记在 张伟(1863) 名下；林芳(652) 没有访问记录，
+#   用它测"访问事件出现在时间线"必然失败（实测踩过 —— 是测试数据指错客户，不是页面坏了）。
+基本信息卡|document.body.innerText.includes('基本信息')
+状态与下一步卡|document.body.innerText.includes('状态与下一步')
+下一步建议|document.body.innerText.includes('下一步建议')
+接管流转历史|document.body.innerText.includes('接管流转历史')
+风险提醒卡|document.body.innerText.includes('风险提醒')
+来源与可追溯|document.body.innerText.includes('来源与可追溯')
+事件流卡|document.body.innerText.includes('事件流')
+访问事件出现在时间线|document.body.innerText.includes('访问了')
+访问事件带来源渠道|document.body.innerText.includes('来源渠道')
+沟通记录|document.body.innerText.includes('沟通')
+无 [object Object]|!document.body.innerText.includes('[object Object]')
+无 undefined|!document.body.innerText.includes('undefined')
+无 NaN|!document.body.innerText.includes('NaN')

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.customer import Customer
@@ -91,6 +92,43 @@ def _write_handover(
     )
 
 
+#: 传给模型的最近对话轮数上限（一问一答算 2 条）。
+#: ★ 为什么要裁：§十三 要求"有上下文""不重复"，但把全部历史塞进去
+#:   会撑爆上下文、拖慢响应、也更容易让模型跑偏。取最近 6 轮足够覆盖
+#:   一段连续对话，同时保持请求体小。
+HISTORY_MAX_MESSAGES = 12
+
+
+def _load_history(db: Session, customer_id: int, *, limit: int = HISTORY_MAX_MESSAGES) -> list[dict]:
+    """取该客户最近的对话，供模型理解上下文（§十三"有上下文""不重复"）。
+
+    ★ 只取 **AI 与人工发出的** 与 **客户发来的** 消息：
+      系统消息（sender_type=SYSTEM，如"已转人工"这类状态说明）不是对话内容，
+      塞进去会干扰模型。
+    ★ 按时间**正序**返回（取最近的 N 条后要反转），否则模型读到的对话是倒着的。
+    ★ 不包含本轮正在处理的那条 question —— 它由调用方单独传入。
+    """
+    rows = list(
+        db.scalars(
+            select(CustomerMessage)
+            .where(
+                CustomerMessage.customer_id == customer_id,
+                CustomerMessage.sender_type.in_([SenderType.CUSTOMER, SenderType.AI, SenderType.HUMAN]),
+            )
+            .order_by(CustomerMessage.created_at.desc(), CustomerMessage.id.desc())
+            .limit(limit)
+        ).all()
+    )
+    history: list[dict] = []
+    for m in reversed(rows):  # 转成正序
+        role = "user" if m.sender_type == SenderType.CUSTOMER else "assistant"
+        content = (m.content or "").strip()
+        if not content:
+            continue
+        history.append({"role": role, "content": content})
+    return history
+
+
 def run_ai_reply(db: Session, customer: Customer, question: str) -> AiReplyOutcome:
     """按固定顺序跑完一轮 AI 回复，返回已落库的结果。"""
     # ① 代码层闸门（在此之前不许有任何 LLM 调用）
@@ -114,8 +152,13 @@ def run_ai_reply(db: Session, customer: Customer, question: str) -> AiReplyOutco
         )
 
     # ② 调 LLM（失败 → FAILED + 兜底文案，绝不编造回复）
+    # ★ TASK-033：带上最近对话，让回复"有上下文、不重复"（§十三）
     try:
-        reply = generate_reply(question, customer_name=customer.name)
+        reply = generate_reply(
+            question,
+            customer_name=customer.name,
+            history=_load_history(db, customer.id),
+        )
     except LLMUnavailable as exc:
         message = _write_handover(
             db,

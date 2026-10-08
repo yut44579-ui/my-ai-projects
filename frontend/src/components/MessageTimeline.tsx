@@ -47,8 +47,52 @@ function Bubble({ message }: { message: MessageItem }) {
           <Text type="secondary" style={{ fontSize: 12 }}>
             {stamp(message.created_at)}
           </Text>
+          {/* ★ TASK-021 已读状态（需求 §九，钉钉语义）：
+              钉钉那样在消息旁显示「已读/未读」。
+              ★ 站内没有真实客户渠道（D9），已读只能由真实渠道回传；
+                没有回执时显示「未读」，**不编造"已读"**。 */}
+          {message.sender_type !== 'CUSTOMER' &&
+            (message.read_at ? (
+              <Tooltip
+                title={`客户已读：${stamp(message.read_at)}${
+                  message.read_source ? `（回执来源 ${message.read_source}）` : ''
+                }`}
+              >
+                <Tag color="green" style={{ cursor: 'help' }}>
+                  已读
+                </Tag>
+              </Tooltip>
+            ) : (
+              <Tooltip title="还没有收到客户的已读回执（需真实渠道回传，如企业微信/官网）">
+                <Tag style={{ cursor: 'help', color: '#9CA3AF' }}>未读</Tag>
+              </Tooltip>
+            ))}
         </Space>
         <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{message.content}</div>
+        {/* ★ TASK-021 需求 §十二 的追溯维度。
+            ★ 三态渲染：null 显示「—」（未记录），true/false 显示「是/否」——
+              把"没记录"显示成"否"是编造信息。 */}
+        {(message.human_confirmed !== null ||
+          message.auto_sent !== null ||
+          message.triggered_event_ref) && (
+          <Space size={10} wrap style={{ marginTop: 4 }}>
+            {message.human_confirmed !== null && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                人工确认：{message.human_confirmed ? '是' : '否'}
+              </Text>
+            )}
+            {message.auto_sent !== null && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                自动发送：{message.auto_sent ? '是' : '否'}
+              </Text>
+            )}
+            {message.triggered_event_ref && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                触发事件：{message.triggered_event_ref}
+              </Text>
+            )}
+          </Space>
+        )}
         {/* 证据锚点：每一行都能点回接口自查（D5） */}
         <Tooltip title="证据锚点（后端生成，点击可在接口里查到这一条）">
           <Link href={`/api/customers/${message.customer_id}/messages`} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>

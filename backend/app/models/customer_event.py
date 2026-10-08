@@ -35,12 +35,22 @@ Stamp6 = DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql")
 
 
 class CustomerEventType(str, Enum):
-    """事件类型。冻结枚举，禁止自由文本。"""
+    """事件类型。冻结枚举，禁止自由文本。
+
+    ★ VISIT（TASK-010 追加）：客户访问行为。
+      为什么记在这里而不是新开 customer_visits 表：
+        · D11 冻结 7 表，新增表超出冻结范围；
+        · 访问本质就是「客户发生了什么」，与状态变更/消息/接管同类；
+        · metadata_json 已能承载结构化补充（page / channel / referrer），
+          不需要为几个字段再建一张表（总控提示词 §五：能简单解决不复杂化）。
+      ★ 只记录**可识别到客户**的访问（§十）；匿名访问不落库，避免造出"客户"。
+    """
 
     STATUS_CHANGED = "STATUS_CHANGED"
     MESSAGE_SENT = "MESSAGE_SENT"
     HANDOVER = "HANDOVER"
     NOTE = "NOTE"
+    VISIT = "VISIT"
 
 
 class ActorType(str, Enum):

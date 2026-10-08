@@ -13,16 +13,19 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.report import Report
-from app.schemas.customers import CustomerItem
 from app.schemas.evidence import EvidenceValue, SourceType, build_evidence
 from app.schemas.reports import (
     ReportDetail,
     ReportDrilldownResponse,
+    ReportDrilldownRow,
     ReportGenerateRequest,
     ReportListResponse,
+    ReportMetricCatalogResponse,
+    ReportMetricDef,
     ReportSummary,
 )
 from app.services.reports import (
+    METRIC_GROUPS,
     METRIC_KEYS,
     METRICS,
     UnknownMetricError,
@@ -49,6 +52,9 @@ def _detail(report: Report) -> ReportDetail:
         generated_by=report.generated_by,
         excluded_test_count=report.excluded_test_count,
         metrics=(report.content_json or {}).get("metrics", {}),
+        narrative=(report.content_json or {}).get("narrative", []),
+        no_data=(report.content_json or {}).get("no_data", []),
+        trend=(report.content_json or {}).get("trend", []),
     )
 
 
@@ -150,13 +156,55 @@ def drilldown(
 
     return ReportDrilldownResponse(
         metric=metric,
+        metric_label=METRICS[metric].label,
         period_start=period_start,
         period_end=period_end,
         page=page,
         page_size=page_size,
         total=total_evidence,
         evidence_ref=total_evidence.evidence_ref or "",
-        items=[CustomerItem.model_validate(c) for c in rows],
+        items=[
+            ReportDrilldownRow(
+                id=r.id,
+                kind=r.kind,
+                title=r.title,
+                subtitle=r.subtitle,
+                occurred_at=r.occurred_at,
+                evidence_ref=r.evidence_ref,
+                extra=r.extra,
+            )
+            for r in rows
+        ],
+    )
+
+
+@router.get(
+    "/reports/metric-catalog",
+    response_model=ReportMetricCatalogResponse,
+    summary="指标目录（分组，供前端渲染与说明口径）",
+)
+def metric_catalog() -> ReportMetricCatalogResponse:
+    """返回报告指标目录。
+
+    ★ 前端**不硬编码指标清单** —— 否则后端加指标前端看不到（TASK-023 从 2 个扩到 15 个，
+      硬编码的话前端要跟着改一次；现在加指标前端自动出现）。
+    """
+    return ReportMetricCatalogResponse(
+        groups=list(METRIC_GROUPS),
+        metrics=[
+            ReportMetricDef(
+                key=d.key,
+                label=d.label,
+                group=d.group,
+                row_kind=d.row_kind,
+                period_bounded=d.period_bounded,
+            )
+            for d in METRICS.values()
+        ],
+        note=(
+            "指标按数据源分组；有期间口径的只在指定期间内统计。"
+            "所有数字来自真实数据，无数据时是「暂无数据」而不是 0。"
+        ),
     )
 
 
