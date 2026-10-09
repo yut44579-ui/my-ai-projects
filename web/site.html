@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>恒信精工 | 精密零部件制造</title>
+<meta name="description" content="恒信精工，专注精密零部件制造二十年，服务汽车、医疗、半导体行业。">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --brand:#0E5FD8; --brand-d:#0A47A6; --ink:#0F1B2D; --body:#42546B;
+    --dim:#7C8CA3; --line:#E4EAF2; --bg:#F7F9FC; --dark:#0B1526;
+  }
+  html{scroll-behavior:smooth}
+  body{font-family:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+       color:var(--ink);line-height:1.7;background:#fff;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1140px;margin:0 auto;padding:0 24px}
+
+  /* ── 顶栏 ── */
+  .topbar{background:var(--dark);color:#8FA3BF;font-size:12.5px;padding:7px 0}
+  .topbar .wrap{display:flex;gap:20px;align-items:center}
+  .topbar .r{margin-left:auto;display:flex;gap:18px}
+  header{position:sticky;top:0;z-index:60;background:rgba(255,255,255,.94);
+         backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  header .wrap{display:flex;align-items:center;gap:34px;height:66px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:17px;letter-spacing:-.3px}
+  .brand .mk{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,var(--brand),#38BDF8);
+             display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:900}
+  .brand .en{font-size:10.5px;color:var(--dim);font-weight:600;letter-spacing:1.4px;display:block;line-height:1;margin-top:2px}
+  nav{display:flex;gap:28px;font-size:14px;color:var(--body)}
+  nav a{padding:6px 0;border-bottom:2px solid transparent;transition:.15s}
+  nav a:hover{color:var(--brand);border-bottom-color:var(--brand)}
+  .hbtn{margin-left:auto;background:var(--brand);color:#fff;padding:9px 20px;border-radius:8px;
+        font-size:13.5px;font-weight:650;transition:.15s}
+  .hbtn:hover{background:var(--brand-d)}
+  .menu{display:none;margin-left:auto;background:none;border:none;font-size:22px;cursor:pointer;color:var(--ink)}
+
+  /* ── Hero ── */
+  .hero{background:
+      radial-gradient(900px 420px at 78% -10%, rgba(56,189,248,.16), transparent),
+      linear-gradient(160deg,#0B1526 0%,#12294A 55%,#0B1526 100%);
+      color:#fff;padding:78px 0 92px;position:relative;overflow:hidden}
+  .hero:after{content:"";position:absolute;inset:0;
+      background-image:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),
+                       linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);
+      background-size:52px 52px;mask-image:linear-gradient(180deg,#000,transparent 78%)}
+  .hero .wrap{position:relative;z-index:2;display:grid;grid-template-columns:1.08fr .92fr;gap:56px;align-items:center}
+  .badge{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:#8FD4FF;
+         border:1px solid rgba(143,212,255,.32);background:rgba(143,212,255,.09);
+         padding:5px 13px;border-radius:20px;margin-bottom:22px}
+  .badge .dot{width:6px;height:6px;border-radius:50%;background:#38E07B;box-shadow:0 0 0 3px rgba(56,224,123,.2)}
+  .hero h1{font-size:44px;line-height:1.22;letter-spacing:-1.1px;font-weight:800;margin-bottom:20px}
+  .hero h1 em{font-style:normal;background:linear-gradient(100deg,#38BDF8,#7DD3FC);
+              -webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p.lead{font-size:16px;color:#A9BCD4;max-width:520px;margin-bottom:32px}
+  .cta{display:flex;gap:13px;flex-wrap:wrap;margin-bottom:38px}
+  .btn{background:var(--brand);color:#fff;padding:13px 27px;border-radius:9px;font-size:14.5px;
+       font-weight:650;transition:.18s;display:inline-block}
+  .btn:hover{background:var(--brand-d);transform:translateY(-1px)}
+  .btn.ghost{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.22);color:#fff}
+  .btn.ghost:hover{background:rgba(255,255,255,.14)}
+  .hstats{display:flex;gap:44px;padding-top:26px;border-top:1px solid rgba(255,255,255,.13)}
+  .hstat b{display:block;font-size:29px;font-weight:800;letter-spacing:-.6px}
+  .hstat b i{font-style:normal;font-size:15px;color:#8FD4FF;margin-left:2px}
+  .hstat span{font-size:12.5px;color:#8FA3BF}
+
+  /* Hero 右侧：做成一张"设备状态卡"，比放图更像真站点 */
+  .panel{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.14);
+         border-radius:16px;padding:20px;backdrop-filter:blur(8px)}
+  .panel .ph{display:flex;align-items:center;gap:9px;font-size:13px;color:#A9BCD4;
+             padding-bottom:13px;border-bottom:1px solid rgba(255,255,255,.11);margin-bottom:14px}
+  .panel .ph .d{width:8px;height:8px;border-radius:50%;background:#38E07B}
+  .row{display:flex;align-items:center;gap:12px;padding:10px 0;font-size:13px;
+       border-bottom:1px solid rgba(255,255,255,.06)}
+  .row:last-child{border-bottom:none}
+  .row .nm{color:#D6E2F2;flex:1}
+  .row .vv{color:#8FD4FF;font-variant-numeric:tabular-nums}
+  .bar{height:5px;border-radius:3px;background:rgba(255,255,255,.12);width:78px;overflow:hidden}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,#38BDF8,#38E07B);border-radius:3px}
+
+  /* ── 通用段落 ── */
+  section{padding:76px 0}
+  .sec-head{text-align:center;max-width:660px;margin:0 auto 46px}
+  .kicker{font-size:12.5px;font-weight:750;color:var(--brand);letter-spacing:1.6px;margin-bottom:12px}
+  .sec-head h2{font-size:31px;letter-spacing:-.7px;font-weight:800;margin-bottom:13px}
+  .sec-head p{color:var(--body);font-size:15px}
+
+  .facts{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+  .fact{background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:26px 22px;text-align:center}
+  .fact b{display:block;font-size:34px;font-weight:800;color:var(--brand);letter-spacing:-1px}
+  .fact b i{font-style:normal;font-size:16px}
+  .fact span{font-size:13px;color:var(--body)}
+
+  .prods{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+  .prod{border:1px solid var(--line);border-radius:15px;padding:28px 24px;transition:.2s;background:#fff}
+  .prod:hover{border-color:#BBD3F5;box-shadow:0 12px 32px rgba(14,95,216,.09);transform:translateY(-3px)}
+  .prod .ic{width:46px;height:46px;border-radius:12px;background:#E8F1FE;display:flex;
+            align-items:center;justify-content:center;font-size:21px;margin-bottom:17px}
+  .prod h3{font-size:17px;margin-bottom:9px;font-weight:750}
+  .prod p{font-size:13.5px;color:var(--body);line-height:1.75}
+  .prod ul{margin-top:14px;padding-left:0;list-style:none;font-size:13px;color:var(--body)}
+  .prod li{padding-left:19px;position:relative;margin-bottom:6px}
+  .prod li:before{content:"";position:absolute;left:0;top:8px;width:6px;height:6px;
+                  border-radius:50%;background:var(--brand)}
+
+  /* ── 车间/资质条 ── */
+  .band{background:var(--bg);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .cert{display:flex;gap:14px;flex-wrap:wrap;justify-content:center}
+  .cert span{font-size:13px;color:var(--body);background:#fff;border:1px solid var(--line);
+             border-radius:9px;padding:9px 19px}
+
+  /* ── 客户评价 ── */
+  .quotes{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  .quote{border:1px solid var(--line);border-radius:14px;padding:26px 24px;background:#fff}
+  .quote p{font-size:13.5px;color:var(--body);line-height:1.8;margin-bottom:18px}
+  .quote .who2{display:flex;align-items:center;gap:11px}
+  .quote .av2{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#D6E6FB,#A9CBF5);
+              display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:#2B5FA8}
+  .quote .who2 b{display:block;font-size:13.5px}
+  .quote .who2 span{font-size:12px;color:var(--dim)}
+
+  /* ── 联系 / 页脚 ── */
+  .contact{background:var(--dark);color:#fff;padding:70px 0}
+  .contact .wrap{display:grid;grid-template-columns:1fr 1fr;gap:56px}
+  .contact h2{font-size:29px;letter-spacing:-.6px;margin-bottom:14px;font-weight:800}
+  .contact p{color:#A9BCD4;font-size:14.5px;margin-bottom:26px}
+  .cinfo{display:flex;flex-direction:column;gap:15px}
+  .cinfo div{display:flex;gap:12px;font-size:14px;color:#C9D8EA;align-items:flex-start}
+  .cinfo .ic2{width:20px;text-align:center;opacity:.75}
+  .cinfo b{color:#fff;font-weight:650}
+  .cf{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.13);
+      border-radius:14px;padding:26px}
+  .cf .fg{margin-bottom:14px}
+  .cf label{display:block;font-size:12.5px;color:#A9BCD4;margin-bottom:6px}
+  .cf input,.cf textarea{width:100%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.16);
+      border-radius:8px;padding:10px 13px;color:#fff;font-size:13.5px;font-family:inherit;outline:none}
+  .cf input:focus,.cf textarea:focus{border-color:#38BDF8}
+  .cf button{width:100%;background:var(--brand);color:#fff;border:none;border-radius:8px;
+             padding:12px;font-size:14px;font-weight:650;cursor:pointer;font-family:inherit}
+  .cf button:hover{background:var(--brand-d)}
+  footer{background:#070F1C;color:#6F819A;font-size:12.5px;padding:30px 0}
+  footer .wrap{display:flex;gap:22px;flex-wrap:wrap;align-items:center}
+  footer .r2{margin-left:auto;display:flex;gap:20px}
+
+  /* ★ 演示浮条：让人一眼知道"这个官网背后还有个控制台"。
+     用户反馈「工作台人工的那些在哪里，我看不到」——
+     因为从官网页面上根本没有入口进控制台。
+     ★ 这是演示站点专有的，真实客户的官网上不会有这条。 */
+  .demobar{position:fixed;left:0;top:0;right:0;z-index:200;
+      background:linear-gradient(90deg,#0B1526,#1E3A63);color:#C9D8EA;
+      font-size:12.5px;padding:7px 16px;display:flex;gap:14px;align-items:center;
+      box-shadow:0 2px 12px rgba(0,0,0,.28)}
+  .demobar b{color:#7DD3FC}
+  .demobar a{color:#fff;background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.22);
+      padding:3px 11px;border-radius:14px;font-size:12px}
+  .demobar a:hover{background:rgba(255,255,255,.22)}
+  .demobar .sp{margin-left:auto;color:#7C8CA3;font-size:11.5px}
+  body{padding-top:32px}
+
+  /* ── ★ 客服挂件 ── */
+  .fab{position:fixed;right:26px;bottom:26px;width:58px;height:58px;border-radius:50%;
+       background:linear-gradient(135deg,var(--brand),#38BDF8);color:#fff;border:none;cursor:pointer;
+       box-shadow:0 8px 26px rgba(14,95,216,.4);display:flex;align-items:center;justify-content:center;
+       font-size:12px;font-weight:800;z-index:99;transition:.2s}
+  .fab:hover{transform:translateY(-2px) scale(1.04)}
+  .fab .ping{position:absolute;top:2px;right:2px;width:11px;height:11px;border-radius:50%;
+             background:#38E07B;border:2px solid #fff}
+  .panel2{position:fixed;right:26px;bottom:96px;width:378px;height:552px;max-height:74vh;
+          background:#fff;border-radius:16px;box-shadow:0 22px 60px rgba(10,25,50,.26);
+          display:none;flex-direction:column;overflow:hidden;z-index:100}
+  .panel2.on{display:flex}
+  .ph2{background:linear-gradient(135deg,var(--brand),#38BDF8);color:#fff;padding:15px 17px;display:flex;gap:11px;align-items:center}
+  .ph2 .av3{width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.23);
+            display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800}
+  .ph2 .nm2{font-size:14px;font-weight:700}
+  .ph2 .st2{font-size:11px;opacity:.9}
+  .ph2 .x2{margin-left:auto;background:none;border:none;color:#fff;font-size:19px;cursor:pointer;opacity:.9}
+  .msgs2{flex:1;overflow-y:auto;padding:15px;background:#F7F9FC;display:flex;flex-direction:column;gap:9px}
+  .m2{max-width:85%;font-size:13px;line-height:1.65;border-radius:13px;padding:10px 13px}
+  .m2.u{align-self:flex-end;background:var(--brand);color:#fff;border-bottom-right-radius:4px}
+  .m2.a{align-self:flex-start;background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px;white-space:pre-wrap}
+  .m2.sys{align-self:center;background:transparent;color:var(--dim);font-size:11px}
+  /* ★ 客服（真人）说的话：绿色气泡 + "客服"小标签 ——
+     用户要能一眼看出这句是人说的，不是机器人。 */
+  .m2.human{align-self:flex-start;background:#E9F8EF;border:1px solid #B7E2C6;
+            border-bottom-left-radius:4px;white-space:pre-wrap}
+  .m2.human .whotag{font-size:10.5px;color:#1E6B41;font-weight:700;margin-bottom:4px}
+
+  /* ★★ 转人工时的**等待指示**。
+     用户的原话：「只有在人工点了接管以后才会出现已经转人工，
+                   否则会一直打转的状态，顺时针转的那种符号吧，
+                   然后人工接管之后才会停止转。」
+     ★ 转着 = 还在等；停了 = 有人了。这是用户不用思考就能懂的状态指示。 */
+  .waitbar{align-self:stretch;background:#FFF8EC;border:1px solid #F0D5A0;
+           border-radius:11px;padding:10px 14px;display:flex;align-items:center;gap:10px}
+  .spinner{width:15px;height:15px;flex:none;border:2px solid #F0D5A0;
+           border-top-color:#D98324;border-radius:50%;animation:kfspin .8s linear infinite}
+  @keyframes kfspin{to{transform:rotate(360deg)}}
+  .waitbar .wt{font-size:12.5px;color:#8A5E00;font-weight:600}
+  .waitbar .ws{font-size:11px;color:#A8834D;margin-top:1px}
+  .m2.taken{align-self:center;background:#E9F8EF;border:1px solid #B7E2C6;
+            color:#1E6B41;font-size:11.5px;padding:5px 14px;border-radius:14px}
+  .m2 .src2{margin-top:7px;padding-top:7px;border-top:1px dashed #E6EBF2;font-size:10.5px;color:var(--dim)}
+  .pf2{border-top:1px solid var(--line);padding:11px 13px;display:flex;gap:8px;background:#fff}
+  .pf2 input{flex:1;border:1.5px solid var(--line);border-radius:9px;padding:10px 13px;
+             font-size:13px;font-family:inherit;outline:none}
+  .pf2 input:focus{border-color:var(--brand)}
+  .pf2 button{border:none;border-radius:9px;padding:10px 18px;background:var(--brand);color:#fff;
+              font-size:13px;font-weight:650;cursor:pointer;font-family:inherit}
+  .pf2 button:disabled{opacity:.5}
+  .hint2{font-size:11px;color:var(--dim);padding:0 13px 9px;background:#fff}
+  .quick{display:flex;gap:6px;flex-wrap:wrap;padding:0 13px 10px;background:#fff}
+  .quick span{font-size:11.5px;padding:3px 10px;border-radius:14px;background:#EEF4FD;
+              color:#3B6FB8;cursor:pointer;border:1px solid #DDE9F9}
+  .quick span:hover{background:#DFEBFB}
+
+  @media (max-width:960px){
+    nav{display:none}.menu{display:block}
+    .hero .wrap{grid-template-columns:1fr;gap:40px}
+    .hero h1{font-size:33px}
+    .facts{grid-template-columns:repeat(2,1fr)}
+    .prods,.quotes{grid-template-columns:1fr}
+    .contact .wrap{grid-template-columns:1fr;gap:34px}
+    section{padding:56px 0}
+  }
+  @media (max-width:480px){
+    .panel2{left:8px;right:8px;width:auto;bottom:92px;height:74vh}
+    .fab{right:16px;bottom:16px;width:54px;height:54px}
+    .hero h1{font-size:28px}
+    .hstats{gap:26px}
+    .m2{max-width:90%}
+  }
+</style>
+</head>
+<body>
+
+<!-- ★ 演示浮条：真实客户的官网上不会有这条，纯粹是为了让人能找到控制台。 -->
+<div class="demobar">
+  <span>这是<b>模拟官网</b>。客服挂件在右下角 ——</span>
+  <a href="index.html" target="_blank" rel="noopener">打开控制台 ↗</a>
+  <a href="index.html#live" target="_blank" rel="noopener">实时看 AI 在做什么 ↗</a>
+  <span class="sp">★ 控制台是<b>另开一页</b>，这个页面不会跳走 —— 你可以一边问一边在那边看</span>
+</div>
+
+<div class="topbar"><div class="wrap">
+  <span>服务热线 400-828-6699</span><span>工作日 8:30 – 18:00</span>
+  <span class="r"><a href="#">EN</a><a href="#">供应商入口</a><a href="#">人才招聘</a></span>
+</div></div>
+
+<header><div class="wrap">
+  <a href="#" class="brand">
+    <span class="mk">恒</span>
+    <span>恒信精工<span class="en">HENGXIN PRECISION</span></span>
+  </a>
+  <nav>
+    <a href="#prod">产品中心</a>
+    <a href="#cap">制造能力</a>
+    <a href="#cert">资质认证</a>
+    <a href="#about">关于我们</a>
+    <a href="#contact">联系我们</a>
+  </nav>
+  <button class="menu" onclick="alert('演示站点，导航未展开')">☰</button>
+  <a href="#contact" class="hbtn">获取报价</a>
+</div></header>
+
+<!-- ── Hero ── -->
+<div class="hero"><div class="wrap">
+  <div>
+    <div class="badge"><span class="dot"></span>IATF 16949 认证 · 三级保密资质</div>
+    <h1>精密零部件<br><em>二十年只做一件事</em></h1>
+    <p class="lead">为汽车、医疗器械、半导体设备提供高精度零部件的定制加工与批量交付。
+       从打样到量产，一条产线跟到底。</p>
+    <div class="cta">
+      <a href="#contact" class="btn">获取报价方案</a>
+      <a href="#prod" class="btn ghost">看看能做什么</a>
+    </div>
+    <div class="hstats">
+      <div class="hstat"><b>20<i>年</i></b><span>专注精密加工</span></div>
+      <div class="hstat"><b>±0.005<i>mm</i></b><span>常规加工精度</span></div>
+      <div class="hstat"><b>480<i>台</i></b><span>在产设备</span></div>
+      <div class="hstat"><b>96<i>%</i></b><span>准时交付率</span></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="ph"><span class="d"></span>车间实时概览 · 三号厂区</div>
+    <div class="row"><span class="nm">CNC 加工中心</span><span class="bar"><i style="width:86%"></i></span><span class="vv">86%</span></div>
+    <div class="row"><span class="nm">精密磨床</span><span class="bar"><i style="width:72%"></i></span><span class="vv">72%</span></div>
+    <div class="row"><span class="nm">慢走丝</span><span class="bar"><i style="width:64%"></i></span><span class="vv">64%</span></div>
+    <div class="row"><span class="nm">三坐标检测</span><span class="bar"><i style="width:41%"></i></span><span class="vv">41%</span></div>
+    <div class="row" style="border-top:1px solid rgba(255,255,255,.1);margin-top:8px;padding-top:13px">
+      <span class="nm" style="color:#8FA3BF">今日在制工单</span><span class="vv">128 单</span></div>
+  </div>
+</div></div>
+
+<!-- ── 数字 ── -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">为什么选我们</div>
+      <h2>把「做不出来」变成「什么时候要」</h2>
+      <p>精密加工最难的不是精度，是稳定。同一批货第 1 件和第 5000 件必须一样。</p>
+    </div>
+    <div class="facts">
+      <div class="fact"><b>0.3<i>%</i></b><span>批次不良率</span></div>
+      <div class="fact"><b>7<i>天</i></b><span>打样周期</span></div>
+      <div class="fact"><b>150<i>+</i></b><span>合作客户</span></div>
+      <div class="fact"><b>24<i>h</i></b><span>技术响应</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 产品 ── -->
+<section id="prod" style="background:var(--bg);border-top:1px solid var(--line);border-bottom:1px solid var(--line)">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">产品中心</div>
+      <h2>三条主力产品线</h2>
+      <p>材料、工艺、检测各有一套标准作业流程，不混线。</p>
+    </div>
+    <div class="prods">
+      <div class="prod">
+        <div class="ic">⚙️</div>
+        <h3>汽车零部件</h3>
+        <p>发动机、变速箱、底盘系统的精密结构件。支持铝合金、合金钢、粉末冶金。</p>
+        <ul><li>IATF 16949 体系</li><li>PPAP 文件齐全</li><li>年产能 800 万件</li></ul>
+      </div>
+      <div class="prod">
+        <div class="ic">🩺</div>
+        <h3>医疗器械零件</h3>
+        <p>手术器械、植入物配件、诊断设备结构件。十万级洁净车间生产。</p>
+        <ul><li>ISO 13485 体系</li><li>洁净车间装配</li><li>全流程可追溯</li></ul>
+      </div>
+      <div class="prod">
+        <div class="ic">🔬</div>
+        <h3>半导体设备件</h3>
+        <p>真空腔体、传输机构、精密导轨。超高精度与超低颗粒释放要求。</p>
+        <ul><li>±0.002mm 精度</li><li>真空检漏测试</li><li>无尘包装出货</li></ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 能力 ── -->
+<section id="cap">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">制造能力</div>
+      <h2>从打样到量产，都在自己厂里</h2>
+      <p>不外发关键工序 —— 交期和质量才敢承诺。</p>
+    </div>
+    <div class="facts">
+      <div class="fact"><b>480<i>台</i></b><span>CNC / 磨床 / 走丝</span></div>
+      <div class="fact"><b>3<i>条</i></b><span>自动化产线</span></div>
+      <div class="fact"><b>12<i>台</i></b><span>三坐标测量仪</span></div>
+      <div class="fact"><b>32000<i>㎡</i></b><span>自有厂房</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 资质 ── -->
+<div class="band" id="cert"><section style="padding:44px 0">
+  <div class="wrap">
+    <div class="cert">
+      <span>IATF 16949</span><span>ISO 9001</span><span>ISO 13485</span>
+      <span>ISO 14001</span><span>三级保密资质</span><span>高新技术企业</span>
+      <span>省级技术中心</span>
+    </div>
+  </div>
+</section></div>
+
+<!-- ── 评价 ── -->
+<section id="about">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">客户评价</div>
+      <h2>合作五年以上的客户占七成</h2>
+    </div>
+    <div class="quotes">
+      <div class="quote"><p>「最省心的是不用天天催。说 15 号交，14 号货就到仓库了，五年没变过。」</p>
+        <div class="who2"><div class="av2">王</div><div><b>王经理</b><span>某汽车零部件一级供应商</span></div></div></div>
+      <div class="quote"><p>「我们那个零件图纸改了七版，他们每次都重新做检具，从来没说过一句麻烦。」</p>
+        <div class="who2"><div class="av2">李</div><div><b>李工</b><span>某医疗设备企业 研发总监</span></div></div></div>
+      <div class="quote"><p>「半导体那批件的颗粒要求极严，他们专门为这个改了清洗流程。这种配合度不多见。」</p>
+        <div class="who2"><div class="av2">陈</div><div><b>陈总</b><span>某半导体设备企业 采购总监</span></div></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── 联系 ── -->
+<div class="contact" id="contact"><div class="wrap">
+  <div>
+    <h2>把图纸发过来，<br>三天内给报价</h2>
+    <p>我们的工程师会看完图纸再报价，不是套模板。有疑问会直接打电话跟你确认。</p>
+    <div class="cinfo">
+      <div><span class="ic2">📞</span><span><b>400-828-6699</b><br>工作日 8:30 – 18:00</span></div>
+      <div><span class="ic2">✉️</span><span><b>sales@hengxin-demo.com</b><br>24 小时内回复</span></div>
+      <div><span class="ic2">📍</span><span><b>江苏省苏州市工业园区星湖街 218 号</b><br>三号厂区 · 欢迎实地验厂</span></div>
+    </div>
+  </div>
+  <div class="cf">
+    <div class="fg"><label>怎么称呼</label><input type="text" placeholder="张工 / 李经理"></div>
+    <div class="fg"><label>联系方式</label><input type="text" placeholder="手机号或邮箱"></div>
+    <div class="fg"><label>需求说明</label><textarea rows="4" placeholder="零件类型、材料、精度要求、预计数量…"></textarea></div>
+    <button onclick="alert('演示站点，表单未接入后端。\n右下角那个客服按钮是真的能用的 👉')">提交需求</button>
+  </div>
+</div></div>
+
+<footer><div class="wrap">
+  <span>© 2026 恒信精工（演示站点）</span>
+  <span class="r2"><a href="#">隐私政策</a><a href="#">网站地图</a><a href="#">苏ICP备00000000号</a></span>
+</div></footer>
+
+<!-- ══════ ★ 客服挂件 ══════ -->
+<button class="fab" id="fab" aria-label="在线客服">
+  <span class="ping"></span>客服
+</button>
+
+<div class="panel2" id="panel2">
+  <div class="ph2">
+    <div class="av3">AI</div>
+    <div><div class="nm2">恒信精工 · 在线客服</div><div class="st2" id="st2">通常几秒内回复</div></div>
+    <button class="x2" id="x2">×</button>
+  </div>
+  <div class="msgs2" id="msgs2">
+    <div class="m2 a">您好，我是恒信精工的智能客服。可以问产能、交期、精度、资质这些，也可以直接留联系方式让工程师联系您。</div>
+  </div>
+  <div class="quick" id="quick"></div>
+  <div class="hint2" id="hint2"></div>
+  <div class="pf2">
+    <input id="q2" placeholder="说一句话…" autocomplete="off">
+    <button id="go2">发送</button>
+  </div>
+</div>
+
+<script>
+// ★ 子路径部署：算出部署前缀。挂件页和主控台放在同一个服务下，
+//   所以这里的 API() 也一样要带前缀，否则部署到 /demo/kefu/ 就会 404。
+const BASE = new URL('.', location.href).pathname.replace(/\/$/, '');
+const API = (p) => BASE + p;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => (s || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const SESSION = 'web-' + Math.random().toString(36).slice(2, 10);
+let since = 0, pollTimer = null, pollBusy = false, busy = false;
+
+const QUICK = ['最小起订量多少', '打样要多久', '有哪些资质认证', '能报个价吗', '精度能做到多少'];
+$('#quick').innerHTML = QUICK.map((t) => `<span>${t}</span>`).join('');
+$('#quick').onclick = (e) => { if (e.target.tagName === 'SPAN') { $('#q2').value = e.target.textContent; send(); } };
+
+$('#fab').onclick = () => { $('#panel2').classList.add('on'); $('#q2').focus(); startPoll(); };
+$('#x2').onclick = () => $('#panel2').classList.remove('on');
+$('#go2').onclick = send;
+$('#q2').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#panel2').classList.remove('on'); });
+
+let waitEl = null;   // ★ 当前那个转圈的等待条（同一时刻只该有一个）
+
+/** ★★ 显示"正在转接人工"的转圈。
+ *  用户的要求：转人工时一直转，**人工点了接管才停**。
+ *  ★ 转着 = 还在等，停了 = 有人了 —— 用户不用思考就能懂。
+ */
+function showWaiting(text, sub) {
+  if (waitEl) return;                       // 已经在转了，不重复插
+  const d = document.createElement('div');
+  d.className = 'waitbar';
+  d.innerHTML = '<div class="spinner"></div><div><div class="wt">' + esc(text) + '</div>'
+    + (sub ? '<div class="ws">' + esc(sub) + '</div>' : '') + '</div>';
+  $('#msgs2').appendChild(d);
+  smartScroll();
+  waitEl = d;
+}
+
+/** 停止转圈，换成一条静态的"客服已接入"。 */
+function stopWaiting(text) {
+  if (waitEl) { waitEl.remove(); waitEl = null; }
+  if (!text) return;
+  const d = document.createElement('div');
+  d.className = 'm2 taken';
+  d.textContent = text;
+  $('#msgs2').appendChild(d);
+  smartScroll();
+}
+
+function add(kind, text) {
+  const d = document.createElement('div');
+  d.className = 'm2 ' + kind;
+  // ★★ 客户看到的话里**不许出现出处**（用户明确要求：来源泄露信息）。
+  //    服务端已经删过一遍了，这里再兜一次 ——
+  //    万一是历史数据或者别的地方漏了，界面上也不能露出来。
+  //    ★ 而溯源没丢：控制台和人工工作台里照样看得到，
+  //      那是给我们自己人核对的。
+  const m = text.match(/[〔\[]\s*(?:出处|来源|参考)\s*[：:][^〕\]]*[〕\]]/g);
+  if (kind === 'a' && m) {
+    let clean = text;
+    for (const x of m) clean = clean.replace(x, '');
+    d.textContent = clean.trim();
+  } else d.textContent = text;
+  $('#msgs2').appendChild(d);
+  smartScroll();
+}
+
+/** ★★ 只在"本来就在底部附近"时才自动滚到底。
+ *
+ *  用户的原话：「发一个刷新一下，什么鬼啊」。
+ *  ★ 之前每条消息都无条件 scrollTop = scrollHeight ——
+ *    用户正往上翻看历史，来一条消息就被弹回底部，
+ *    那个感觉就非常像"页面被刷新了"。
+ *  ★ 现在：他在看历史就不打扰他；他在底部才跟着走。
+ */
+function smartScroll() {
+  const m = $('#msgs2');
+  if (!m) return;
+  if (m.dataset.stick !== '0') m.scrollTop = m.scrollHeight;
+}
+// 用户手动往上翻 → 就不要再自动跟了。
+// ★ 直接绑定，不用 DOMContentLoaded —— 这段脚本就在 body 末尾，
+//   元素早就在了；而且它更明确（不依赖事件时序）。
+(function bindScroll() {
+  const m = document.getElementById('msgs2');
+  if (!m) return;
+  m.dataset.stick = '1';
+  m.addEventListener('scroll', () => {
+    const near = m.scrollHeight - m.scrollTop - m.clientHeight < 60;
+    m.dataset.stick = near ? '1' : '0';
+  });
+})();
+
+/** ★ 处理一条从服务端拉到的消息（按 kind 分派）。 */
+function handleMsg(m) {
+  if (m.kind === 'waiting') {
+    showWaiting('正在为你转接人工客服…', '有人接手后会立刻通知你');
+    $('#st2').textContent = '等待人工接入…';
+    return;
+  }
+  if (m.kind === 'taken') {
+    stopWaiting(m.content || '客服已接入');
+    $('#st2').textContent = '客服已接入';
+    return;
+  }
+  if (m.kind === 'human') {
+    // ★ 真人说话了 —— 不管有没有在转圈，都停掉
+    stopWaiting('');
+    // ★ 用**真人样式**（绿色气泡），和 AI 的白气泡区分开。
+    //   用户得能一眼看出"这句是人说的"，否则他会以为还是机器人在答。
+    const d = document.createElement('div');
+    d.className = 'm2 human';
+    d.innerHTML = '<div class="whotag">客服</div>' + esc(m.content);
+    $('#msgs2').appendChild(d);
+    smartScroll();
+    $('#st2').textContent = '客服在线';
+    return;
+  }
+  if (m.kind === 'system') {
+    // 一般的系统提示（非等待类）：转圈该停了
+    stopWaiting('');
+    add('sys', m.content);
+    return;
+  }
+  // AI 的正常回答：也要确保没有残留的转圈
+  stopWaiting('');
+  add('a', m.content);
+  $('#st2').textContent = '在线';
+}
+
+async function send() {
+  const q = $('#q2').value.trim();
+  if (!q || busy) return;
+  $('#q2').value = ''; add('u', q);
+  busy = true; $('#go2').disabled = true;
+  try {
+    const r = await fetch(API('/api/web/chat'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: SESSION, text: q }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    // ★ 正在等人工的时候，不要让"正在看…"把状态覆盖掉
+    if (!waitEl) $('#st2').textContent = '正在看…';
+    startPoll();
+  } catch (e) {
+    add('sys', '发送失败：' + String(e.message).slice(0, 60));
+  } finally { busy = false; $('#go2').disabled = false; }
+}
+
+// ★ 并发闸：一次 poll 只允许一个在飞。
+//   不加的话，网络一慢就会有多个 poll 同时读同一个旧游标 → 同一条回答重复出现。
+async function poll() {
+  if (pollBusy) return;
+  pollBusy = true;
+  try {
+    const r = await fetch(API(`/api/web/poll?session=${SESSION}&since=${since}`));
+    const d = await r.json();
+    since = d.last || since;
+    for (const m of d.messages) handleMsg(m);
+  } catch (e) { /* 下一轮再试 */ } finally { pollBusy = false; }
+}
+function startPoll() { if (!pollTimer) pollTimer = setInterval(poll, 1500); poll(); }
+</script>
+</body>
+</html>

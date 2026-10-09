@@ -1,0 +1,54 @@
+# ═══════════════════════════════════════════════════════════
+# AI客服 · .gitignore
+#
+# ★★ 最重要的一条：**绝不提交 .env 和 .forbidden**
+#    里面有模型 API Key、服务器口令、数据库口令。
+#    一旦 push，即使随后删除，GitHub 的历史记录里永远还在。
+# ═══════════════════════════════════════════════════════════
+
+# 环境与密钥
+.env
+.env.local
+.env.*.local
+.forbidden
+*.pem
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# 运行期产物
+*.log
+logs/
+data/
+!data/kb/
+!data/kb/**
+data/kefu.db
+data/kefu.db-*
+data/serve.log
+data/serve.err
+data/uploads/
+data/.cache/
+smoke.txt
+smoke2.txt
+smoke3.txt
+smoke4.txt
+smoke5.txt
+smoke6.txt
+smoke7.txt
+smoke8.txt
+smoke9.txt
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
