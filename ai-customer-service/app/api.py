@@ -1270,20 +1270,24 @@ async def wecom_webhook(request: Request) -> Any:
 # ══════════════════════════════════════════════════════════════════════
 
 @app.get("/api/handover")
-def handover_list(tenant_id: str = "default", status: str = "open", limit: int = 50):
+def handover_list(tenant_id: str = "default", status: str = "open,taken", limit: int = 50):
     """待人工处理的队列。
 
     ★ 每条都带上 AI 已经查到的答案和判定理由 ——
       **不能让客户重说一遍，也不能让客服从头摸索**（见决策记录 D38）。
     """
+    _sts = [s.strip() for s in str(status).split(",") if s.strip()] or ["open"]
     return {
         "items": store.rows(
-            """SELECT h.*, q.citations_json, q.retrieved_json, q.signals_json, q.quality
+            # ★ status 支持逗号分隔多个值。
+            #   默认 open,taken —— 客服要同时看到"没人接的"和"我正在处理的"，
+            #   否则他一接管，那条就从列表里消失了（看不到自己在忙什么）。
+            f"""SELECT h.*, q.citations_json, q.retrieved_json, q.signals_json, q.quality
                  FROM handover_queue h
                  LEFT JOIN qa_log q ON q.id = h.qa_log_id
-                WHERE h.tenant_id=? AND h.status=?
+                WHERE h.tenant_id=? AND h.status IN ({",".join("?" * len(_sts))})
                 ORDER BY h.created_at DESC LIMIT ?""",
-            (tenant_id, status, limit),
+            (tenant_id, *_sts, limit),
         ),
         "counts": {
             s: (store.one(
@@ -1311,12 +1315,65 @@ def handover_take(item_id: int, body: TakeIn) -> dict[str, Any]:
         他不知道到底有没有人来，只会觉得系统卡死了。
     """
     row = store.one(
-        "SELECT platform, user_id, tenant_id FROM handover_queue WHERE id=?", (item_id,)
+        "SELECT platform, user_id, tenant_id, conversation_id FROM handover_queue WHERE id=?",
+        (item_id,),
     )
     store.run(
         "UPDATE handover_queue SET status='taken', assigned_to=?, taken_at=? WHERE id=?",
         (body.by, store.now(), item_id),
     )
+
+    # ★★ 建/续**会话级**的人工接管（用户的反馈：
+    #   「人工那边接管之后…要人工那边主动说结束了才会结束」）。
+    #   ★ 有了这条记录，客户后面再发多少句都不会触发 AI、也不会重复转人工 ——
+    #     直到人工点「结束接管」。
+    #   ★ 没有它的话：客服回一句 → 那条记录变 done → 客户再发一句 →
+    #     AI 又重新分级 → 又转一次人工。这就是用户看到"又转起来了"的原因。
+    warned = ""
+    if row:
+        sess = store.one(
+            """SELECT id, take_count FROM human_session
+                WHERE tenant_id=? AND platform=? AND status='active'
+                  AND (conversation_id=? OR user_id=?)
+                ORDER BY id DESC LIMIT 1""",
+            (row["tenant_id"], row["platform"],
+             row["conversation_id"] or "", row["user_id"] or ""),
+        )
+        if sess:
+            # 已经在管了，不重复计数（人工可能对多条问题各点一次接管）
+            store.run(
+                "UPDATE human_session SET assigned_to=?, ended_at=NULL WHERE id=?",
+                (body.by, sess["id"]),
+            )
+            take_count = sess["take_count"]
+        else:
+            # ★ 统计这个人在窗口期内被接管过几次（用滚动窗口，不用自然日 ——
+            #   23:59 和 00:01 不该被算成两天）
+            prev = store.one(
+                """SELECT COUNT(*) n FROM human_session
+                    WHERE tenant_id=? AND platform=? AND user_id=?
+                      AND started_at >= datetime('now', ?)""",
+                (row["tenant_id"], row["platform"], row["user_id"] or "",
+                 f"-{config.TAKEOVER_WINDOW_HOURS} hours"),
+            )
+            take_count = int(prev["n"] if prev else 0) + 1
+            store.run(
+                """INSERT INTO human_session
+                     (tenant_id, platform, user_id, conversation_id, assigned_to,
+                      status, take_count, started_at)
+                   VALUES (?,?,?,?,?,'active',?,?)""",
+                (row["tenant_id"], row["platform"], row["user_id"],
+                 row["conversation_id"], body.by, take_count, store.now()),
+            )
+        # ★ 同一个人被反复接管 —— 不是客户的问题，是系统问题（AI 答不好，
+        #   或者客服答完就结束、客户又问）。所以不拦住，而是**让它显形**。
+        if take_count > config.TAKEOVER_MAX_PER_DAY:
+            warned = (
+                f"⚠ 这个客户 {config.TAKEOVER_WINDOW_HOURS} 小时内已被接管 "
+                f"{take_count} 次（上限 {config.TAKEOVER_MAX_PER_DAY}）—— "
+                f"多半是 AI 这类问题一直答不好，建议顺手报个问题给技术"
+            )
+
     # ★ 停转。失败不影响接管本身（辅助路径不能把主路径带崩）。
     if row and row["platform"] == "web":
         try:
@@ -1325,13 +1382,28 @@ def handover_take(item_id: int, body: TakeIn) -> dict[str, Any]:
             WebChannel.stop_waiting(row["user_id"], "客服已接入", row["tenant_id"])
         except Exception:  # noqa: BLE001
             pass
-    return {"ok": f"{body.by} 已接管"}
+    out: dict[str, Any] = {"ok": f"{body.by} 已接管", "take_count": take_count}
+    if warned:
+        out["warn"] = warned
+    return out
 
 
 class ReplyIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     by: str = "客服"
     send: bool = True
+
+
+# ★ 客户又说了几句的计数 —— 客服一看会话就清零。
+#   为什么不做成"已读按钮"：多一个动作就多一次忘记。
+SESSION_SEEN_LOCK = None
+
+
+@app.post("/api/handover/{item_id}/seen")
+def handover_seen(item_id: int) -> dict[str, Any]:
+    """标记"我看过这个会话了"—— 把 new_count 清零。"""
+    store.run("UPDATE handover_queue SET new_count=0 WHERE id=?", (item_id,))
+    return {"ok": "已读"}
 
 
 @app.get("/api/handover/{item_id}/context")
@@ -1470,11 +1542,23 @@ def handover_reply(item_id: int, body: ReplyIn) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             resp = {"ok": False, "error": str(exc)[:200]}
 
+    # ★★ 这里**不再把记录标成 done**（用户的反馈）。
+    #
+    #   ★ 原来的写法是每次回复都 status='done' —— 那一句问题确实处理完了，
+    #     但**会话还在人工手上**。这两件事被混成了一件事，于是：
+    #     客服回一句 → 记录 done → 客户再发一句 → 查不到"有人工在管"
+    #     → AI 重新分级 → 又转一次人工 → 用户那边右上角又转起来了。
+    #
+    #   ★ 现在：回复只记内容，保持 'taken'。
+    #     要结束由人工点「结束接管」（/end），那才把会话交还 AI。
     store.run(
         """UPDATE handover_queue
-              SET status='done', reply_text=?, done_at=? WHERE id=?""",
-        (body.text, store.now(), item_id),
+              SET status='taken', reply_text=?, done_at=NULL WHERE id=?""",
+        (body.text, item_id),
     )
+    # 回复的内容也记进会话，人工工作台看得到自己发过什么
+    if row["platform"] == "web" or row["platform"]:
+        pass  # outbox 里已经有 kind='human' 的那条，不用重复记
     store.run(
         """INSERT INTO outbound_log
              (tenant_id, platform, user_id, content, decision, resp, created_at)
@@ -1490,6 +1574,55 @@ def handover_reply(item_id: int, body: ReplyIn) -> dict[str, Any]:
         pipeline.operator_edit(row["qa_log_id"], body.text)
         resp["learned"] = "已记下人工版本，进待验证队列"
     return resp
+
+
+@app.post("/api/handover/{item_id}/end")
+def handover_end(item_id: int, by: str = "客服") -> dict[str, Any]:
+    """★ 结束接管 —— 把会话交还 AI。
+
+    ★★ 为什么必须是**人工主动的一个动作**（用户的反馈）：
+      「不能说一句话就人工接管，要人工那边主动说结束了才会结束」
+
+      ★ 反过来说也一样成立：**结束**也只能是人工主动决定的。
+        如果系统自己判断"答完了就结束"，客户下一句就会被 AI 接走 ——
+        而客服可能只是想歇一下、或者客户话还没说完。
+
+    ★ 结束后：
+      · human_session 变 ended → AI 恢复对这个会话的响应
+      · handover_queue 里这条变 done（这才算真正处理完）
+      · 客户那边会收到一句"客服已结束本次服务"，知道又能问 AI 了
+    """
+    row = store.one(
+        "SELECT platform, user_id, tenant_id, conversation_id FROM handover_queue WHERE id=?",
+        (item_id,),
+    )
+    if not row:
+        raise HTTPException(404, "没有这条待处理记录")
+
+    now = store.now()
+    # 关掉这个会话的所有 active 接管
+    store.run(
+        """UPDATE human_session
+              SET status='ended', ended_at=?
+            WHERE tenant_id=? AND platform=? AND status='active'
+              AND (conversation_id=? OR user_id=?)""",
+        (now, row["tenant_id"], row["platform"],
+         row["conversation_id"] or "", row["user_id"] or ""),
+    )
+    store.run(
+        "UPDATE handover_queue SET status='done', done_at=? WHERE id=?", (now, item_id)
+    )
+    # 通知客户：人工结束了，可以继续问 AI
+    if row["platform"] == "web":
+        try:
+            from .channels.web import WebChannel
+
+            WebChannel.stop_waiting(
+                row["user_id"], f"{by}已结束本次服务，有问题可以继续问我", row["tenant_id"]
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": f"{by} 已结束接管，这个会话交还 AI"}
 
 
 @app.post("/api/handover/{item_id}/reject")

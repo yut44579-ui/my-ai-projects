@@ -1499,7 +1499,8 @@ async function loadHandover(opts) {
       $('#holist').innerHTML = !d.items.length ? '<div class="empty">没有待处理的<br><span style="font-size:11px">AI 能答的都自动回了</span></div>' :
         d.items.map((x, i) => `<div class="hoitem ${hoCur && hoCur.id === x.id ? 'on' : ''}" onclick="pickHo(${i})">
           <div class="q">${esc(x.question)}</div>
-          <div class="m">${esc(x.user_id || '访客')} · ${(x.created_at || '').slice(11, 16)} · ${x.decision === 'draft' ? 'AI 起过草稿' : '直接转人工'}</div></div>`).join('');
+          <div class="m">${esc(x.user_id || '访客')} · ${(x.created_at || '').slice(11, 16)} · ${x.decision === 'draft' ? 'AI 起过草稿' : '直接转人工'}
+            ${x.new_count > 0 ? '<b style="color:var(--red)"> · ● 又说了 ' + x.new_count + ' 句</b>' : ''}</div></div>`).join('');
     }
     if (!hoCur && d.items.length) {
       hoCur = d.items[0];
@@ -1542,6 +1543,12 @@ async function renderHo() {
   $('#hoDetail').innerHTML = '<div class="empty">加载会话记录…</div>';
   let ctx = null;
   try { ctx = await api(`/api/handover/${h.id}/context`); } catch (e) { ctx = null; }
+  // ★ 一看会话就算"读过了" —— 把 new_count 清零。
+  //   为什么不做成一个"已读"按钮：多一个动作就多一次忘记。
+  //   失败不影响看会话（辅助动作不能把主流程带崩）。
+  if (h.new_count > 0) {
+    try { await post(`/api/handover/${h.id}/seen`, {}); h.new_count = 0; } catch (e) {}
+  }
 
   // ── 中栏：完整会话 ──
   let conv = '';
@@ -1572,18 +1579,39 @@ async function renderHo() {
             <b style="font-size:15px">${esc(h.user_id || '访客')}</b>
             <span class="gdim" style="margin-left:8px">${esc(h.platform)}</span>
           </div>
-          <div class="gdim">
+          <div class="gdim" style="text-align:right">
             ${st ? `问过 ${st.asked_before + 1} 次 · 转人工 ${st.handover_times} 次 · 首次 ${esc((st.first_seen || '').slice(5, 16).replace('T', ' '))}` : ''}
+            ${h.new_count > 0 ? '<div style="margin-top:4px;color:var(--red);font-weight:700">● 你接管之后客户又说了 ' + h.new_count + ' 句，往下翻看最新的</div>' : ''}
+            ${h.status === 'taken' ? '<div style="margin-top:4px;color:var(--green);font-weight:700">● ' +
+              (h.assigned_to === '我' ? '你' : esc(h.assigned_to || '有人')) +
+              '正在管这个会话（AI 已停手）</div>' : ''}
           </div>
         </div>
+
+        ${(function () {
+          // ★ 同一个人被反复接管 —— 不拦住（客户还是要服务的），
+          //   而是**让客服看见这件事**。看到了他才知道该报个问题给技术。
+          var n = st ? st.handover_times : 0;
+          if (n <= 3) return '';
+          return '<div class="gwarn" style="margin:10px 0">' +
+            '★ 这个客户已经被转人工 <b>' + n + '</b> 次了。' +
+            '多半是 AI 这类问题一直答不好 —— ' +
+            '建议顺手点右下角<b>「⚠ 报个问题」</b>给技术，' +
+            '比反复人工兜着更省事。</div>';
+        })()}
 
         <div class="tlwrap">${conv}</div>
 
         <div class="frow" style="margin-top:14px"><label>你的回复</label>
           <textarea id="hoText" rows="3" placeholder="${isDraft ? '' : 'AI 没写草稿，你自己写'}">${isDraft ? esc(h.ai_answer) : ''}</textarea></div>
         <div class="btns"><button onclick="hoReply()">发送</button>
+          ${h.status === 'taken' ? '<button class="ghost" style="color:var(--amber);border-color:rgba(240,180,74,.5)" onclick="hoEnd(' + h.id + ')">结束接管（交还 AI）</button>' : ''}
           <button class="ghost" style="color:var(--red);border-color:#F3CFCF"
             onclick='openReport(null, ${JSON.stringify(h.user_id || "")}, ${JSON.stringify((h.question || "").slice(0, 60))})'>⚠ 报个问题</button>
+          <!-- ★ 「接管」按钮**始终保留、标签固定**。
+              用户的原话：「少了个接管按钮了」。
+              · 不能藏起来：同事接管的活我就接手不了了
+              · 不按状态改名字：客服每天点几十次，按钮换名字会让人以为点错了 -->
           <button class="ghost" onclick="hoTake()">接管</button>
           ${isDraft ? '<button class="ghost" onclick="hoReject()">这条草稿不能用</button>' : ''}
           <span class="msg" id="hoMsg"></span></div>
@@ -1608,6 +1636,31 @@ async function renderHo() {
       nt.focus();
       try { nt.setSelectionRange(keep.caret || nt.value.length, keep.caret || nt.value.length); } catch (e) {}
     }
+  }
+}
+// ★ 结束接管 —— 把会话交还 AI。
+//   用户的要求：「要人工那边主动说结束了，然后才会结束」。
+//   ★ 所以这是**唯一**的结束方式：系统不会自己判断"答完了"就交还。
+async function hoEnd(id) {
+  if (!confirm('结束接管后，这个客户再问就由 AI 来答了。确定吗？')) return;
+  const m = $('#hoMsg');
+  m.className = 'msg'; m.textContent = '正在结束…';
+  try {
+    // by 用客服台里那个"我"（和 hoReply 保持一致），不用另立一个变量
+    const r = await post(`/api/handover/${id}/end?by=` + encodeURIComponent('我'), {});
+    if (r.ok) {
+      m.className = 'msg ok';
+      m.textContent = r.ok;
+      hoCur = null;
+      _hoListSig = '';      // 状态变了，允许重绘
+      await loadHandover();
+    } else {
+      m.className = 'msg err';
+      m.textContent = '结束失败：' + (r.error || '');
+    }
+  } catch (e) {
+    m.className = 'msg err';
+    m.textContent = '结束失败：' + String(e.message).slice(0, 60);
   }
 }
 async function hoReply() {
@@ -1647,7 +1700,36 @@ async function hoReply() {
     refreshBadge();
   } catch (e) { $('#hoMsg').className = 'msg err'; $('#hoMsg').textContent = e.message; }
 }
-async function hoTake() { await post(`/api/handover/${hoCur.id}/take`, { by: '我' }); $('#hoMsg').className = 'msg ok'; $('#hoMsg').textContent = '已接管'; refreshBadge(); }
+// ★★ 接管之后必须**刷新详情**。
+//   ★ 原来的写法只发请求、不刷新 —— 界面上还显示「接管」按钮，
+//     客服不知道自己到底接管成功了没有，也看不到「结束接管」。
+//   ★ 而且接管次数超限的警告（warn）也传不回来。
+async function hoTake() {
+  const m = $('#hoMsg');
+  m.className = 'msg'; m.textContent = '正在接管…';
+  try {
+    const r = await post(`/api/handover/${hoCur.id}/take`, { by: '我' });
+    if (r.warn) {
+      m.className = 'msg err';
+      m.textContent = r.warn;          // ★ 超限提示要让客服看见
+    } else {
+      m.className = 'msg ok';
+      m.textContent = r.ok || '已接管';
+    }
+    // ★★ 必须**同时更新本地那条的 status**。
+    //   因为列表默认只查 open —— 接管后这条已经是 taken，
+    //   重新拉列表它会消失，hoCur 还指着旧对象（status='open'），
+    //   于是渲染出来**还是「接管」按钮**，客服以为自己没接管成功。
+    if (hoCur) hoCur.status = 'taken';
+    await renderHo();                    // ★ 刷新详情：按钮变成「结束接管」
+    _hoListSig = '';                     // 列表状态也变了
+    loadHandover();
+    refreshBadge();
+  } catch (e) {
+    m.className = 'msg err';
+    m.textContent = '接管失败：' + String(e.message).slice(0, 60);
+  }
+}
 async function hoReject() { await api(`/api/handover/${hoCur.id}/reject?why=wrong_fact`, { method: 'POST' }); hoCur = null; loadHandover(); loadRejected(); refreshBadge(); }
 
 // ═══ 启动 ═══

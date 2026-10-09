@@ -23,10 +23,12 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 import time
 from dataclasses import dataclass
 from typing import Any
 
+from .. import config
 from .. import governance, pipeline, store
 from .base import Channel, InboundMessage, OutboundMessage
 
@@ -95,7 +97,7 @@ _STOP = threading.Event()
 _BUSY = threading.Event()
 
 # 处理过的统计（给界面看"积压多少"）
-_STATS = {"accepted": 0, "duplicate": 0, "processed": 0, "failed": 0, "sent": 0}
+_STATS = {"accepted": 0, "duplicate": 0, "processed": 0, "failed": 0, "merged": 0, "sent": 0}
 
 
 def stats() -> dict[str, int]:
@@ -135,6 +137,59 @@ def ensure_worker() -> None:
     _WORKER.start()
 
 
+def _same_conversation(a: InboundMessage, b: InboundMessage) -> bool:
+    """两条消息是不是同一个人的同一个会话。"""
+    return (
+        a.tenant_id == b.tenant_id
+        and a.platform == b.platform
+        and (a.user_id or "") == (b.user_id or "")
+        and (a.conversation_id or "") == (b.conversation_id or "")
+    )
+
+
+def _debounce_merge(msg: InboundMessage, channel: Channel) -> InboundMessage:
+    """★ 防抖合并：等一小会儿，把同一个会话在这期间发来的消息并成一条。
+
+    ★★ 为什么（实测）：
+       客户连发「我想问一下」「关于报价的事」「你们能便宜点吗」——
+       不合并的话 AI 对着第一句半句话回「没太确定你想问什么」，
+       然后第二句转人工（队列里记的是它），第三句被静默。
+       → 客户收到莫名其妙的澄清，**客服拿到的需求是半截的**。
+
+    ★ 代价：每条消息多等 DEBOUNCE_SECONDS 秒。
+      2.5 秒比大多数人打字间隔长，又短到不觉得卡。
+    """
+    import time as _t
+
+    if config.DEBOUNCE_SECONDS <= 0:
+        return msg
+
+    _t.sleep(config.DEBOUNCE_SECONDS)
+
+    extra: list[tuple[InboundMessage, Channel]] = []
+    with _QLOCK:
+        keep = []
+        for item in _QUEUE:
+            if len(extra) < config.DEBOUNCE_MAX_MESSAGES and _same_conversation(msg, item[0]):
+                extra.append(item)
+            else:
+                keep.append(item)
+        _QUEUE[:] = keep
+
+    if not extra:
+        return msg
+
+    # ★ 拼成一条。用换行分隔 —— 检索和判定都能看到完整意思。
+    merged_text = "\n".join([msg.content] + [m.content for m, _c in extra])
+    merged = replace(msg, content=merged_text)
+    # 被并进来的那些也标成已处理，否则它们会一直挂在"accepted"状态
+    for m, _c in extra:
+        set_status(m.dedup_key(), "processed")
+        _STATS["merged"] = _STATS.get("merged", 0) + 1
+    _STATS["processed"] += len(extra)
+    return merged
+
+
 def _loop() -> None:
     while not _STOP.is_set():
         item = None
@@ -147,6 +202,8 @@ def _loop() -> None:
         msg, channel = item
         _BUSY.set()
         try:
+            # ★ 先防抖合并，再处理 —— 客户连发几条时只答一次、答的是合并理解
+            msg = _debounce_merge(msg, channel)
             _process(msg, channel)
             _STATS["processed"] += 1
         except Exception as exc:  # noqa: BLE001

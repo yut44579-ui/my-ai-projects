@@ -328,7 +328,11 @@ class BoomChannel(SimChannel):
 
 
 b = BoomChannel()
-D.accept(b.parse({"text": "上班时间是几点", "message_id": "boom-001"}), b)
+# ★ 用独立的用户/会话 —— 第 9 步急停留下了一条 open 的转人工记录，
+#   同一个用户会被判成"已有人工在管"而静默，就走不到发送那一步了。
+#   这里要测的是 worker 扛不扛得住发送异常，跟转人工无关。
+D.accept(b.parse({"text": "上班时间是几点", "message_id": "boom-001",
+                  "user_id": "boom-user", "conversation_id": "boom-conv"}), b)
 D.drain(timeout=60)
 errs = store.rows("SELECT error FROM dispatch_error")
 print(f"     失败记录: {[e['error'][:40] for e in errs]}")
@@ -336,7 +340,10 @@ check("★ 发送失败被记下来了（不是静默丢掉）", len(errs) >= 1,
 
 # worker 还活着，后续消息还能处理
 ch5 = SimChannel()
-D.accept(ch5.parse({"text": "年假能休几天", "message_id": "after-boom"}), ch5)
+# ★ 同样用独立用户，否则会被第 9 步那条 open 的人工记录挡住
+D.accept(ch5.parse({"text": "年假能休几天", "message_id": "after-boom",
+                    "user_id": "after-boom-user",
+                    "conversation_id": "after-boom-conv"}), ch5)
 D.drain(timeout=60)
 check("★★ 出过错之后 worker 还活着（没静默退出）", len(ch5.sent) >= 1, str(ch5.texts()))
 

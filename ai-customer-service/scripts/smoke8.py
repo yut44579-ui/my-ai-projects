@@ -86,12 +86,22 @@ check("★★ 用户重复问同一句，第二条也要处理（不是平台重
 D.drain(timeout=60)
 sent = WebChannel.poll(S, 0)
 print(f"     发件箱里有 {len(sent['messages'])} 条")
-check("两条都被处理了", len(sent["messages"]) >= 2, str(len(sent["messages"])))
+# ★ 加了防抖合并之后，连发的两条会**合并成一条处理** —— 这不算去重：
+#   去重是"第二条被丢掉"，合并是"两条一起处理"。
+#   真正要验的是"第二条没被丢掉"，所以断言受理结果 + 内容都在，
+#   而不是断言"必须产生两条回答"。
+n_qa = len(store.rows("SELECT id FROM qa_log WHERE channel='web' AND user_ref=?", (S,)))
+check("★ 两条都被受理了（没被当成重复丢掉）", r1.accepted and r2.accepted,
+      f"{r1.line()} / {r2.line()}")
+check("★ 处理是合并的（连发两条只走一次），但内容不丢",
+      n_qa >= 1 and len(sent["messages"]) >= 1,
+      f"qa_log {n_qa} 条 / 发件箱 {len(sent['messages'])} 条")
 
 # ── 3. 回复路径：发件箱 + 增量拉取 ────────────────────────────────────
 print("\n[3] ★ 回复路径：发件箱 + 按 seq 拉增量")
 first = WebChannel.poll(S, 0)
-check("能取到回复", len(first["messages"]) >= 2, str(len(first["messages"])))
+# ★ 合并之后只会有 1 条回复（连发的两条并成了一次处理）
+check("能取到回复", len(first["messages"]) >= 1, str(len(first["messages"])))
 check("回复里有内容", any("九点" in x["content"] for x in first["messages"]),
       str([x["content"][:20] for x in first["messages"]]))
 

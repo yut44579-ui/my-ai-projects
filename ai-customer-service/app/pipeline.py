@@ -93,8 +93,48 @@ def _handover_active(tenant_id: str, channel: str, user_ref: str | None,
       **AI 完全沉默**，把消息留给人工。
       （连"open（还没人接）"也要沉默 —— 因为我们已经跟用户承诺
         "正在转接人工"了，这时候 AI 再开口就是自相矛盾。）
+
+    ★★ 后来又修了一次（用户的反馈）：
+      「我人工那边接管之后，用户这里不能说一句话就人工接管，
+        要人工那边主动说结束了才会结束」
+
+      ★ 又踩到的 bug：客服接管并回了一句，客户再发一句 ——
+        右上角又转起来了"正在为你转接人工客服…"，又转一次人工。
+      ★ 根因：handover_queue 是**一条问题一条记录**，回复后就被标成 done，
+        于是下一句查不到"有人工在管"，AI 又重新走了一遍分级。
+        —— 把"一句话处理完了"和"这个会话归人工负责"混成了一件事。
+
+      ★ 所以现在**优先查 human_session**（会话级）：
+        只要那个会话是 active，就一直是人工在管，
+        跟中间处理过几条问题无关。只有人工主动"结束接管"才会交还 AI。
     """
     try:
+        # ★★ 第一步：会话级的人工接管状态（最高优先级）
+        s_where = ["tenant_id=?", "platform=?", "status='active'"]
+        s_args: list = [tenant_id, channel]
+        if conversation_id:
+            s_where.append("(conversation_id=? OR user_id=?)")
+            s_args += [conversation_id, user_ref or ""]
+        elif user_ref:
+            s_where.append("user_id=?")
+            s_args.append(user_ref)
+        else:
+            s_args = None  # 没有身份，跳过
+        if s_args is not None:
+            srow = store.one(
+                f"SELECT id, status, assigned_to, take_count FROM human_session "
+                f"WHERE {' AND '.join(s_where)} ORDER BY id DESC LIMIT 1",
+                tuple(s_args),
+            )
+            if srow:
+                return {
+                    "id": srow["id"],
+                    "status": "session",          # ★ 区别于 open/taken
+                    "assigned_to": srow["assigned_to"],
+                    "take_count": srow["take_count"],
+                }
+
+        # ★ 第二步：还没人接的转人工请求（承诺过"正在转接"，也不能由 AI 再开口）
         where = ["tenant_id=?", "platform=?", "status IN ('open','taken')"]
         args: list = [tenant_id, channel]
         # ★ 优先按会话 id 找（最准），没有再退回按用户找
@@ -255,14 +295,29 @@ def answer_question(
     #   人工在工作台能看到（他正在处理，需要知道客户又说了什么）。
     ho = _handover_active(tenant_id, channel, user_ref, conversation_id)
     if ho and not shadow:
+        # ★ 客户在人工管着的时候又说话了 —— 在队列那条上记一笔，
+        #   让客服知道"有新内容"，不然他会一直停在原来的判断上。
+        #   （AI 静默，但消息本身不能白来。）
+        try:
+            store.run(
+                """UPDATE handover_queue
+                      SET new_count = new_count + 1, last_user_at = ?
+                    WHERE tenant_id=? AND platform=? AND status IN ('open','taken')
+                      AND (conversation_id=? OR user_id=?)""",
+                (store.now(), tenant_id, channel, conversation_id or "", user_ref or ""),
+            )
+        except Exception:  # noqa: BLE001 —— 计数失败不能影响"沉默"这个决定
+            pass
         return finish(
             Answer(
                 text="",                      # ★ 空字符串 = 什么都不发
                 decision="silent",
                 quality=0.0,
                 reason=f"这个会话已经有人工在管（#{ho['id']} · {ho['status']}"
-                       f"{' · ' + ho['assigned_to'] if ho.get('assigned_to') else ''}）"
-                       f"—— AI 不再插话，避免和客服说的话打架",
+                       f"{' · ' + ho['assigned_to'] if ho.get('assigned_to') else ''}"
+                       f"{' · 第 ' + str(ho['take_count']) + ' 次' if ho.get('take_count') else ''}）"
+                       f"—— AI 不再插话，避免和客服说的话打架；"
+                       f"要交还 AI 需要人工在工作台点「结束接管」",
                 problems=["人工接管中，AI 静默"],
             )
         )
