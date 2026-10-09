@@ -1,0 +1,7 @@
+name = "tangyu-portfolio"
+compatibility_date = "2026-09-30"
+
+# 纯静态站点：直接上传这个目录，不需要构建
+[assets]
+directory = "."
+not_found_handling = "404-page"

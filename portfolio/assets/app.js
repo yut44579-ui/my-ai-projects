@@ -86,8 +86,16 @@
     }).join("");
     var tags = (p.tags || []).slice(0, 4).map(function (t) { return '<span class="chip">' + t + "</span>"; }).join("");
     var url = p.demo && p.demo.url ? p.demo.url : "";
+    // ★★ 线上模式要分两种，不能一律"可现场演示"：
+    //    有 publicUrl 的（AI 客服）→ **已经挂在公网上**，卡片上就该说清楚并给直达链接
+    //    没有的（另外两个）        → 只能"面试现场演示"
+    //   ★ 这是这个项目最该被看到的事实：三个里只有它真上线了。
+    //     一律写"可现场演示"等于把这件事藏起来了。
+    var online = (p.demo && p.demo.publicUrl) ? p.demo.publicUrl : "";
     var live = (window.SITE_MODE === "public")
-      ? '<span class="status"><i class="led"></i><span class="st">可现场演示</span></span>'
+      ? (online
+          ? '<span class="status on"><i class="led"></i><span class="st">已上线 · 点右边直接打开</span></span>'
+          : '<span class="status"><i class="led"></i><span class="st">可现场演示</span></span>')
       : (url ? '<span class="status" data-port="' + p.demo.port + '" data-url="' + url + '"><i class="led"></i><span class="st">检测中…</span></span>'
              : '<span class="status"><i class="led"></i><span class="st">单文件看板</span></span>');
     return '' +
@@ -102,9 +110,11 @@
           '<a class="link detail-btn" style="margin-left:auto" href="projects/' + p.slug + '.html">查看项目详情 →</a>' +
           // ★ 线上不渲染指向 127.0.0.1 的链接（访客点了必然打不开）；
           //   本地才给真链接。线上靠卡片上的「可现场演示」+ 详情页截图说明。
-          ((url && window.SITE_MODE !== "public")
-            ? '<a class="link" href="' + url + '" target="_blank" rel="noopener">打开演示 ↗</a>'
-            : '') +
+          // 线上：有 publicUrl 的直接给真链接；没有的（只有 127.0.0.1）不渲染，避免死链
+          // 本地：给 127.0.0.1 的真链接
+          (window.SITE_MODE === "public"
+            ? (online ? '<a class="link" href="' + online + '" target="_blank" rel="noopener" style="color:var(--accent-2);font-weight:700">打开在线系统 ↗</a>' : '')
+            : (url ? '<a class="link" href="' + url + '" target="_blank" rel="noopener">打开演示 ↗</a>' : '')) +
         '</div>' +
       '</article>';
   }
@@ -190,9 +200,16 @@
       if (isPublic && online) {
         // 演示账号：有的系统登录页自己会写（如 AI供应链），
         // 有的不会（如销售 Agent 带图形验证码），所以这里按需补充说明。
-        var acct = (p.demo && p.demo.publicAccount)
-          ? '演示账号：<b>' + p.demo.publicAccount + '</b>'
-          : '演示账号写在登录页上。';
+        // ★ 三种情况，按优先级：
+        //   publicNote     —— 项目自己写的说明（比如"不用登录，直接问"）
+        //   publicAccount  —— 有登录的，给个账号
+        //   兜底            —— "写在登录页上"
+        //   ★ 兜底文案是给"有登录"的系统准备的；没登录的系统套上去会误导。
+        var acct = (p.demo && p.demo.publicNote)
+          ? p.demo.publicNote
+          : (p.demo && p.demo.publicAccount)
+            ? '演示账号：<b>' + p.demo.publicAccount + '</b>'
+            : '演示账号写在登录页上。';
         demo.innerHTML =
           '<a class="btn primary" href="' + online + '" target="_blank" rel="noopener">进入在线系统 ↗</a>' +
           '<div class="note"><b>这是真正能用的在线系统，不是截图</b> —— 手机也能操作。' +
@@ -292,7 +309,9 @@
   function renderStrip() {
     var host = $("#shotsStrip");
     if (!host || !window.PROJECTS) return;
-    var pick = ["sales-report-agent", "ai-supply-chain"];
+    // ★ 顶部截图条：每个项目取第一张。
+    //   加了第三个项目之后这里要跟着加 —— 不然新项目在首页"看不见"。
+    var pick = ["sales-report-agent", "ai-supply-chain", "ai-customer-service"];
     host.innerHTML = pick.map(function (slug) {
       var p = window.PROJECTS.filter(function (x) { return x.slug === slug; })[0];
       if (!p || !p.shots || !p.shots.length) return "";
@@ -397,6 +416,39 @@
     return h;
   }
 
+  /* ★ AI客服 的真实案例回放：一次"转人工率"的修复过程。
+     数据全部来自这个项目自己的实测与决策记录（docs/决策记录-边界.md）。 */
+  function rpKefu() {
+    var rows = [
+      { q: "你们能便宜点吗", d: "escalate", why: "命中硬风险「议价让价」—— 要具体承诺，直接转，一个字不答" },
+      { q: "我要投诉", d: "escalate", why: "命中硬风险「投诉纠纷」" },
+      { q: "能退款吗", d: "escalate", why: "命中硬风险「退款诉求」" },
+      { q: "怎么报价", d: "auto", why: "命中**软**风险（问流程）—— AI 先答流程并把该问的信息问全，不转人工" },
+      { q: "合同怎么签", d: "auto", why: "同上：只答流程，一个字的具体数字都不许出现" },
+      { q: "工作台", d: "auto", why: "看不出想干什么 —— AI 反问澄清，**不占用人工**（人工也不知道「工作台」是什么意思）" },
+      { q: "你是谁 / 你能为我作甚呢", d: "auto", why: "关于「你自己」的问题 —— 不查资料，直接介绍自己（但不许借机答任何业务事实）" },
+      { q: "打样要多久", d: "auto", why: "检索命中充分 —— 正常回答，带内部溯源（出处只给自己人看，不给客户）" }
+    ];
+    var h = '<div class="rp-trace"><div class="rp-head"><b>修复前后：转人工率 约100% → 15%</b>' +
+      '<span style="margin-left:auto" class="ms">16 句真实场景实测</span></div>' +
+      '<div class="rp-body"><div class="txt">' +
+      '问题：用户反馈「不要一点小事情就人工，这样会加重客服的压力」。' +
+      '查下来人工队列里躺着「工作台」「你是干嘛的」这种 —— <b>人工也没法回答</b>。</div>' +
+      '<div class="rp-call">修法：简单问题不查资料直接答 · 软风险（问流程）AI 先答并问全信息 · ' +
+      '硬风险（要数字）直接转 · 看不懂的 AI 反问澄清（最多 2 次）</div></div>';
+    h += '<div style="margin-top:14px">';
+    rows.forEach(function (r) {
+      h += '<div class="rp-trace" style="margin-top:10px"><div class="rp-head">' +
+        '<b>' + r.d + '</b><span style="margin-left:auto" class="ms">' +
+        (r.d === "auto" ? "AI 直接答" : "转人工") + '</span></div>' +
+        '<div class="rp-body"><div class="txt">问：' + r.q + '</div>' +
+        '<div class="rp-note" style="margin:8px 0 0">' + r.why + '</div></div></div>';
+    });
+    h += '</div><div class="rp-note" style="margin-top:12px">' +
+      '真实回放 · 非实时 AI。数字来自这个项目在公网部署上的逐句实测。</div></div>';
+    return h;
+  }
+
   function rpSelfheal() {
     var i = window.REPLAYS.selfheal;
     if (!i) return "";
@@ -432,6 +484,8 @@
         box.innerHTML = rpRag();
       } else if (slug === "customer-service-agent") {
         box.innerHTML = rpCs();
+      } else if (slug === "ai-customer-service") {
+        box.innerHTML = rpKefu();
       } else if (slug === "self-healing-agent") {
         box.innerHTML = rpSelfheal();
       } else {
