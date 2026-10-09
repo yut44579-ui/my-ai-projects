@@ -1,0 +1,1703 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI客服 · 技术后台</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{--blue:#2563EB;--ink:#16202E;--dim:#6B7A90;--line:#E3E9F1;--bg:#F4F6FA;
+        --green:#159A55;--amber:#D98324;--red:#C0392B}
+  body{font-family:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+       background:var(--bg);color:var(--ink);font-size:14px;line-height:1.6}
+  a{color:var(--blue);text-decoration:none}
+
+  header{background:#fff;border-bottom:1px solid var(--line);padding:0 20px;
+         display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:20;flex-wrap:wrap}
+  .logo{width:28px;height:28px;border-radius:8px;color:#fff;font-weight:800;font-size:12px;
+        background:linear-gradient(135deg,var(--blue),#38BDF8);display:flex;
+        align-items:center;justify-content:center;margin:10px 0}
+  header h1{font-size:15px;font-weight:700;padding:10px 0}
+  nav{display:flex;gap:2px;margin-left:10px;overflow-x:auto}
+  nav button{background:none;border:none;padding:14px 13px;font-size:13.5px;color:var(--dim);
+             cursor:pointer;font-family:inherit;border-bottom:2.5px solid transparent;white-space:nowrap}
+  nav button.on{color:var(--blue);font-weight:700;border-bottom-color:var(--blue)}
+  /* ★ 「人工」标签上的待处理数量角标。
+     用户反馈"工作台人工的那些在哪里，我看不到" ——
+     标签本身一直在，但没有**任何提示说"这里有东西等着你"**。
+     ★ 一个需要人处理的队列，如果界面上不主动喊你，就等于没有。 */
+  nav button .bdg{display:inline-block;min-width:17px;height:17px;line-height:17px;
+        background:var(--red);color:#fff;font-size:10.5px;font-weight:800;
+        border-radius:9px;padding:0 5px;margin-left:5px;vertical-align:1px}
+  nav button .bdg.zero{display:none}
+  .stat{margin-left:auto;display:flex;gap:13px;font-size:12px;color:var(--dim);padding:10px 0}
+  .stat b{color:var(--ink)}
+
+  .page{display:none;padding:18px 20px 50px;max-width:1180px;margin:0 auto}
+  .page.on{display:block}
+  .grid{display:flex;gap:16px;align-items:flex-start}
+  .col{flex:1;min-width:0;display:flex;flex-direction:column;gap:15px}
+  .col.side{width:360px;flex:none}
+
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card h2{font-size:14px;font-weight:700;margin-bottom:5px}
+  .card .sub{font-size:12.5px;color:var(--dim);margin-bottom:13px;line-height:1.6}
+  .card .sub b{color:var(--ink)}
+
+  label{display:block;font-size:12.5px;font-weight:600;margin-bottom:5px;color:#3A4A60}
+  input[type=text],input[type=password],textarea,select{
+    width:100%;border:1.5px solid var(--line);border-radius:9px;padding:9px 12px;
+    font-size:13.5px;font-family:inherit;outline:none;background:#fff}
+  input:focus,textarea:focus,select:focus{border-color:var(--blue)}
+  textarea{resize:vertical;line-height:1.6}
+  .frow{margin-bottom:13px}
+  .frow .hint{font-size:11.5px;color:var(--dim);margin-top:4px}
+  .frow.sec input{font-family:ui-monospace,Consolas,monospace}
+
+  button{background:var(--blue);color:#fff;border:none;border-radius:9px;padding:9px 18px;
+         font-size:13.5px;font-weight:650;cursor:pointer;font-family:inherit}
+  button.ghost{background:#fff;color:var(--dim);border:1.5px solid var(--line)}
+  button.danger{background:var(--red)}
+  button:disabled{opacity:.5;cursor:default}
+  .btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .msg{font-size:12.5px;margin-left:auto}
+  .msg.ok{color:var(--green)}.msg.err{color:var(--red)}
+
+  .askrow{display:flex;gap:8px}
+  .hints{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px}
+  .hint{font-size:12px;padding:4px 11px;border-radius:20px;background:#F1F5FB;
+        color:#4A5A70;cursor:pointer;border:1px solid #E3EAF4}
+  .hint:hover{background:#E6EEFA}
+  .who{display:flex;gap:14px;font-size:12.5px;color:var(--dim);margin-top:11px;align-items:center}
+
+  .bubble{border-radius:12px;padding:12px 15px;margin-top:13px}
+  .bubble.me{background:#EFF5FF;border:1px solid #CFE0FB}
+  .bubble.ai{background:#fff;border:1px solid var(--line)}
+  .bubble .t{font-size:11.5px;color:var(--dim);font-weight:650;margin-bottom:5px}
+  .verdict{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px}
+  .tag{font-size:11.5px;font-weight:650;padding:2px 10px;border-radius:20px}
+  .tag.auto{background:#E6F7EC;color:var(--green)}
+  .tag.draft{background:#FFF4E0;color:var(--amber)}
+  .tag.esc{background:#FDECEC;color:var(--red)}
+  .tag.info{background:#EEF3FA;color:#4A5A70}
+  .why{margin-top:11px;font-size:12px;color:var(--dim);background:#F8FAFD;
+       border:1px solid #EBF0F7;border-radius:9px;padding:10px 12px}
+  .why b{color:var(--ink)}
+  details{margin-top:10px;font-size:12.5px}
+  summary{cursor:pointer;color:var(--dim)}
+  .hit{border-left:3px solid #D7E3F5;padding:4px 0 4px 10px;margin:8px 0}
+  .hit .t2{font-weight:650;font-size:12.5px}
+  .hit .s{font-size:11px;color:var(--dim)}
+  .hit .x{font-size:12px;color:#4A5A70;margin-top:3px}
+  .stale{color:var(--amber);font-weight:650}
+  .fbrow{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .fbrow input{flex:1;min-width:180px}
+
+  .empty{color:var(--dim);font-size:12.5px;padding:14px 0;text-align:center}
+
+  .gap,.reason,.style{border-bottom:1px solid #F0F4F9;padding:9px 0;font-size:12.5px}
+  .gap:last-child,.reason:last-child,.style:last-child{border-bottom:none}
+  .gap .n{display:inline-block;background:#FFF0EE;color:var(--red);font-size:11px;
+          font-weight:700;border-radius:9px;padding:0 7px;margin-right:6px}
+  .reason .r1{display:flex;gap:8px;align-items:baseline}
+  .reason .lb{font-weight:600}.reason .ct{color:var(--red);font-weight:700}
+  .reason .fx,.gap .m,.style .d{font-size:11.5px;color:var(--dim);margin-top:3px}
+  .style .q{color:var(--dim)}.style .a{margin-top:3px}
+  .style .d{color:var(--amber)}
+
+  .tierrow{display:flex;gap:8px}
+  .tierbtn{flex:1;text-align:center;padding:9px 6px;border-radius:9px;border:1.5px solid var(--line);
+           background:#fff;cursor:pointer;font-size:12.5px}
+  .tierbtn.on{border-color:var(--blue);background:#F5F9FF;font-weight:650}
+  .tierbtn .p{font-size:11px;color:var(--dim);margin-top:2px}
+  .prow2{display:flex;align-items:baseline;font-size:12.5px;padding:5px 0}
+  .prow2 .pl2{flex:1;color:#5A6879}.prow2 .pv2{color:var(--dim)}
+  .prow2 .pa2{color:#A2AEBD;padding:0 7px}.prow2 .pn2{font-weight:700;color:var(--blue)}
+  .prow2 .pd2{margin-left:9px;font-weight:650;font-size:12px}
+  .prow2 .pd2.down{color:var(--green)}.prow2 .pd2.up{color:var(--amber)}
+  .gok{font-size:12.5px;color:var(--green);font-weight:600}
+  .gwarn{font-size:12px;color:#8A5E00;background:#FFF8EC;border:1px solid #F0D5A0;
+         border-radius:8px;padding:9px 11px;margin:8px 0;line-height:1.6}
+  .gfail{font-size:12px;background:#FFF5F5;border:1px solid #F3CFCF;border-radius:8px;
+         padding:8px 10px;margin-top:7px;line-height:1.55}
+  .stopon{font-size:13px;font-weight:650;color:#fff;background:var(--red);
+          border-radius:9px;padding:10px 12px}
+  .stopoff{font-size:13px;color:var(--green);background:#F2FBF5;border:1px solid #B7E2C6;
+           border-radius:9px;padding:10px 12px}
+  .stophist{font-size:11.5px;color:#5A6879;padding:6px 0;border-bottom:1px solid #F0F4F9}
+  .stophist:last-child{border-bottom:none}
+  .gnum{font-size:22px;font-weight:750;color:var(--blue)}
+  .gdim{font-size:12px;color:var(--dim)}
+  .grow{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  .drop{border:2px dashed #C8D6E8;border-radius:11px;padding:22px;text-align:center;
+        color:var(--dim);font-size:13px;cursor:pointer;background:#FAFCFF}
+  .drop.over{border-color:var(--blue);background:#EFF5FF}
+  .drop b{color:var(--blue)}
+
+  .ho{display:flex;gap:14px;align-items:flex-start}
+  .holist{width:300px;flex:none;max-height:640px;overflow-y:auto}
+  .hoitem{padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer;background:#fff}
+  .hoitem.on{border-color:var(--blue);background:#F5F9FF}
+  .hoitem .q{font-size:12.5px}
+  .hoitem .m{font-size:11px;color:var(--dim);margin-top:3px}
+  .homain{flex:1;min-width:0}
+  .cm{max-width:80%;font-size:13px;line-height:1.65;border-radius:12px;padding:10px 13px;margin-bottom:9px}
+  .cm.u{background:var(--blue);color:#fff;margin-left:auto}
+  .cm.a{background:#F7F9FC;border:1px solid var(--line);white-space:pre-wrap}
+  .sbox{background:#F7F9FC;border:1px solid var(--line);border-radius:9px;padding:10px 12px;
+        margin-bottom:9px;font-size:12px;line-height:1.6}
+  .sbox .bt{font-weight:700;margin-bottom:4px}
+  .sbox.warn{background:#FFF8EC;border-color:#F0D5A0}
+
+  /* ★ 人工工作台的**完整会话记录**。
+     用户的要求：「人工这里可以看到具体用户上下文的聊天记录，这样才好回复与跟进进度」。
+     所以这里画的是这个客户问过的**每一句**，不是只有当前这一条。 */
+  .hodetail{display:flex;gap:16px;align-items:flex-start}
+  .homain2{flex:1;min-width:0}
+  .hoside2{width:270px;flex:none}
+  /* ★★ 问题上报（报事侧 + 处理侧） */
+  .reportbtn{position:fixed;right:22px;bottom:22px;z-index:150;background:var(--red);color:#fff;
+        border:none;border-radius:26px;padding:12px 20px;font-size:13.5px;font-weight:650;
+        cursor:pointer;font-family:inherit;box-shadow:0 8px 24px rgba(192,57,43,.34)}
+  .reportbtn:hover{transform:translateY(-2px)}
+  .modal{position:fixed;inset:0;background:rgba(12,22,38,.5);z-index:200;display:none;
+         align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto}
+  .modal.on{display:flex}
+  .mbox{background:#fff;border-radius:15px;width:100%;max-width:560px;padding:24px 26px;
+        box-shadow:0 24px 60px rgba(10,25,50,.3)}
+  .mbox h2{font-size:17px;margin-bottom:5px}
+  .mbox .sub{margin-bottom:16px}
+  .kinds{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+  .kind{border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;background:#fff}
+  .kind.on{border-color:var(--red);background:#FFF7F6}
+  .kind .k1{font-size:13px;font-weight:650}
+  .kind .k2{font-size:11px;color:var(--dim);margin-top:2px;line-height:1.5}
+  .sevrow{display:flex;gap:8px;margin-bottom:14px}
+  .sev{flex:1;text-align:center;border:1.5px solid var(--line);border-radius:9px;padding:9px 6px;
+       cursor:pointer;font-size:12.5px;background:#fff}
+  .sev.on{border-color:var(--red);background:#FFF7F6;font-weight:650}
+  .sev .s2{font-size:10.5px;color:var(--dim);margin-top:2px;font-weight:400;line-height:1.4}
+  .attach{background:#F2FBF5;border:1px solid #B7E2C6;border-radius:9px;padding:10px 12px;
+          font-size:12px;color:#1E6B41;margin-bottom:14px;line-height:1.7}
+
+  .isum{border:1px solid var(--line);border-radius:11px;background:#fff;margin-bottom:9px;
+        padding:12px 15px;cursor:pointer}
+  .isum.on{border-color:var(--red);background:#FFFBFB}
+  .isum .ih{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .isum .it{font-weight:650;font-size:13.5px;flex:1;min-width:130px}
+  .isum .im{font-size:11.5px;color:var(--dim);margin-top:5px}
+  .ib{font-size:11px;font-weight:650;padding:2px 9px;border-radius:11px;white-space:nowrap}
+  .ib.new{background:#FDECEC;color:var(--red)}
+  .ib.working{background:#FFF4E0;color:var(--amber)}
+  .ib.resolved{background:#E8F0FE;color:var(--blue)}
+  .ib.closed{background:#E9F8EF;color:var(--green)}
+  .ib.rejected{background:#EEF1F5;color:var(--dim)}
+  .ib.high{background:#FDECEC;color:var(--red)}
+  .ib.normal{background:#FFF4E0;color:var(--amber)}
+  .ib.low{background:#EEF3FA;color:#5A6879}
+  .icontext{background:#FAFCFF;border:1px solid #EEF3FA;border-radius:9px;padding:11px 13px;
+            font-size:12.5px;line-height:1.75;margin-bottom:10px}
+  .icontext .il{color:var(--dim);font-size:11.5px}
+  .icontext b{color:var(--ink)}
+  .aibar{background:#E8F0FE;border:1px solid #C3D9F8;border-radius:10px;padding:12px 14px;margin-top:12px}
+  .aibar .at{font-weight:700;font-size:13px;margin-bottom:8px}
+  .ackok{touch-action:manipulation}
+
+  /* ★ 实时监控 */
+  .livestats{display:flex;gap:26px;flex-wrap:wrap;margin-top:12px}
+  .livestats div b{display:block;font-size:22px;font-weight:750;letter-spacing:-.5px}
+  .livestats div span{font-size:11.5px;color:var(--dim)}
+  .sess{border:1px solid var(--line);border-radius:11px;background:#fff;margin-bottom:10px;overflow:hidden}
+  .sess .sh{display:flex;align-items:center;gap:9px;padding:11px 15px;flex-wrap:wrap;
+            border-bottom:1px solid #F0F4F9;background:#FBFCFE}
+  .sess .sid{font-weight:700;font-size:13px}
+  .sess .st2{font-size:11.5px;padding:2px 9px;border-radius:12px;font-weight:650}
+  .sess .st2.ai_handling{background:#E6F7EC;color:var(--green)}
+  .sess .st2.waiting_human{background:#FDECEC;color:var(--red)}
+  .sess .st2.just_escalated{background:#FFF4E0;color:var(--amber)}
+  .sess .sm{margin-left:auto;font-size:11.5px;color:var(--dim)}
+  .sess .sb{padding:12px 15px}
+  .tur{border-left:3px solid #E4EAF2;padding:4px 0 8px 12px;margin-bottom:8px}
+  .tur:last-child{margin-bottom:0}
+  .tur.auto{border-left-color:#8FD6AC}
+  .tur.escalate{border-left-color:#F0A8A8}
+  .tur.draft{border-left-color:#F0CE8F}
+  .tur .tq{font-size:12.5px;font-weight:600}
+  .tur .ta{font-size:12.5px;color:#4A5A70;margin-top:3px;white-space:pre-wrap}
+  .tur .tm{font-size:11px;color:var(--dim);margin-top:4px}
+  .hohdr{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding-bottom:10px;
+         border-bottom:1px solid var(--line);margin-bottom:12px}
+  .hohdr>div:last-child{margin-left:auto}
+  .tlwrap{max-height:390px;overflow-y:auto;padding:4px 2px 4px 0;background:#FAFCFF;
+          border:1px solid #EEF3FA;border-radius:10px}
+  .tl-row{padding:8px 13px}
+  .tl-who{font-size:11px;color:var(--dim);font-weight:650;margin-bottom:3px}
+  .tl-time{font-weight:400;margin-left:6px;color:#A2AEBD}
+  .tl-bub{display:inline-block;max-width:88%;font-size:13px;line-height:1.62;
+          border-radius:11px;padding:8px 12px;white-space:pre-wrap}
+  .tl-bub.user{background:#EFF5FF;border:1px solid #CFE0FB}
+  .tl-bub.ai{background:#fff;border:1px solid var(--line)}
+  .tl-bub.human{background:#E9F8EF;border:1px solid #B7E2C6}
+  .tl-note{text-align:center;font-size:11.5px;color:var(--dim);padding:6px 13px}
+  .tl-why{color:var(--amber)}
+
+  @media (max-width:820px){
+    .grid{flex-direction:column}.col.side{width:100%}
+    .ho{flex-direction:column}.holist{width:100%;max-height:none}
+    nav button{padding:12px 10px;font-size:13px}
+    .stat{display:none}
+    /* ★ 人工详情里那三块是**写死宽度**的（中间 flex:1 + 右边 270px），
+       窄屏下会横向溢出（实测手机上溢出 49px）。
+       窄屏必须改成竖排、宽度自适应。 */
+    .hodetail{flex-direction:column}
+    .hoside2{width:100%;margin-top:12px}
+    .tlwrap{max-height:280px}
+  }
+  @media (max-width:480px){
+    .tl-bub{max-width:94%}
+    .hohdr>div:last-child{margin-left:0}
+  }
+</style>
+</head>
+<body data-role="dev">
+
+<header>
+  <div class="logo">AI</div>
+  <h1>AI客服 · 技术后台</h1>
+  <nav id="nav"></nav>
+  <a id="roleSwitch" href="dev.html" target="_blank" rel="noopener"
+     style="font-size:12.5px;color:var(--blue);white-space:nowrap;margin:0 12px 0 0">技术后台 ↗</a>
+  <div class="stat" id="stat">加载中…</div>
+</header>
+
+<div class="page on" id="p-chat">
+  <div class="grid">
+    <div class="col">
+      <div class="card">
+        <h2>试一句</h2>
+        <div class="sub">用大白话问。<b>内部员工</b>能看到全部资料，<b>外部客户</b>只能看到标着「可对客户说」的。</div>
+        <div class="askrow">
+          <input type="text" id="q" placeholder="比如：报销单咋填啊" autocomplete="off">
+          <button id="go">发送</button>
+        </div>
+        <div class="hints" id="hints"></div>
+        <div class="who">
+          <label style="display:flex;gap:5px;align-items:center;margin:0;font-weight:400">
+            <input type="radio" name="who" value="external" checked> 外部客户</label>
+          <label style="display:flex;gap:5px;align-items:center;margin:0;font-weight:400">
+            <input type="radio" name="who" value="internal"> 内部员工</label>
+          <label style="margin-left:auto;display:flex;gap:5px;align-items:center;font-weight:400">
+            <input type="checkbox" id="uselm" checked> 调用模型</label>
+        </div>
+      </div>
+      <div id="out"></div>
+    </div>
+    <div class="col side">
+      <div class="card">
+        <h2>该修哪里</h2>
+        <div class="sub">按失败原因排。<b>原因分布比成功率重要</b>——成功率只说好不好，原因才说该改什么。</div>
+        <div id="reasons"><div class="empty">还没有数据</div></div>
+      </div>
+      <div class="card">
+        <h2>待补充的问题</h2>
+        <div class="sub">答不上来的自动攒在这里，按被问次数排。</div>
+        <div id="gaps"><div class="empty">还没有</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="p-kb">
+  <div class="grid">
+    <div class="col">
+      <div class="card">
+        <h2>上传文件</h2>
+        <div class="sub">支持 Word（.docx）· Excel（.xlsx）· PDF · 纯文本（.txt/.md/.csv）。一次可以选多个。</div>
+        <div class="drop" id="drop">
+          <div>把文件拖到这里，或 <b>点一下选择文件</b></div>
+          <div style="font-size:11.5px;margin-top:6px">解析不了的文件会如实列出原因，不会假装读过</div>
+        </div>
+        <input type="file" id="file" multiple style="display:none"
+               accept=".txt,.md,.markdown,.csv,.docx,.pdf,.xlsx,.xls">
+        <div id="upout" style="margin-top:11px"></div>
+      </div>
+
+      <div class="card">
+        <h2>粘贴一段文字</h2>
+        <div class="sub">手里有一份制度，直接复制进来就能用，不用先存文件。</div>
+        <div class="frow"><label>标题</label><input type="text" id="pasteTitle" placeholder="比如：退换货政策"></div>
+        <div class="frow"><label>内容</label><textarea id="pasteBody" rows="7" placeholder="把内容粘在这里…"></textarea></div>
+        <div class="btns">
+          <button onclick="doPaste()">导入</button>
+          <select id="pastePerm" style="width:auto">
+            <option value="external">可对客户说</option>
+            <option value="internal">仅内部可见</option>
+          </select>
+          <span class="msg" id="pasteMsg"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>从别处同步</h2>
+        <div class="sub">目录 / 网页 / 内部接口。<b>这三个都能重复跑</b>，只会同步变化的部分。</div>
+
+        <div class="frow"><label>目录路径（服务器上的）</label>
+          <input type="text" id="dirPath" placeholder="/home/ubuntu/ai-kefu/kb">
+          <div class="hint">适合共享盘、导出目录。<b>目录里的删除会同步到索引</b>（避免旧内容继续被回答）。</div>
+        </div>
+        <div class="btns" style="margin-bottom:15px"><button class="ghost" onclick="syncDir()">同步目录</button></div>
+
+        <div class="frow"><label>网页地址（一行一个）</label>
+          <textarea id="urls" rows="3" placeholder="https://example.com/about&#10;https://example.com/product"></textarea>
+          <div class="hint">适合官网、公众号文章。<b>不做爬虫</b>，只抓你给的这几个。</div>
+        </div>
+        <div class="btns" style="margin-bottom:15px"><button class="ghost" onclick="syncUrls()">同步网页</button></div>
+
+        <div class="frow"><label>内部接口地址</label>
+          <input type="text" id="apiUrl" placeholder="http://你的CRM/api/knowledge">
+          <div class="hint">接口要返回 items 数组，每条含 id / title / content</div>
+        </div>
+        <div class="btns">
+          <button class="ghost" onclick="probeApi()">先体检一下</button>
+          <button class="ghost" onclick="syncApi()">同步接口</button>
+          <span class="msg" id="apiMsg"></span>
+        </div>
+        <div id="apiOut" style="margin-top:11px"></div>
+      </div>
+    </div>
+
+    <div class="col side">
+      <div class="card">
+        <h2>导入进来的资料</h2>
+        <div class="sub">共 <b id="docCount">0</b> 篇。标着「可对客户说」的会被外部客户看到。</div>
+        <div id="docs" style="max-height:420px;overflow-y:auto"><div class="empty">还没有</div></div>
+      </div>
+      <div class="card">
+        <h2>接入前扫描</h2>
+        <div class="sub">找出<b>标着「可对客户说」但内容里有敏感东西</b>的资料 —— 那些是会真的发给客户的。</div>
+        <div id="audit"><div class="empty">点下面扫一遍</div></div>
+        <div class="btns" style="margin-top:11px"><button class="ghost" onclick="loadAudit()">扫一遍</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="p-mytodo">
+  <div class="grid">
+    <div class="col">
+      <div class="card">
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+          <h2 style="margin:0">我报的问题</h2>
+          <span class="gdim">看看处理到哪一步了</span>
+        </div>
+        <div class="sub" style="margin-top:7px">
+          看到哪里不对，点右下角红色按钮报上去。<b>你不用懂技术</b> ——
+          只要说哪儿不对，剩下的（哪句问答、AI 当时怎么判的）系统会自己附上。</div>
+        <div class="frow" style="max-width:320px">
+          <label>填你的名字</label>
+          <input type="text" id="mineWho2" placeholder="比如：小李" oninput="loadMyTodo()">
+        </div>
+        <div class="livestats" id="mytodoStats"></div>
+      </div>
+      <div id="mytodoList"></div>
+    </div>
+    <div class="col side">
+      <div class="card">
+        <h2>怎么用</h2>
+        <div class="sub">三步，不用记任何东西。</div>
+        <div class="sbox"><div class="bt">① 在哪儿看到不对就在哪儿点</div>
+          <div class="gdim">「实时」页每条问答旁边有<b>「⚠ 这条不对」</b>；
+            「人工」页有<b>「⚠ 报个问题」</b>；右下角还有个常驻的红按钮。</div></div>
+        <div class="sbox"><div class="bt">② 选个"哪儿不对" + 写一句话</div>
+          <div class="gdim">就这两样。<b>别的都不用填</b> ——
+            系统自动附上那条问答的完整记录、前后对话、命中的资料。</div></div>
+        <div class="sbox"><div class="bt">③ 等结果</div>
+          <div class="gdim">技术处理完之后，这里会显示<b>「技术说已经处理好了，你去试试」</b>。
+            你去试，好了就点确认；没好就点"还没好"，会打回给技术。</div></div>
+        <div class="gwarn">★ <b>为什么要你确认</b>：技术说修好了、
+          但改的地方和你遇到的不是一回事 —— 这种事很常见。
+          你不点头，这个问题就不算完。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="p-issue">
+  <div class="grid">
+    <div class="col">
+      <div class="card">
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+          <h2 style="margin:0">问题处理台</h2>
+          <span class="gdim">技术在这边处理客服和销售报上来的问题</span>
+        </div>
+        <div class="sub" style="margin-top:7px">按 <b>状态 → 严重程度</b> 排。
+          <b>自己说修好了不算数</b> —— 要报问题的人点「好了」才算关闭。</div>
+        <div class="livestats" id="istats"></div>
+        <div class="btns" style="margin-top:12px">
+          <div class="tierrow" style="flex:1;max-width:420px" id="ifilter"></div>
+        </div>
+      </div>
+      <div id="ilist"></div>
+    </div>
+    <div class="col side">
+      <div class="card">
+        <h2>这边怎么用</h2>
+        <div class="sub">客服和销售在系统里看到不对的地方，点右下角红按钮报上来。</div>
+        <div class="sbox"><div class="bt">① 看问题</div>
+          <div class="gdim">左边一条条点开，能看到<b>系统自动附的现场</b> ——
+            哪句问答、AI 判成了哪一档、检索质量、命中了什么资料、最近的报错。</div></div>
+        <div class="sbox"><div class="bt">② 接手并修</div>
+          <div class="gdim">点「我来处理」，状态变处理中，别人就知道有人在看了。</div></div>
+        <div class="sbox"><div class="bt">③ 填解决方案并提交</div>
+          <div class="gdim">写清楚<b>改了什么</b>，选个类型（知识库缺资料 / 代码 bug / 配置问题…）。
+            提交后状态是「已解决（等确认）」，<b>不是关闭</b>。</div></div>
+        <div class="sbox"><div class="bt">④ 等报的人确认</div>
+          <div class="gdim">他说「好了」→ 关闭。他说「还没好」→ <b>打回处理中</b>，
+            并带上他的补充说明。</div></div>
+        <div class="gwarn">★ <b>为什么非要报的人确认</b>：技术说修好了、
+          但改的地方和用户遇到的问题不是一回事 —— 这种事极其常见。
+          报的人不点头，这个问题就不算完。</div>
+      </div>
+      <div class="card">
+        <h2 style="display:none">我报的</h2>
+        <div class="sub">报问题的人看这里，能看到自己的问题处理到哪一步了。</div>
+        <div class="frow"><input type="text" id="mineWho" placeholder="填你的名字，只看自己报的"
+          oninput="loadIssues()"></div>
+        <div id="imine" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="p-live">
+  <div class="grid">
+    <div class="col">
+      <div class="card">
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+          <h2 style="margin:0">正在发生什么</h2>
+          <span class="gdim" id="livemeta"></span>
+          <span class="gdim" style="margin-left:auto" id="liveago"></span>
+        </div>
+        <div class="sub" style="margin-top:7px">★ 这里面<b>包含 AI 自动回答的那些</b>，不只是转人工的 ——
+          出事通常不是转人工时出的，而是自动发出去的那一句。</div>
+        <div id="livestats" class="livestats"></div>
+      </div>
+      <div id="livelist"></div>
+    </div>
+    <div class="col side">
+      <div class="card">
+        <h2>怎么看这个页面</h2>
+        <div class="sub">打开模拟官网，把控制台<b>另开一页</b>放在旁边，就能一边问一边看。</div>
+        <div class="btns" style="flex-direction:column;align-items:stretch">
+          <a href="site.html" target="_blank" rel="noopener" style="display:block;text-align:center;
+             background:var(--blue);color:#fff;padding:10px;border-radius:9px;font-size:13.5px;font-weight:650">
+            另开一页：模拟官网 ↗</a>
+        </div>
+        <div class="gdim" style="margin-top:11px;line-height:1.8">
+          在官网右下角问一句 → 切到这个页面 → 会看到<br>
+          · 这个访客的 id 和完整对话<br>
+          · AI 判成了哪一档、为什么<br>
+          · 检索质量、命中了什么<br>
+          · 是自动发了，还是转人工了
+        </div>
+        <div class="btns" style="margin-top:14px">
+          <label style="display:flex;gap:6px;align-items:center;margin:0;font-weight:400;font-size:12.5px">
+            <input type="checkbox" id="autorefresh" checked> 自动刷新（5 秒）</label>
+        </div>
+      </div>
+      <div class="card">
+        <h2>数字</h2>
+        <div class="sub">最近这个窗口内的。</div>
+        <div id="livetotals"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="page" id="p-ch">
+  <div class="grid">
+    <div class="col" id="chlist"></div>
+    <div class="col side">
+      <div class="card">
+        <h2>怎么选</h2>
+        <div class="sub">四个渠道的能力和门槛差别很大，选错了会卡在部署上。</div>
+        <div class="sbox"><div class="bt">飞书 · 最省事</div>
+          <div class="gdim">支持长连接，<b>不需要公网地址、不需要证书</b>。私有化部署的首选。</div></div>
+        <div class="sbox"><div class="bt">企业微信 · 必须公网</div>
+          <div class="gdim">回调<b>强制要求公网 HTTPS</b>，不能用 IP:端口、不能自签证书。
+            服务器在内网就接不了。</div></div>
+        <div class="sbox"><div class="bt">网页挂件 · 零门槛</div>
+          <div class="gdim">不需要任何平台账号。一行 script 贴上去就行。</div></div>
+        <div class="gwarn">★ <b>如果客户服务器在内网</b>：先推飞书。企微要么配公网入口，
+          要么用内网穿透 —— 后者要跟客户说清风险（穿透服务的稳定性不归我们管）。</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="page" id="p-model">
+  <div class="grid">
+    <div class="col">
+      <div class="card">
+        <h2>模型配置</h2>
+        <div class="sub">改完<b>立即生效</b>，不用重启。<b>不填 Key 也能用</b> —— 只是 AI 相关功能会降级成"直接把查到的原文给你"，不会假装答了。</div>
+        <div id="modelForm"></div>
+        <div class="btns" style="margin-top:14px">
+          <button onclick="saveModel()">保存</button>
+          <button class="ghost" onclick="testModel()">测一下能不能通</button>
+          <span class="msg" id="modelMsg"></span>
+        </div>
+        <div id="modelOut" style="margin-top:12px"></div>
+      </div>
+    </div>
+    <div class="col side">
+      <div class="card">
+        <h2>降级顺序</h2>
+        <div class="sub">AI 用不了的时候<b>不是直接崩</b>，而是一档一档往下退。</div>
+        <div class="sbox"><div class="bt">第 1 档 · 主模型</div><div class="gdim">就是左边配的那个</div></div>
+        <div class="sbox"><div class="bt">第 2 档 · 便宜档模型</div><div class="gdim">同厂商的便宜模型，数据条款一致</div></div>
+        <div class="sbox"><div class="bt">第 3 档 · 不调模型，原文直出</div><div class="gdim">零成本、零编造风险，用户至少拿到信息</div></div>
+        <div class="sbox"><div class="bt">第 4 档 · 只转人工</div><div class="gdim">并告诉用户"已转人工"，不让他干等</div></div>
+        <div class="gwarn">★ <b>刻意不把「免费模型」放进来</b>：很多免费模型的条款允许用输入训练，而这里的输入是公司内部资料和客户对话 —— 那是合规红线，比省下的那点 API 费用严重得多。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="p-learn">
+  <div class="grid">
+    <div class="col">
+      <div class="card">
+        <h2>学到的东西，验证过了吗</h2>
+        <div class="sub">学到的先攒着，<b>跑一遍评测确认没变差才生效</b>。不验证的自我进化是放大器 —— 一条噪音会把之后所有回答都带偏。</div>
+        <div id="gate"><div class="empty">加载中…</div></div>
+      </div>
+      <div class="card">
+        <h2>学到的说话方式</h2>
+        <div class="sub">人工改过的草稿会自动变成范本，下次就照这个说。</div>
+        <div id="styles"><div class="empty">还没有</div></div>
+      </div>
+    </div>
+    <div class="col side">
+      <div class="card">
+        <h2>被拦下的</h2>
+        <div class="sub">验证后会让准确率下降的会被拦下并存证 —— <b>看得见才不会误以为"系统什么都没学到"</b>。</div>
+        <div id="rejected"><div class="empty">还没有</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="p-gov">
+  <div class="grid">
+    <div class="col">
+      <div class="card">
+        <h2>自动化档位</h2>
+        <div class="sub">选一个词就行，不用调数字。<b>下面会显示换档位的后果。</b></div>
+        <div class="tierrow" id="tiers"></div>
+        <div id="preview" style="margin-top:12px"></div>
+      </div>
+      <div class="card">
+        <h2>影子模式</h2>
+        <div class="sub">开了之后 AI 照常算但<b>一条都不发</b>，人工照常回。跑一段时间后，拿「AI 会怎么答」和「人实际怎么答」对照 —— 这是让你敢开自动的唯一路径。</div>
+        <div id="shadowbody"></div>
+      </div>
+    </div>
+    <div class="col side">
+      <div class="card">
+        <h2>急停</h2>
+        <div class="sub">按下去，<b>所有自动发送立刻停止</b>，全部转人工。出事时那个能按的按钮 —— 它存在本身，才让人敢开自动。</div>
+        <div id="stopbody"><div class="empty">加载中…</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="page" id="p-ho">
+  <div class="ho">
+    <div class="holist">
+      <div class="card" style="margin-bottom:12px">
+        <h2>待处理 <span class="tag esc" id="hoCount">0</span></h2>
+        <div class="sub" style="margin:0">AI 答不了的会落到这里</div>
+      </div>
+      <div id="holist"><div class="empty">没有待处理的</div></div>
+    </div>
+    <div class="homain">
+      <div class="card"><div id="hoDetail"><div class="empty">左边选一条</div></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ★ 子路径部署支持：算出部署前缀。本地根路径 → ''；/demo/kefu/ 下 → '/demo/kefu'。
+//   ★ 页面内部原来用 <a href="/workbench.html"> 跳转，在子路径下会打到
+//     /workbench.html → 404（用户反馈"跳转会报错"）。
+//     现在改成**单页面 + 标签页切换**，从根上没有了跳转。
+window.__BASE__ = new URL('.', location.href).pathname.replace(/\/$/, '');
+const API = (p) => window.__BASE__ + p;
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const esc = (s) => (s == null ? '' : String(s)).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function api(p, o) {
+  const r = await fetch(API(p), o);
+  if (!r.ok) throw new Error((await r.text()).slice(0, 300));
+  return r.json();
+}
+const post = (p, b) => api(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b || {}) });
+// ★★ 所有跨函数共享的状态，**必须在这里统一声明**。
+//   第一版把它们写在各自的模块旁边（哪个功能用到就写哪儿），
+//   结果启动时 switchTab(hash) 会调用某个 load 函数，
+//   而它用的 `let xxx` 还写在后面 —— **暂时性死区**直接抛错：
+//     `Cannot access 'iFilter' before initialization`
+//   ★ 表现是"这个页面白屏/什么都没渲染"，但控制台不打开根本看不到原因。
+//   ★ 教训：`let`/`const` 的声明位置**会影响运行**（不像 `var`），
+//     所以"按功能就近声明"这个习惯在有顶层调用时会出问题。
+let IM = null;            // 问题表单的选项缓存
+let reportCtx = {};       // 这次上报要带的现场
+let iCur = null;          // 当前打开的问题
+let iFilter = 'open';     // 问题列表的筛选
+let hoItems = [], hoCur = null;   // 人工队列
+let liveTimer = null;     // 实时页的定时器
+
+// ═══ 标签页 ═══
+// ★★ 页面分两个角色：
+//    agent（客服/销售）—— 只用业务功能，别让他们看到模型和治理，会懵
+//    dev  （技术）     —— 问题处理台 + 全部配置
+//    ★ 「问题」两边都有，但**看到的东西不一样**：
+//      客服看"我报的（进度到哪了）"，技术看"处理台（干活的地方）"。
+const ROLE = document.body.dataset.role || 'agent';
+const ALL_TABS = [
+  ['live', '实时', 'agent'], ['chat', '试一句', 'agent'], ['ho', '人工', 'agent'],
+  ['mytodo', '我的问题', 'agent'],
+  ['issue', '问题处理台', 'dev'], ['kb', '知识库', 'dev'], ['ch', '渠道', 'dev'],
+  ['model', '模型', 'dev'], ['learn', '学习', 'dev'], ['gov', '治理', 'dev'],
+];
+const TABS = ALL_TABS.filter((x) => x[2] === ROLE).map((x) => [x[0], x[1]]);
+let curTab = 'chat';
+$('#nav').innerHTML = TABS.map(([k, n]) => `<button data-k="${k}">${n}${k === 'ho' ? '<span class="bdg zero" id="navBadge">0</span>' : k === 'issue' ? '<span class="bdg zero" id="navBadge2">0</span>' : ''}</button>`).join('');
+
+/** 刷新「人工」标签上的角标。
+ *  ★ 每 20 秒查一次（不跟着提问走），因为**用户可能一直待在别的标签页**，
+ *    而新的人工请求随时会来。不主动提示，用户永远不知道有活要干。
+ */
+async function refreshBadge() {
+  try {
+    const d = await api('/api/handover');
+    const n = d.counts.open || 0;
+    const b = $('#navBadge');
+    if (!b) return;
+    b.textContent = n > 99 ? '99+' : n;
+    b.classList.toggle('zero', n === 0);
+  } catch (e) {}
+}
+refreshBadge();
+$('#nav').onclick = (e) => { const b = e.target.closest('button[data-k]'); if (b) switchTab(b.dataset.k); };
+function switchTab(k) {
+  curTab = k;
+  $$('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.k === k));
+  $$('.page').forEach((p) => p.classList.toggle('on', p.id === 'p-' + k));
+  try { history.replaceState(null, '', '#' + k); } catch (e) {}
+  if (k === 'kb') loadDocs();
+  if (k === 'live') loadLive();
+  if (k === 'issue') loadIssues();
+  if (k === 'mytodo') loadMyTodo();
+  if (k === 'ch') loadChannels();
+  if (k === 'model') loadModel();
+  if (k === 'learn') { loadGate(); loadStyles(); loadRejected(); }
+  if (k === 'gov') { loadTiers(); loadGov(); }
+  if (k === 'ho') loadHandover();
+}
+switchTab((location.hash || '#issue').slice(1));
+
+// ★ 监听地址栏的 # 变化（只改 hash 不会重新加载页面）
+window.addEventListener('hashchange', () => {
+  const k = (location.hash || '').slice(1);
+  if (k && k !== curTab) switchTab(k);
+});
+// ★ 顶部那个入口按角色指向对面那个页面
+if (ROLE === 'dev') {
+  const sw = document.getElementById('roleSwitch');
+  sw.textContent = '← 回客服台';
+  sw.href = 'index.html';
+}
+
+// ═══ 试一句 ═══
+const SAMPLES = ['报销单咋填啊', '上班时间是几点', '年假能休几天', '住宿费一晚能报多少', '你们能便宜点吗'];
+$('#hints').innerHTML = SAMPLES.map((s) => `<span class="hint">${s}</span>`).join('');
+$('#hints').onclick = (e) => { if (e.target.classList.contains('hint')) { $('#q').value = e.target.textContent; ask(); } };
+$('#go').onclick = ask;
+$('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
+const DEC = { auto: ['auto', '自动发送'], draft: ['draft', 'AI 起草，待确认'], escalate: ['esc', '转人工'], shadow: ['draft', '影子模式（未发送）'] };
+
+async function ask() {
+  const q = $('#q').value.trim(); if (!q) return;
+  $('#go').disabled = true;
+  $('#out').innerHTML = '<div class="card"><div class="empty">正在查…</div></div>';
+  try {
+    const d = await post('/api/ask', {
+      question: q,
+      is_internal: $('input[name=who]:checked').value === 'internal',
+      use_llm: $('#uselm').checked,
+    });
+    render(q, d); loadPanels();
+  } catch (e) {
+    $('#out').innerHTML = `<div class="card"><div class="msg err">出错了：${esc(e.message)}</div></div>`;
+  } finally { $('#go').disabled = false; }
+}
+function render(q, d) {
+  const [cls, label] = DEC[d.decision] || ['info', d.decision];
+  const hits = (d.hits || []).map((h) => `<div class="hit"><div class="t2">${esc(h.title)} ${h.stale ? '<span class="stale">（内容较旧）</span>' : ''}</div><div class="s">相关度 ${h.score}</div><div class="x">${esc(h.text)}</div></div>`).join('') || '<div class="empty">没有命中任何资料</div>';
+  // ★ 如果答案里已经带了「〔出处：…〕」，就**不要再显示一行出处**。
+  //   第一版是"把已出现在正文里的过滤掉，剩下的显示出来"，
+  //   结果正文写的是《交期与起订量》，下面却显示《公司简介》——
+  //   因为命中了 2 篇，被过滤掉一篇后剩下另一篇。
+  //   看起来就像"AI 引用错了资料"，实际只是显示逻辑的问题。
+  const hasInlineCite = /[〔\[]出处[：:]/.test(d.text);
+  const cites = hasInlineCite ? [] : (d.citations || []).filter(Boolean);
+  $('#out').innerHTML = `<div class="card">
+    <div class="bubble me"><div class="t">用户</div>${esc(q)}</div>
+    <div class="bubble ai"><div class="t">AI客服</div><div style="white-space:pre-wrap">${esc(d.text)}</div>
+      ${cites.length ? `<div class="s" style="margin-top:7px;color:var(--blue)">出处：${cites.map(esc).join('、')}</div>` : ''}</div>
+    <div class="verdict">
+      <span class="tag ${cls}">${label}</span>
+      <span class="tag info">检索质量 ${d.quality}</span>
+      ${d.intent ? `<span class="tag esc">命中「${esc(d.intent)}」</span>` : ''}
+      ${d.degraded ? '<span class="tag draft">已降级</span>' : ''}
+    </div>
+    <div class="why"><b>为什么这么判：</b>${esc(d.reason)}
+      ${d.rewrite && d.rewrite !== q ? `<br><b>改写后的检索词：</b>${esc(d.rewrite)}` : ''}
+      ${d.problems && d.problems.length ? `<br><b>出站检查：</b>${d.problems.map(esc).join('；')}` : ''}</div>
+    <details><summary>看命中的原文（${(d.hits || []).length} 条）</summary>${hits}</details>
+    <div class="fbrow"><input type="text" id="fix" placeholder="如果这句不对，把更好的说法填这里 —— 填了它就会学">
+      <button onclick="submitEdit(${d.qa_log_id})">记下</button>
+      <button class="ghost" onclick="fb(${d.qa_log_id},'accept')">这句可以</button>
+      <button class="ghost" onclick="fb(${d.qa_log_id},'reject')">没用</button></div>
+  </div>`;
+}
+async function submitEdit(id) {
+  const v = $('#fix').value.trim(); if (!v) return;
+  await post(`/api/feedback/${id}/edit`, { final_text: v });
+  $('#fix').value = ''; $('#fix').placeholder = '已记下（要先过评测才生效）';
+  loadGate();
+}
+async function fb(id, kind) { await api(`/api/feedback/${id}/${kind}`, { method: 'POST' }); loadPanels(); }
+
+// ═══ 面板 ═══
+async function loadPanels() {
+  try {
+    const h = await api('/api/health');
+    $('#stat').innerHTML = `资料 <b>${h.docs}</b> 篇 · 片段 <b>${h.chunks}</b> · 问答 <b>${h.qa_logs}</b> · 模型 <b style="color:${h.model_ready ? 'var(--green)' : 'var(--amber)'}">${h.model_ready ? '就绪' : '未配'}</b>`;
+    const r = await api('/api/learning/report');
+    $('#reasons').innerHTML = !r.by_reason.length ? '<div class="empty">还没有失败记录</div>' :
+      r.by_reason.map((x) => `<div class="reason"><div class="r1"><span class="lb">${esc(x.label)}</span><span class="ct">${x.count} 条</span></div><div class="fx">→ ${esc(x.fix)}</div></div>`).join('') +
+      `<div class="fx" style="margin-top:9px">共 ${r.total} 条问答，自动/直接可用 ${r.ok} 条（${(r.rate * 100).toFixed(0)}%）</div>`;
+    const g = await api('/api/learning/gaps');
+    $('#gaps').innerHTML = !g.items.length ? '<div class="empty">还没有答不上来的</div>' :
+      g.items.slice(0, 10).map((x) => `<div class="gap"><div><span class="n">${x.occurrences} 次</span>${esc(x.sample_question)}</div><div class="m">最后一次 ${(x.last_seen_at || '').slice(0, 16).replace('T', ' ')}</div></div>`).join('');
+  } catch (e) {}
+}
+
+// ═══ 知识库 ═══
+const drop = $('#drop');
+drop.onclick = () => $('#file').click();
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files); };
+$('#file').onchange = (e) => upload(e.target.files);
+
+async function upload(files) {
+  if (!files || !files.length) return;
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  $('#upout').innerHTML = `<div class="gdim">正在上传 ${files.length} 个文件…</div>`;
+  try {
+    const r = await api('/api/kb/upload', { method: 'POST', body: fd });
+    let h = `<div class="gok">导入 ${r.added} 篇</div>`;
+    if (r.documents.length) h += `<div class="gdim" style="margin-top:5px">${r.documents.map((d) => esc(d.name) + '（' + d.chunks + ' 块）').join('<br>')}</div>`;
+    if (r.skipped.length) h += `<div class="gwarn">跳过了 ${r.skipped.length} 个：<br>${r.skipped.map(esc).join('<br>')}</div>`;
+    $('#upout').innerHTML = h;
+    loadDocs(); loadPanels();
+  } catch (e) { $('#upout').innerHTML = `<div class="msg err">上传失败：${esc(e.message)}</div>`; }
+  $('#file').value = '';
+}
+async function doPaste() {
+  const title = $('#pasteTitle').value.trim(), body = $('#pasteBody').value.trim();
+  if (!title || !body) { $('#pasteMsg').className = 'msg err'; $('#pasteMsg').textContent = '标题和内容都要填'; return; }
+  try {
+    const r = await post('/api/kb/paste', { title, content: body, permission: $('#pastePerm').value });
+    $('#pasteMsg').className = 'msg ok'; $('#pasteMsg').textContent = `导入了（${r.chunks} 块）`;
+    $('#pasteTitle').value = ''; $('#pasteBody').value = '';
+    loadDocs(); loadPanels();
+  } catch (e) { $('#pasteMsg').className = 'msg err'; $('#pasteMsg').textContent = e.message; }
+}
+async function loadDocs() {
+  try {
+    const d = await api('/api/kb/docs');
+    $('#docCount').textContent = d.items.length;
+    $('#docs').innerHTML = !d.items.length ? '<div class="empty">还没有，从左边导一份进来</div>' :
+      d.items.map((x) => `<div class="style"><div class="q">${esc(x.title || x.source_ref)}</div>
+        <div class="d">${esc(x.source)} · ${x.chunks} 块 · ${x.permission === 'internal' ? '仅内部' : '可对客户说'} · <a href="javascript:delDoc('${encodeURIComponent(x.id)}')">删除</a></div></div>`).join('');
+  } catch (e) { $('#docs').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+async function delDoc(id) {
+  if (!confirm('删掉这篇？删了它就不会再被回答用到。')) return;
+  await fetch(API('/api/kb/docs?doc_id=' + id), { method: 'DELETE' });
+  loadDocs(); loadPanels();
+}
+async function loadAudit() {
+  try {
+    const a = await api('/api/kb/audit');
+    let h = `<div class="gdim">共 ${a.total} 篇，干净 ${a.clean} 篇`;
+    if (a.severe_count) h += ` · <b style="color:var(--amber)">${a.severe_count} 篇标着可公开但有敏感内容</b>`;
+    h += '</div>';
+    if (a.risky.length) {
+      h += `<div class="gwarn" style="margin-top:9px">${esc(a.advice).replace(/\n/g, '<br>')}</div>`;
+      h += a.risky.slice(0, 12).map((r) => `<div class="style"><div class="q">${r.severe ? '★ ' : ''}${esc(r.title)} <span class="gdim">（${r.permission === 'internal' ? '仅内部' : '可对客户说'}）</span></div><div class="d">${r.flags.map(esc).join('；')}</div></div>`).join('');
+    } else h += '<div class="gok" style="margin-top:8px">没发现敏感内容</div>';
+    $('#audit').innerHTML = h;
+  } catch (e) { $('#audit').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+async function syncDir() {
+  const p = $('#dirPath').value.trim(); if (!p) return;
+  $('#apiOut').innerHTML = '<div class="gdim">同步中…</div>';
+  try {
+    const r = await post('/api/kb/sync', { path: p });
+    $('#apiOut').innerHTML = `<div class="gok">新增 ${r.added} · 更新 ${r.updated} · 未变 ${r.unchanged} · 删除 ${r.deleted}</div>` +
+      (r.skipped && r.skipped.length ? `<div class="gwarn">跳过：${r.skipped.map(esc).join('；')}</div>` : '');
+    loadDocs(); loadPanels();
+  } catch (e) { $('#apiOut').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+async function syncUrls() {
+  const urls = $('#urls').value.split('\n').map((s) => s.trim()).filter(Boolean);
+  if (!urls.length) return;
+  $('#apiOut').innerHTML = '<div class="gdim">抓取中…</div>';
+  try {
+    const r = await post('/api/kb/sync-urls', { urls });
+    $('#apiOut').innerHTML = `<div class="gok">新增 ${r.added} · 未变 ${r.unchanged}</div>` +
+      (r.skipped.length ? `<div class="gwarn">抓不到的：${r.skipped.map(esc).join('；')}</div>` : '');
+    loadDocs(); loadPanels();
+  } catch (e) { $('#apiOut').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+async function probeApi() {
+  const u = $('#apiUrl').value.trim(); if (!u) return;
+  $('#apiMsg').textContent = '体检中…';
+  const r = await post('/api/kb/probe-api', { base_url: u });
+  $('#apiMsg').textContent = '';
+  $('#apiOut').innerHTML = r.ok
+    ? `<div class="gok">接口对得上，能拉到 ${r.count} 条。字段：${(r.fields || []).join(', ')}</div>`
+    : `<div class="gwarn"><b>接不上，原因：</b><br>${esc(r.error || '未知')}</div>`;
+}
+async function syncApi() {
+  const u = $('#apiUrl').value.trim(); if (!u) return;
+  $('#apiMsg').textContent = '同步中…';
+  const r = await post('/api/kb/sync-api', { base_url: u });
+  $('#apiMsg').textContent = '';
+  $('#apiOut').innerHTML = `<div class="${r.added ? 'gok' : 'gwarn'}">新增 ${r.added} · 未变 ${r.unchanged}${r.connector_error ? '<br>接口报错：' + esc(r.connector_error) : ''}</div>`;
+  loadDocs(); loadPanels();
+}
+
+
+// ══════════════════════════════════════════════════════════════════════
+// ★★ 问题上报
+//   报事侧（客服/销售，不懂技术）和处理侧（技术）在同一套代码里，
+//   靠"谁在看"来区分 —— 报的人从红按钮进来，技术从「问题」标签进来。
+// ══════════════════════════════════════════════════════════════════════
+
+async function issueMeta() {
+  if (!IM) IM = await api('/api/issues/meta');
+  return IM;
+}
+
+// ── 报事侧 ────────────────────────────────────────────────────────────
+async function openReport(qaId, userRef, preTitle) {
+  const m = await issueMeta();
+  reportCtx = { qa_log_id: qaId || null, user_ref: userRef || null, page: curTab };
+  $('#kindList').innerHTML = m.kinds.map((k, i) => `
+    <div class="kind ${i === 0 ? 'on' : ''}" data-k="${k.key}">
+      <div class="k1">${esc(k.label)}</div><div class="k2">${esc(k.hint)}</div></div>`).join('');
+  $('#sevList').innerHTML = m.severities.map((s, i) => `
+    <div class="sev ${s.key === 'normal' ? 'on' : ''}" data-k="${s.key}">
+      ${esc(s.label)}<div class="s2">${esc(s.hint)}</div></div>`).join('');
+  $('#kindList').onclick = (e) => {
+    const b = e.target.closest('.kind'); if (!b) return;
+    $$('#kindList .kind').forEach((x) => x.classList.toggle('on', x === b));
+  };
+  $('#sevList').onclick = (e) => {
+    const b = e.target.closest('.sev'); if (!b) return;
+    $$('#sevList .sev').forEach((x) => x.classList.toggle('on', x === b));
+  };
+  $('#isTitle').value = preTitle || '';
+  $('#isDetail').value = '';
+  $('#isMsg').textContent = '';
+  // ★ 告诉报的人"系统会附上什么" —— 他才知道自己不用去翻日志
+  $('#isAttach').innerHTML = qaId
+    ? '✅ 系统会自动附上：<b>这条问答的完整记录</b>（AI 判成了哪一档、检索质量、命中了哪些资料）、'
+      + '这个用户最近的几轮对话、以及最近的服务端报错。'
+    : 'ℹ️ 这次没有指定具体问答，系统会附上最近的服务端报错。'
+      + '<br>★ 如果你是从某条回答点进来的，附的信息会全得多。';
+  const who = localStorage.getItem('kefu_who') || '';
+  $('#isReporter').value = who;
+  $('#reportModal').classList.add('on');
+}
+function closeReport() { $('#reportModal').classList.remove('on'); }
+
+async function submitIssue() {
+  const title = $('#isTitle').value.trim();
+  if (!title) { $('#isMsg').className = 'msg err'; $('#isMsg').textContent = '一句话说清楚要填'; return; }
+  const kind = ($('#kindList .kind.on') || {}).dataset?.k || 'other';
+  const severity = ($('#sevList .sev.on') || {}).dataset?.k || 'normal';
+  const who = $('#isReporter').value.trim();
+  localStorage.setItem('kefu_who', who);
+  $('#isMsg').className = 'msg'; $('#isMsg').textContent = '提交中…';
+  try {
+    const r = await post('/api/issues', {
+      title, kind, severity, reporter: who, reporter_role: $('#isRole').value,
+      detail: $('#isDetail').value.trim(), ...reportCtx,
+    });
+    $('#isMsg').className = 'msg ok';
+    $('#isMsg').textContent = '已提交（#' + r.id + '）· ' + r.attached;
+    refreshIssueBadge();
+    setTimeout(closeReport, 1600);
+  } catch (e) { $('#isMsg').className = 'msg err'; $('#isMsg').textContent = e.message; }
+}
+
+// ── 「人工」和「实时」页里，每一条都能直接报 ─────────────────────────
+// ★ 这个入口很关键：客服看到一条答得不对，就地就能报，
+//   不用先记住是哪一句、再去别的地方填表。
+//
+// ★★ 注意 HTML 属性的引号！
+//   第一版写成 onclick="openReport(64, "web-abc", "问题")" ——
+//   JSON.stringify 产生的是**双引号**，而属性也是双引号界定的，
+//   于是属性在第一个双引号处就被截断了，剩下的变成散落的假属性。
+//   后果是**按钮看起来完全正常，但点了没反应**（实测踩到，很难一眼看出）。
+//   修法：整个 onclick 用**单引号**界定，内部的 JSON 双引号就不冲突。
+function reportBtnFor(qaId, userRef, title) {
+  const args = [qaId == null ? 'null' : String(qaId),
+                JSON.stringify(userRef || ''),
+                JSON.stringify((title || '').slice(0, 60))].join(',');
+  return `<a href="javascript:void(0)" onclick='openReport(${args})'`
+    + ` style="font-size:11px;color:var(--red);margin-left:8px">⚠ 这条不对</a>`;
+}
+
+// ── 处理侧 ────────────────────────────────────────────────────────────
+async function loadIssues() {
+  try {
+    const d = await api('/api/issues?status=' + iFilter);
+    const c = d.counts;
+    $('#istats').innerHTML = `
+      <div><b style="color:var(--red)">${c.new}</b><span>待处理</span></div>
+      <div><b style="color:var(--amber)">${c.working}</b><span>处理中</span></div>
+      <div><b style="color:var(--blue)">${c.wait_ack}</b><span>等报的人确认</span></div>
+      <div><b style="color:var(--green)">${c.resolved}</b><span>已解决</span></div>`;
+    $('#ifilter').innerHTML = [['open', '待办'], ['all', '全部'], ['resolved', '已解决'], ['closed', '已关闭']]
+      .map(([k, l]) => `<div class="tierbtn ${iFilter === k ? 'on' : ''}" data-k="${k}">${l}</div>`).join('');
+    $('#ifilter').onclick = (e) => {
+      const b = e.target.closest('.tierbtn'); if (!b) return;
+      iFilter = b.dataset.k; loadIssues();
+    };
+
+    $('#ilist').innerHTML = !d.items.length
+      ? '<div class="card"><div class="empty">没有待处理的问题</div></div>'
+      : d.items.map((x) => `
+        <div class="isum ${iCur && iCur.id === x.id ? 'on' : ''}" onclick="openIssue(${x.id})">
+          <div class="ih">
+            <span class="ib ${x.status}">${esc(x.status_label)}</span>
+            <span class="ib ${x.severity}">${esc(x.severity_label)}</span>
+            <span class="it">${esc(x.title)}</span>
+          </div>
+          <div class="im">${esc(x.kind_label)} · ${esc(x.reporter || '匿名')}${x.reporter_role ? '（' + esc(x.reporter_role) + '）' : ''}
+            · ${(x.created_at || '').slice(5, 16).replace('T', ' ')}
+            ${x.assignee ? ' · ' + esc(x.assignee) + ' 在看' : ''}
+            ${x.reporter_ack === 'no' ? ' · <b style="color:var(--red)">报的人说还没好：' + esc(x.reporter_note || '') + '</b>' : ''}
+          </div>
+        </div>`).join('');
+    refreshIssueBadge();
+
+    // 右侧"我报的"
+    const mine = $('#mineWho').value.trim();
+    if (mine) {
+      const md = await api('/api/issues?mine=' + encodeURIComponent(mine));
+      $('#imine').innerHTML = !md.items.length ? '<div class="empty">你还没报过问题</div>' :
+        md.items.slice(0, 10).map((x) => `<div class="style">
+          <div class="q"><span class="ib ${x.status}">${esc(x.status_label)}</span> ${esc(x.title)}</div>
+          <div class="d">${x.status === 'resolved'
+            ? '<b style="color:var(--blue)">技术说已经处理好了，你去试试 —— 好了就点确认</b>'
+            : x.status === 'working' ? '技术在处理'
+            : x.status === 'closed' ? '已确认关闭'
+            : x.status === 'rejected' ? ('不是问题：' + esc(x.resolution || ''))
+            : '等待技术看'}</div></div>`).join('');
+    }
+  } catch (e) {
+    $('#ilist').innerHTML = `<div class="card"><div class="msg err">${esc(e.message)}</div></div>`;
+  }
+}
+
+async function openIssue(id) {
+  iCur = { id };
+  // ★★ 顺序很重要：**先把数据取完，再重绘列表，最后插详情**。
+  //   第一版是先 loadIssues() 再 await 数据 ——
+  //   而 loadIssues() 是异步的，它重写 #ilist 的时机可能**晚于**详情插入，
+  //   结果详情刚放进去就被列表重绘冲掉了。
+  //   表现是"点了没反应"（实测踩到）。这类"谁后写谁赢"的竞态，
+  //   修法永远是**把顺序固定下来**，而不是加延时。
+  const d = await api('/api/issues/' + id);
+  const ctx = d.context || {};
+  const qa = ctx.qa || {};
+  const m = await issueMeta();
+
+  // ★★ 自动附上的现场 —— 这是整个模块对技术最有价值的部分
+  let现场 = '';
+  if (qa.question) {
+    现场 = `<div class="icontext">
+      <div class="il">那一句问答</div>
+      <b>问：</b>${esc(qa.question)}${qa.rewrite && qa.rewrite !== qa.question ? `<br><span class="il">（改写成的检索词：${esc(qa.rewrite)}）</span>` : ''}
+      <br><b>AI 答：</b>${esc(qa.answer || '（没答）')}
+      <br><span class="il">判定 ${esc(qa.decision || '')}${qa.failure_reason ? ' · ' + esc(qa.failure_reason) : ''}
+        · 检索质量 ${qa.quality} · 耗时 ${qa.latency_ms || '—'}ms · ${qa.tokens || 0} tokens
+        · ${esc((qa.at || '').slice(5, 16).replace('T', ' '))}</span>
+    </div>`;
+  }
+  if ((ctx.hits || []).length) {
+    现场 += `<div class="icontext"><div class="il">检索命中的资料（技术最需要看的：是不是根本没找到）</div>` +
+      ctx.hits.map((h) => `<b>${esc(h.doc || '?')}</b>（相关度 ${h.score}）<br>${esc((h.text || '').slice(0, 150))}`).join('<hr style="border:none;border-top:1px dashed #E3E9F1;margin:7px 0">') +
+      `</div>`;
+  }
+  if ((ctx.conversation || []).length) {
+    现场 += `<div class="icontext"><div class="il">这个用户前后的对话（${ctx.conversation.length} 轮）</div>` +
+      ctx.conversation.map((c) => `<b>问：</b>${esc(c.q)}<br><span class="il">答：${esc((c.a || '').slice(0, 90))} · ${esc(c.decision || '')}</span>`).join('<br>') +
+      `</div>`;
+  }
+  if ((ctx.recent_errors || []).length) {
+    现场 += `<div class="icontext"><div class="il">最近的服务端报错</div>` +
+      ctx.recent_errors.map((e) => esc(typeof e === 'string' ? e : JSON.stringify(e))).join('<br>') + `</div>`;
+  }
+  if (!现场) 现场 = '<div class="icontext"><div class="il">这次没有自动附上现场信息</div>报的人没有指定具体问答。</div>';
+
+  // 技术操作区
+  let ops = '';
+  if (d.status === 'new') {
+    ops = `<div class="btns"><button onclick="takeIssue(${id})">我来处理</button>
+      <button class="ghost" onclick="rejectIssue(${id})">不是问题</button></div>`;
+  } else if (d.status === 'working') {
+    ops = `<div class="frow"><label>怎么解决的（写清楚改了什么）</label>
+        <textarea id="iRes" rows="3" placeholder="比如：知识库《售后服务承诺》第 3 条写的是 3 天，已改成 5 天"></textarea></div>
+      <div class="frow"><label>属于哪一类</label>
+        <select id="iResKind">${m.resolution_kinds.map((k) => `<option value="${k.key}">${esc(k.label)}</option>`).join('')}</select></div>
+      <div class="btns"><button onclick="resolveIssue(${id})">提交解决方案</button>
+        <button class="ghost" onclick="rejectIssue(${id})">不是问题</button>
+        <span class="msg" id="iMsg"></span></div>`;
+  } else if (d.status === 'resolved') {
+    ops = `<div class="aibar"><div class="at">✓ 技术已提交：${esc(d.resolution || '')}</div>
+      <div class="gdim">类型：${esc((m.resolution_kinds.find((k) => k.key === d.resolution_kind) || {}).label || '未填')}
+        · ${esc(d.assignee || '')} · ${esc((d.resolved_at || '').slice(5, 16).replace('T', ' '))}</div>
+      <div class="gdim" style="margin-top:9px">★ <b>等报问题的人确认</b>。
+        说「好了」才关闭；说「还没好」会打回给技术，并带上他的补充说明。</div></div>
+      <div class="btns" style="margin-top:11px">
+        <button onclick="ackIssue(${id},true)">报的人说：好了</button>
+        <button class="ghost" onclick="ackIssue(${id},false)">报的人说：还没好</button></div>`;
+  } else {
+    ops = `<div class="icontext"><div class="il">${d.status === 'closed' ? '已确认关闭' : '判定为不是问题'}</div>
+      ${esc(d.resolution || '')}
+      ${d.reporter_note ? `<br><span class="il">报的人补充：${esc(d.reporter_note)}</span>` : ''}</div>`;
+  }
+
+  // ★ 顺序固定：列表先重绘，详情后插 —— 否则会被列表重绘冲掉
+  await loadIssues();
+  $('#ilist').insertAdjacentHTML('afterbegin', `<div class="card" id="idetail">
+    <div style="display:flex;gap:14px;align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:11px">
+          <h2 style="margin:0">${esc(d.title)}</h2>
+          <span class="ib ${d.status}">${esc(d.status_label)}</span>
+          <span class="ib ${d.severity}">${esc(d.severity_label)}</span>
+          <span class="gdim">#${d.id} · ${esc(d.kind_label)} · 在「${esc(d.page || '—')}」报的</span>
+        </div>
+        <div class="icontext"><div class="il">报的人说</div>
+          <b>${esc(d.reporter || '匿名')}</b>${d.reporter_role ? '（' + esc(d.reporter_role) + '）' : ''}
+          ：${esc(d.detail || d.title)}
+          <br><span class="il">${esc((d.created_at || '').slice(5, 16).replace('T', ' '))}</span></div>
+        <div style="margin:4px 0 9px;font-size:12.5px;font-weight:650;color:var(--dim)">
+          —— 以下由系统自动附上，报的人没有填 ——</div>
+        ${现场}
+        ${ops}
+      </div>
+      <div style="width:220px;flex:none">
+        <div class="sbox"><div class="bt">状态</div><div class="gdim">${esc(d.status_label)}</div></div>
+        ${d.assignee ? `<div class="sbox"><div class="bt">谁在看</div><div class="gdim">${esc(d.assignee)}</div></div>` : ''}
+        <div class="btns"><button class="ghost" onclick="iCur=null;loadIssues()">收起</button></div>
+      </div>
+    </div></div>`);
+}
+
+async function takeIssue(id) { await post(`/api/issues/${id}/take`, { by: '技术' }); iCur = null; loadIssues(); }
+async function resolveIssue(id) {
+  const r = $('#iRes').value.trim();
+  if (!r) { $('#iMsg').className = 'msg err'; $('#iMsg').textContent = '要写清楚改了什么'; return; }
+  await post(`/api/issues/${id}/resolve`, { resolution: r, kind: $('#iResKind').value, by: '技术' });
+  iCur = null; loadIssues();
+}
+async function rejectIssue(id) {
+  const r = prompt('为什么说它不是问题？（★ 必须写 —— 不然报的人下次就不报了）', '');
+  if (!r) return;
+  await post(`/api/issues/${id}/reject`, { reason: r, by: '技术' });
+  iCur = null; loadIssues();
+}
+async function ackIssue(id, ok) {
+  let note = '';
+  if (!ok) { note = prompt('哪里还没好？补充说明会一起打回给技术', '') || ''; }
+  await post(`/api/issues/${id}/ack`, { ok, note });
+  iCur = null; loadIssues();
+}
+
+async function refreshIssueBadge() {
+  try {
+    const d = await api('/api/issues?status=open');
+    const n = d.counts.open + d.counts.wait_ack;
+    const b = $('#navBadge2');
+    if (!b) return;
+    b.textContent = n > 99 ? '99+' : n;
+    b.classList.toggle('zero', n === 0);
+  } catch (e) {}
+}
+
+// ═══ 我的问题（客服侧）═══
+async function loadMyTodo() {
+  const who = (($('#mineWho2') || {}).value || localStorage.getItem('kefu_who') || '').trim();
+  if ($('#mineWho2') && !$('#mineWho2').value && who) $('#mineWho2').value = who;
+  if (!who) {
+    $('#mytodoStats').innerHTML = '';
+    $('#mytodoList').innerHTML = '<div class="card"><div class="empty">填个名字，就能看到你报过的问题</div></div>';
+    return;
+  }
+  try {
+    const d = await api('/api/issues?mine=' + encodeURIComponent(who));
+    const n = (s) => d.items.filter((x) => x.status === s).length;
+    $('#mytodoStats').innerHTML =
+      '<div><b style="color:var(--red)">' + n('new') + '</b><span>等技术的看</span></div>' +
+      '<div><b style="color:var(--amber)">' + n('working') + '</b><span>技术在处理</span></div>' +
+      '<div><b style="color:var(--blue)">' + n('resolved') + '</b><span>★ 等你确认</span></div>' +
+      '<div><b style="color:var(--green)">' + n('closed') + '</b><span>已关闭</span></div>';
+    if (!d.items.length) {
+      $('#mytodoList').innerHTML = '<div class="card"><div class="empty">你还没报过问题</div></div>';
+      return;
+    }
+    $('#mytodoList').innerHTML = d.items.map((x) => {
+      const st = { new: ['new', '等技术的看'], working: ['working', '技术在处理'],
+                   resolved: ['resolved', '★ 等你确认'], closed: ['closed', '已关闭'],
+                   rejected: ['rejected', '不是问题'] }[x.status] || ['new', x.status];
+      return `<div class="card" style="padding:14px 18px">
+        <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+          <span class="ib ${st[0]}">${esc(st[1])}</span>
+          <b style="font-size:14px">${esc(x.title)}</b>
+          <span class="gdim" style="margin-left:auto">${(x.created_at || '').slice(5, 16).replace('T', ' ')}</span>
+        </div>
+        <div class="gdim" style="margin-top:7px">${esc(x.kind_label)} · ${esc(x.severity_label)}</div>
+        ${x.resolution ? `<div class="icontext" style="margin-top:10px"><div class="il">
+            ${x.status === 'rejected' ? '技术说这不是问题' : '技术说已经处理好了'}</div>
+            ${esc(x.resolution)}</div>` : ''}
+        ${x.status === 'resolved' ? `
+          <div class="aibar"><div class="at">你去试试，好了吗？</div>
+            <div class="gdim">★ 说「好了」才关闭；说「还没好」会打回给技术，并带上你的补充说明。</div></div>
+          <div class="btns" style="margin-top:11px">
+            <button onclick="myAck(${x.id},true)">好了，谢谢</button>
+            <button class="ghost" onclick="myAck(${x.id},false)">还没好</button></div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    $('#mytodoList').innerHTML = `<div class="card"><div class="msg err">${esc(e.message)}</div></div>`;
+  }
+}
+async function myAck(id, ok) {
+  let note = '';
+  if (!ok) note = prompt('哪里还没好？补充说明会一起打回给技术', '') || '';
+  await post(`/api/issues/${id}/ack`, { ok, note });
+  loadMyTodo();
+}
+
+// ═══ 实时监控 ═══
+const STS = { ai_handling: 'AI 在答', waiting_human: '等人工', just_escalated: '刚转人工' };
+
+async function loadLive() {
+  try {
+    const d = await api('/api/live?minutes=60');
+    const s = d.stats;
+    $('#livemeta').textContent = `最近 ${d.window_minutes} 分钟`;
+    $('#liveago').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    $('#livestats').innerHTML = `
+      <div><b>${s.active_sessions}</b><span>活跃会话</span></div>
+      <div><b>${s.questions}</b><span>收到问题</span></div>
+      <div><b style="color:var(--green)">${s.auto}</b><span>AI 自动答了</span></div>
+      <div><b style="color:var(--red)">${s.escalated}</b><span>转了人工</span></div>
+      <div><b style="color:var(--amber)">${s.waiting_human}</b><span>等人处理</span></div>`;
+    $('#livetotals').innerHTML = `
+      <div class="grow"><div><span class="gnum">${s.auto}</span> <span class="gdim">条 AI 自动发出</span></div></div>
+      <div class="gdim" style="line-height:1.9">
+        这些是<b>没有经过人</b>直接发给客户的。<br>
+        ★ 要盯的就是这些 —— 转人工的那些有人看着，不会有损失。
+      </div>`;
+
+    if (!d.sessions.length) {
+      $('#livelist').innerHTML = `<div class="card"><div class="empty">
+        最近 ${d.window_minutes} 分钟没有会话。<br>
+        <span style="font-size:12px">打开模拟官网问一句，这里就会出现。</span></div></div>`;
+      return;
+    }
+    $('#livelist').innerHTML = d.sessions.map((x) => `
+      <div class="sess">
+        <div class="sh">
+          <span class="sid">${esc(x.user_id)}</span>
+          <span class="st2 ${x.status}">${STS[x.status] || x.status}</span>
+          <span class="gdim">${esc(x.platform)} · 问了 ${x.turns} 次 · 自动 ${x.auto} / 转人工 ${x.escalated}</span>
+          <span class="sm">${(x.last_at || '').slice(11, 19)}</span>
+        </div>
+        <div class="sb">
+          ${x.recent.map((t) => `
+            <div class="tur ${t.decision || ''}">
+              <div class="tq">${esc(t.q)}</div>
+              ${t.a ? `<div class="ta">${esc(t.a)}</div>` : ''}
+              <div class="tm">
+                ${t.decision === 'auto' ? 'AI 自动发出' : t.decision === 'escalate' ? '转人工（没发给客户）' : t.decision || ''}
+                · 检索质量 ${t.quality ?? '—'}${t.why ? ' · ' + esc(t.why) : ''}
+                ${t.decision ? reportBtnFor(t.qa_id || null, x.user_id, t.q) : ''}
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    $('#livelist').innerHTML = `<div class="card"><div class="msg err">${esc(e.message)}</div></div>`;
+  }
+}
+
+function syncLiveTimer() {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  const on = $('#autorefresh');
+  if (on && on.checked) liveTimer = setInterval(() => { if (curTab === 'live') loadLive(); }, 5000);
+}
+
+// ═══ 渠道 ═══
+async function loadChannels() {
+  try {
+    const base = location.origin + (window.__BASE__ || '');
+    const d = await api('/api/channels/config?public_base=' + encodeURIComponent(base));
+    $('#chlist').innerHTML = d.channels.map((c) => `
+      <div class="card">
+        <div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+          <h2 style="margin:0">${esc(c.name)}</h2>
+          <span class="tag ${c.status === 'ready' ? 'auto' : c.configured ? 'auto' : 'draft'}">
+            ${c.status === 'ready' ? '已接通' : c.configured ? '已配置' : '待配置'}</span>
+        </div>
+        <div class="sub" style="margin-top:7px">${c.why}</div>
+        ${c.snippet ? `<div class="frow"><label>贴到网站里的代码</label>
+          <input type="text" readonly value="${esc(c.snippet)}" onclick="this.select()"></div>` : ''}
+        ${c.callback_url ? `<div class="frow"><label>回调地址（填进平台后台）</label>
+          <input type="text" readonly value="${esc(c.callback_url)}" onclick="this.select()"></div>` : ''}
+        ${c.fields.length ? c.fields.map((f) => `
+          <div class="frow ${f.secret ? 'sec' : ''}">
+            <label>${esc(f.label)}</label>
+            <input type="${f.secret ? 'password' : 'text'}" id="c_${c.key}_${f.key}"
+                   value="${esc(c.values[f.key] || '')}"
+                   placeholder="${f.secret ? '粘贴密钥（显示为星号表示已保存，原样提交表示不改）' : ''}">
+          </div>`).join('') : ''}
+        <details><summary>接入步骤（${c.steps.length} 步）</summary>
+          <ol style="margin:8px 0 0 18px;font-size:12.5px;color:#4A5A70;line-height:1.9">
+            ${c.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol></details>
+        ${c.fields.length ? `<div class="btns" style="margin-top:12px">
+          <button onclick="saveChannel('${c.key}')">保存</button>
+          <span class="msg" id="cmsg_${c.key}"></span></div>` : ''}
+      </div>`).join('');
+  } catch (e) { $('#chlist').innerHTML = `<div class="card"><div class="msg err">${esc(e.message)}</div></div>`; }
+}
+async function saveChannel(key) {
+  const spec = (await api('/api/channels/config')).channels.find((c) => c.key === key);
+  const values = {};
+  for (const f of spec.fields) { const el = $('#c_' + key + '_' + f.key); if (el) values[f.key] = el.value; }
+  const m = $('#cmsg_' + key);
+  m.className = 'msg'; m.textContent = '保存中…';
+  try {
+    const r = await post('/api/channels/config', { key, values });
+    m.className = 'msg ok'; m.textContent = r.changed.length ? `已保存（${r.changed.join(', ')}）` : '没有变化';
+    loadChannels();
+  } catch (e) { m.className = 'msg err'; m.textContent = e.message; }
+}
+
+// ═══ 模型 ═══
+async function loadModel() {
+  try {
+    const d = await api('/api/settings/model');
+    const src = (k) => d.config[k + '_source'] === 'database' ? '界面配置' : d.config[k + '_source'] === 'env' ? '环境变量（.env）' : '默认值';
+    $('#modelForm').innerHTML = d.fields.map((f) => `
+      <div class="frow ${f.secret ? 'sec' : ''}">
+        <label>${esc(f.desc)}</label>
+        <input type="${f.secret ? 'password' : 'text'}" id="m_${f.key}" value="${esc(d.config[f.key] || '')}">
+        <div class="hint">当前来自：${src(f.key)}${f.secret ? ' · <b>完整 Key 不会回传，星号原样提交表示「不改」</b>' : ''}</div>
+      </div>`).join('');
+  } catch (e) { $('#modelForm').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+async function saveModel() {
+  const patch = {};
+  for (const k of ['base_url', 'api_key', 'model', 'model_cheap']) { const el = $('#m_' + k); if (el) patch[k] = el.value; }
+  $('#modelMsg').className = 'msg'; $('#modelMsg').textContent = '保存中…';
+  try {
+    const r = await post('/api/settings/model', patch);
+    $('#modelMsg').className = 'msg ok';
+    $('#modelMsg').textContent = r.changed.length ? `已保存并生效（${r.changed.join(', ')}）` : '没有变化';
+    loadModel(); loadPanels();
+  } catch (e) { $('#modelMsg').className = 'msg err'; $('#modelMsg').textContent = e.message; }
+}
+async function testModel() {
+  $('#modelOut').innerHTML = '<div class="gdim">正在真调一次模型…</div>';
+  try {
+    const r = await post('/api/settings/model/test');
+    $('#modelOut').innerHTML = r.ok
+      ? `<div class="gok">✅ 通了。模型回的是「${esc(r.reply)}」，本次用了 ${r.tokens} tokens。</div>`
+      : `<div class="gwarn"><b>没通：</b>${esc(r.error || '')}${r.notes ? '<br>' + r.notes.map(esc).join('<br>') : ''}</div>`;
+  } catch (e) { $('#modelOut').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+// ═══ 学习 ═══
+async function loadGate() {
+  try {
+    const p = await api('/api/learning/pending');
+    const cs = await api('/api/learning/eval/cases');
+    const n = p.styles + p.synonyms;
+    let h = `<div class="grow"><div><span class="gnum">${n}</span> 条待验证 <span class="gdim">（风格 ${p.styles} · 同义词 ${p.synonyms}）</span></div><div class="gdim">评测集 ${cs.items.length} 条</div></div>`;
+    if (!cs.items.length) h += `<div class="gwarn">还没有评测集，无法验证。先点「从问答记录生成评测集」—— 它会从<b>已被确认可用</b>的回答里自动抽出要断言的事实。没有评测集，这个关卡就是空的。</div>`;
+    h += `<div class="btns"><button class="ghost" onclick="seedEval()">从问答记录生成评测集</button>
+      <button class="ghost" onclick="runEval()">跑一遍看看</button>
+      <button onclick="promote()" ${n === 0 ? 'disabled' : ''}>验证并生效</button></div><div id="gout" style="margin-top:11px"></div>`;
+    $('#gate').innerHTML = h;
+  } catch (e) { $('#gate').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+async function seedEval() {
+  $('#gout').innerHTML = '<div class="gdim">正在生成…</div>';
+  const r = await post('/api/learning/eval/seed');
+  $('#gout').innerHTML = `<div class="gok">从 ${r.scanned} 条问答里生成了 ${r.added} 条用例，现在共 ${r.total_cases} 条。</div>`;
+  loadGate();
+}
+async function runEval() {
+  $('#gout').innerHTML = '<div class="gdim">正在跑（每条都要调一次模型，慢）…</div>';
+  const r = await post('/api/learning/eval/run');
+  let h = `<div class="gok">${esc(r.summary)}</div>`;
+  if (r.note) h += `<div class="gwarn">${esc(r.note)}</div>`;
+  for (const f of r.failures) h += `<div class="gfail"><b>${esc(f.question)}</b><br>${f.problems.map(esc).join('；')}</div>`;
+  $('#gout').innerHTML = h;
+}
+async function promote() {
+  $('#gout').innerHTML = '<div class="gdim">正在验证（先测基线 → 应用 → 再测一次）…</div>';
+  const r = await post('/api/learning/eval/promote');
+  let h = `<div class="${r.allowed ? 'gok' : 'gfail'}">${esc(r.line)}</div><div class="gdim" style="margin-top:5px">${esc(r.reason)}</div>`;
+  for (const f of (r.failures || [])) h += `<div class="gfail"><b>${esc(f.question)}</b><br>${f.problems.map(esc).join('；')}</div>`;
+  $('#gout').innerHTML = h;
+  loadGate(); loadStyles(); loadRejected(); loadPanels();
+}
+async function loadStyles() {
+  const s = await api('/api/learning/styles');
+  $('#styles').innerHTML = !s.items.length ? '<div class="empty">还没有（人工改过草稿、并过了验证之后就有了）</div>' :
+    s.items.slice(0, 8).map((x) => `<div class="style"><div class="q">问：${esc(x.question)}</div><div class="a">改成：${esc(x.answer_after)}</div>${x.diff_summary ? `<div class="d">改了什么：${esc(x.diff_summary)}</div>` : ''}</div>`).join('');
+}
+async function loadRejected() {
+  const r = await api('/api/learning/rejected');
+  const n = r.styles.length + r.synonyms.length;
+  $('#rejected').innerHTML = !n ? '<div class="empty">还没有被拦下的</div>' :
+    r.styles.map((x) => `<div class="style"><div class="q">风格：${esc(x.question)}</div><div class="a">${esc(x.answer_after)}</div></div>`).join('') +
+    r.synonyms.map((x) => `<div class="style"><div class="q">同义词：${esc(x.colloquial)} → ${esc(x.standard)}</div></div>`).join('');
+}
+
+// ═══ 治理 ═══
+async function loadTiers() {
+  const t = await api('/api/tiers');
+  const cur = (await api('/api/learning/tier/current').catch(() => ({}))).tier || 'standard';
+  $('#tiers').innerHTML = t.tiers.map((x) => `<div class="tierbtn ${x.key === cur ? 'on' : ''}" data-k="${x.key}">${x.name}<div class="p">${x.cover}</div></div>`).join('');
+  $('#tiers').onclick = async (e) => {
+    const b = e.target.closest('.tierbtn'); if (!b) return;
+    const p = await api('/api/gov/preview?tier=' + b.dataset.k);
+    const c = p.compare;
+    if (c.now.total === 0) { $('#preview').innerHTML = `<div class="gwarn">${esc(c.warning)}</div>`; return; }
+    const row = (lb, d, better) => `<div class="prow2"><span class="pl2">${lb}</span><span class="pv2">${d.from}</span><span class="pa2">→</span><span class="pn2">${d.to}</span><span class="pd2 ${d.delta === 0 ? '' : (better ? 'down' : 'up')}">${d.delta === 0 ? '不变' : (d.delta > 0 ? '+' : '') + d.delta}</span></div>`;
+    $('#preview').innerHTML = `<div class="gdim" style="margin-bottom:6px">${esc(c.basis)}</div>` +
+      row('自动发送覆盖率', c.coverage, true) + row('需要人确认', c.draft, false) + row('转人工', c.escalate, false) +
+      (c.warning ? `<div class="gwarn">⚠ ${esc(c.warning)}</div>` : '') +
+      `<div class="btns" style="margin-top:10px"><button onclick="applyTier('${b.dataset.k}')">就用这个档位</button></div>`;
+  };
+}
+async function applyTier(k) {
+  await post('/api/learning/tier', { tier: k });
+  $('#preview').innerHTML = '<div class="gok">已切换档位。</div>';
+  loadTiers(); loadPanels();
+}
+async function loadGov() {
+  const st = await api('/api/gov/status');
+  $('#stopbody').innerHTML = st.stopped
+    ? `<div class="stopon">● 已急停 —— 所有自动发送已停止，全部转人工</div><div class="btns" style="margin-top:10px"><button onclick="setStop(false)">恢复自动发送</button></div>`
+    : `<div class="stopoff">○ 正常运行中</div><div class="btns" style="margin-top:10px"><button class="danger" onclick="setStop(true)">立即急停</button></div>`;
+  const h = await api('/api/gov/stop/history');
+  if (h.items.length) {
+    $('#stopbody').insertAdjacentHTML('beforeend', `<div class="gdim" style="margin-top:10px">留痕：</div>` +
+      h.items.slice(0, 4).map((x) => `<div class="stophist">${x.action === 'stop' ? '急停' : '恢复'} · ${esc(x.by_who || '')} · ${(x.created_at || '').slice(0, 16).replace('T', ' ')}${x.reason ? '<br><span class="gdim">' + esc(x.reason) + '</span>' : ''}</div>`).join(''));
+  }
+  $('#shadowbody').innerHTML = `<div class="grow"><div>${st.shadow ? '<b style="color:var(--amber)">影子模式运行中</b> —— AI 只算不发' : '未开启'}</div></div>
+    <div class="btns"><button class="ghost" onclick="setShadow(${!st.shadow})">${st.shadow ? '关掉影子模式' : '开启影子模式'}</button>
+    <button class="ghost" onclick="loadShadowReport()">看对照数据</button></div><div id="shadowout" style="margin-top:11px"></div>`;
+}
+async function setStop(on) {
+  let reason = '';
+  if (on) reason = prompt('急停原因（会留痕，事后复盘用）：', '发现回复内容有问题') || '';
+  const r = await post('/api/gov/stop', { on, by: '控制台', reason });
+  loadGov();
+  $('#out').insertAdjacentHTML('afterbegin', `<div class="card"><div class="gok">${esc(r.message)}</div></div>`);
+}
+async function setShadow(on) {
+  const r = await post('/api/gov/shadow', { on });
+  loadGov();
+  if (on) $('#shadowout').innerHTML = `<div class="gok">${esc(r.message)}</div>`;
+}
+async function loadShadowReport() {
+  $('#shadowout').innerHTML = '<div class="gdim">统计中…</div>';
+  const r = await api('/api/gov/shadow/report');
+  let h = `<div class="gok">${esc(r.summary)}</div>`;
+  for (const e of r.examples) h += `<div class="style"><div class="q">问：${esc(e.question)}</div><div class="a">AI 会答：${esc(e.ai)}</div><div class="d">人实际答：${esc(e.human)}</div></div>`;
+  $('#shadowout').innerHTML = h;
+}
+
+// ═══ 人工 ═══
+async function loadHandover(opts) {
+  // ★★ 把「刷列表」和「刷详情」拆开。
+  //
+  //   用户的反馈：「客服或者销售发消息也就是人工的时候，不要刷新页面，
+  //                现在发现会刷新页面」。
+  //
+  //   ★ 这里的"刷新"其实有三个来源，全都要治：
+  //     ① 按「发送」后 loadHandover() → 详情整块重建
+  //        → 滚动位置回到顶部、正在写的草稿被清空
+  //     ② 每 20 秒的自动刷新 → 同样重建详情
+  //        → 客服正在看上面的对话，突然跳一下
+  //     ③ 详情每次都是**全量重建**，没做差异
+  //
+  //   ★ 修法：
+  //     · 列表每次都刷（它很轻，而且必须实时）
+  //     · 详情**只在明确要求时**才重建（opts.detail === true）
+  //     · 重建时保存并恢复"现场"：滚动位置、草稿内容、光标位置
+  opts = opts || {};
+  try {
+    const d = await api('/api/handover');
+    hoItems = d.items;
+    $('#hoCount').textContent = d.counts.open;
+    $('#holist').innerHTML = !d.items.length ? '<div class="empty">没有待处理的<br><span style="font-size:11px">AI 能答的都自动回了</span></div>' :
+      d.items.map((x, i) => `<div class="hoitem ${hoCur && hoCur.id === x.id ? 'on' : ''}" onclick="pickHo(${i})">
+        <div class="q">${esc(x.question)}</div>
+        <div class="m">${esc(x.user_id || '访客')} · ${(x.created_at || '').slice(11, 16)} · ${x.decision === 'draft' ? 'AI 起过草稿' : '直接转人工'}</div></div>`).join('');
+    if (!hoCur && d.items.length) {
+      hoCur = d.items[0];
+      await renderHo();
+    } else if (opts.detail) {
+      await renderHo();
+    }
+  } catch (e) { $('#holist').innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+function pickHo(i) {
+  if (!hoItems[i]) return;
+  if (hoCur && hoCur.id === hoItems[i].id) return;   // ★ 点同一条不重绘
+  hoCur = hoItems[i];
+  loadHandover();      // 刷列表（改高亮）
+  renderHo();          // 换人了 → 详情必须重绘
+}
+
+/** 画人工详情。
+ *  ★★ 用户的要求：「人工这里可以看到具体用户上下文的聊天记录，这样才好回复与跟进进度」。
+ *     所以中间那块是**完整会话记录**（这个用户问过的每一句 + AI 答的 + 转人工的 +
+ *     之前客服回的），不是只有当前这一句。
+ *     客服扫一眼就知道：他问过几遍了、AI 刚才答了什么、之前谁接手过。
+ */
+async function renderHo() {
+  if (!hoCur) return;
+  const h = hoCur;
+
+  // ★★ 保存"现场"，重绘之后还原。
+  //   不保存的话，每 20 秒的自动刷新会把客服正在看的对话跳回顶部、
+  //   把他正在写的回复清空 —— 这就是用户说的"会刷新页面"。
+  const oldWrap = $('.tlwrap');
+  const oldText = $('#hoText');
+  const keep = {
+    scroll: oldWrap ? oldWrap.scrollTop : null,
+    draft: oldText ? oldText.value : null,
+    focus: document.activeElement && document.activeElement.id === 'hoText',
+    caret: oldText ? oldText.selectionStart : null,
+  };
+
+  $('#hoDetail').innerHTML = '<div class="empty">加载会话记录…</div>';
+  let ctx = null;
+  try { ctx = await api(`/api/handover/${h.id}/context`); } catch (e) { ctx = null; }
+
+  // ── 中栏：完整会话 ──
+  let conv = '';
+  if (ctx && ctx.timeline.length) {
+    conv = ctx.timeline.map((t) => {
+      const who = { user: '客户', ai: 'AI客服', note: '', human: '客服' }[t.kind] || '';
+      const time = (t.at || '').slice(11, 16);
+      if (t.kind === 'note') {
+        return `<div class="tl-note">${esc(t.text)}${t.why ? ' <span class="tl-why">' + esc(t.why) + '</span>' : ''}</div>`;
+      }
+      return `<div class="tl-row">
+        <div class="tl-who">${who}<span class="tl-time">${time}</span></div>
+        <div class="tl-bub ${t.kind}">${esc(t.text)}</div></div>`;
+    }).join('');
+  } else {
+    conv = `<div class="cm u">${esc(h.question)}</div>`;
+  }
+
+  const hits = (() => { try { return JSON.parse(h.retrieved_json || '[]'); } catch (e) { return []; } })();
+  const isDraft = h.decision === 'draft' && h.ai_answer;
+  const st = ctx ? ctx.stats : null;
+
+  $('#hoDetail').innerHTML = `
+    <div class="hodetail">
+      <div class="homain2">
+        <div class="hohdr">
+          <div>
+            <b style="font-size:15px">${esc(h.user_id || '访客')}</b>
+            <span class="gdim" style="margin-left:8px">${esc(h.platform)}</span>
+          </div>
+          <div class="gdim">
+            ${st ? `问过 ${st.asked_before + 1} 次 · 转人工 ${st.handover_times} 次 · 首次 ${esc((st.first_seen || '').slice(5, 16).replace('T', ' '))}` : ''}
+          </div>
+        </div>
+
+        <div class="tlwrap">${conv}</div>
+
+        <div class="frow" style="margin-top:14px"><label>你的回复</label>
+          <textarea id="hoText" rows="3" placeholder="${isDraft ? '' : 'AI 没写草稿，你自己写'}">${isDraft ? esc(h.ai_answer) : ''}</textarea></div>
+        <div class="btns"><button onclick="hoReply()">发送</button>
+          <button class="ghost" style="color:var(--red);border-color:#F3CFCF"
+            onclick='openReport(null, ${JSON.stringify(h.user_id || "")}, ${JSON.stringify((h.question || "").slice(0, 60))})'>⚠ 报个问题</button>
+          <button class="ghost" onclick="hoTake()">接管</button>
+          ${isDraft ? '<button class="ghost" onclick="hoReject()">这条草稿不能用</button>' : ''}
+          <span class="msg" id="hoMsg"></span></div>
+        <div class="gdim" style="margin-top:10px">★ 你改过的内容会进「待验证队列」，过了评测才生效 —— 不会因为一次随手改动就把之后所有回答带偏。</div>
+      </div>
+      <div class="hoside2">
+        <div class="sbox warn"><div class="bt">为什么没答</div><div class="gdim">${esc(h.reason || '—')}</div></div>
+        <div class="sbox"><div class="bt">检索质量</div><div class="gdim">${h.quality ?? '—'}</div></div>
+        <div class="sbox"><div class="bt">命中的资料</div><div class="gdim">${hits.length ? hits.map((x) => esc(x.doc) + '（' + x.score + '）').join('<br>') : '什么都没查到'}</div></div>
+      </div>
+    </div>`;
+
+  // ★★ 还原"现场"。这一步是"不刷新页面"的关键 ——
+  //   没有它的话，上面那句 innerHTML=... 已经把滚动位置和草稿都清了。
+  const nw = $('.tlwrap');
+  if (nw && keep.scroll != null) nw.scrollTop = keep.scroll;
+  const nt = $('#hoText');
+  if (nt) {
+    // ★ 草稿优先用"现在的值"（用户可能刚打了一半），没有才用保存的
+    if (keep.draft != null && !nt.value) nt.value = keep.draft;
+    if (keep.focus) {
+      nt.focus();
+      try { nt.setSelectionRange(keep.caret || nt.value.length, keep.caret || nt.value.length); } catch (e) {}
+    }
+  }
+}
+async function hoReply() {
+  const t = $('#hoText').value.trim(); if (!t) return;
+  $('#hoMsg').className = 'msg'; $('#hoMsg').textContent = '发送中…';
+  try {
+    const r = await post(`/api/handover/${hoCur.id}/reply`, { text: t, by: '我', send: true });
+    if (!r.ok) {
+      $('#hoMsg').className = 'msg err';
+      $('#hoMsg').textContent = '发送失败：' + (r.error || '');
+      return;                     // ★ 失败就什么都不动，草稿留在框里让客服重试
+    }
+    // ★★ 发成功之后**只更新这一块**，不整页重建。
+    //   用户的要求：「客服或者销售发消息的时候不要刷新页面」。
+    //   原来的写法是 hoCur = null; loadHandover() —— 那会把整个详情
+    //   连滚动位置一起重置，客服正在看的上下文"啪"就跳没了。
+    $('#hoText').value = '';
+    $('#hoMsg').className = 'msg ok';
+    $('#hoMsg').textContent = '已发出。' + (r.learned || '');
+    // 把刚发的话**追加到会话记录末尾**（而不是重建）
+    const wrap = $('.tlwrap');
+    if (wrap) {
+      const d = document.createElement('div');
+      d.className = 'tl-row';
+      d.innerHTML = '<div class="tl-who">客服<span class="tl-time">' +
+        new Date().toTimeString().slice(0, 5) + '</span></div>' +
+        '<div class="tl-bub human">' + esc(t) + '</div>';
+      wrap.appendChild(d);
+      wrap.scrollTop = wrap.scrollHeight;     // 滚到底，看得到自己刚发的
+    }
+    // 列表和角标后台刷新（不碰详情）
+    loadHandover();
+    loadGate();
+    refreshBadge();
+  } catch (e) { $('#hoMsg').className = 'msg err'; $('#hoMsg').textContent = e.message; }
+}
+async function hoTake() { await post(`/api/handover/${hoCur.id}/take`, { by: '我' }); $('#hoMsg').className = 'msg ok'; $('#hoMsg').textContent = '已接管'; refreshBadge(); }
+async function hoReject() { await api(`/api/handover/${hoCur.id}/reject?why=wrong_fact`, { method: 'POST' }); hoCur = null; loadHandover(); loadRejected(); refreshBadge(); }
+
+// ═══ 启动 ═══
+loadPanels();
+// ★ 角标每 15 秒刷新一次（和"人工"标签自己的刷新独立）——
+//   用户在别的标签页时也要能看到有新的人工请求。
+setInterval(refreshBadge, 15000);
+refreshIssueBadge();
+setInterval(refreshIssueBadge, 15000);
+// ★★ 人工页的自动刷新：**只在真的有新消息时才重建详情**。
+//
+//   用户的要求：「客服或者销售发消息的时候不要刷新页面」。
+//   原来这里是每 20 秒无脑 loadHandover() → 详情整块重建 →
+//   客服正在看的对话会跳回顶部。
+//
+//   ★ 现在的做法：
+//     · 列表每次都刷（很轻，而且必须实时）
+//     · 详情**只在"待处理条数变多了"时才刷** ——
+//       客户再来消息会生成新的待处理项，条数一变就说明有新的了
+//     · 条数没变 → 只刷列表，详情一动不动
+let _hoLastOpen = -1;
+setInterval(async () => {
+  if (curTab !== 'ho') return;
+  try {
+    const d = await api('/api/handover');
+    const n = d.counts.open;
+    // 条数变了（来新活了）→ 才重建详情
+    await loadHandover({ detail: n !== _hoLastOpen });
+    _hoLastOpen = n;
+  } catch (e) {}
+  refreshBadge();
+}, 20000);
+</script>
+
+<!-- ★★ 报个问题（报事侧：客服/销售，不需要懂技术） -->
+<!-- ★ 技术侧不显示这个：他们是**处理问题的人**，不是报问题的人 -->
+
+<div class="modal" id="reportModal">
+  <div class="mbox">
+    <h2>报个问题</h2>
+    <div class="sub">★ 你只需要说<b>哪儿不对</b>。剩下的（哪个会话、哪句问答、AI 当时怎么判的）
+      系统会自动带上，不用你复制任何东西。</div>
+
+    <label style="margin-bottom:7px">哪儿不对</label>
+    <div class="kinds" id="kindList"></div>
+
+    <div class="frow"><label>一句话说清楚</label>
+      <input type="text" id="isTitle" placeholder="比如：这个答案和制度对不上"></div>
+
+    <div class="frow"><label>要不要紧</label>
+      <div class="sevrow" id="sevList"></div></div>
+
+    <div class="frow"><label>还有什么要说的（可以不填）</label>
+      <textarea id="isDetail" rows="3" placeholder="比如：制度里写的是 3 天，它说 5 天"></textarea></div>
+
+    <div class="frow"><label>你是谁</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="isReporter" placeholder="你的名字" style="flex:1">
+        <select id="isRole" style="width:120px">
+          <option>客服</option><option>销售</option><option>运营</option><option>其他</option>
+        </select></div></div>
+
+    <div class="attach" id="isAttach">系统会自动附上现场信息</div>
+    <div class="btns">
+      <button onclick="submitIssue()" style="background:var(--red)">提交给技术</button>
+      <button class="ghost" onclick="closeReport()">取消</button>
+      <span class="msg" id="isMsg"></span>
+    </div>
+  </div>
+</div>
+</body>
+</html>
