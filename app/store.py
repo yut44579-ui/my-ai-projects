@@ -350,11 +350,56 @@ CREATE TABLE IF NOT EXISTS handover_queue (
     assigned_to     TEXT,          -- 接手的人
     reply_text      TEXT,          -- 客服最终发出去的
     status          TEXT NOT NULL DEFAULT 'open',  -- open/taken/done
+    -- ★ 建单/接管之后客户又发了几条（客服点开会话就清零）。
+    --   为什么需要：人工接管后客户再发消息，AI 是静默的，
+    --   队列里那条看起来一点没变 —— 客服不知道有新内容，
+    --   会一直停在原来的判断上。
+    new_count       INTEGER NOT NULL DEFAULT 0,
+    last_user_at    TEXT,                          -- 客户最后说话的时间
     created_at      TEXT NOT NULL,
     taken_at        TEXT,
     done_at         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ho_status ON handover_queue(tenant_id, status, created_at DESC);
+
+-- ★★ 人工会话（会话级状态，不是单条问题级）
+--
+-- 为什么要单独一张表（用户的反馈）：
+--   「我人工那边接管之后，用户这里不能说一句话就人工接管，
+--     要人工那边主动说结束了才会结束」
+--
+-- ★ 踩到的 bug：
+--   handover_queue 是"一条问题一条记录"，人工回复后就被标成 done。
+--   客户再发一句话 → 系统查不到"有人工在管" → AI 又接管 → 又转一次人工。
+--   表现：人工都在跟客户聊了，右上角还在转"正在为你转接人工客服…"。
+--
+-- ★ 根因是**把"一条问题处理完了"和"这个会话由人工负责"混成了一件事**。
+--   真实情况是：客服接管的是**这个人/这个会话**，不是那一句话。
+--   他答完一句，会话还在他手上，直到他主动说"结束了"。
+--
+-- ★ 所以这里按会话记录状态：
+--   status='active' → AI 完全不介入（pipeline 最先检查这个）
+--   status='ended'  → 交还 AI
+--
+-- ★ take_count 用来限制"同一个人被反复接管"：
+--   同一个人一天被接管太多次，说明要么 AI 一直答不好，要么客户在被踢皮球 ——
+--   两种都该让人看见。
+CREATE TABLE IF NOT EXISTS human_session (
+    id              INTEGER PRIMARY KEY,
+    tenant_id       TEXT NOT NULL,
+    platform        TEXT NOT NULL,
+    user_id         TEXT,
+    conversation_id TEXT,
+    assigned_to     TEXT,          -- 谁在管
+    status          TEXT NOT NULL DEFAULT 'active',  -- active / ended
+    take_count      INTEGER NOT NULL DEFAULT 1,      -- ★ 这个会话是第几次被接管
+    started_at      TEXT NOT NULL,
+    ended_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_hs_active
+    ON human_session(tenant_id, platform, status, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hs_user
+    ON human_session(tenant_id, platform, user_id, started_at DESC);
 
 -- ★ 网页渠道的"发件箱"。
 --   为什么网页渠道需要它，而企微/飞书不需要：
@@ -406,11 +451,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("synonym", "status", "TEXT NOT NULL DEFAULT 'pending'"),
         ("qa_log", "would_be_decision", "TEXT"),
         ("qa_log", "intent", "TEXT"),
+        # ★ 客户在人工接管期间又说了几句 —— 工作台用来提示"有新消息"。
+        #   没有它的话：人工接管后客户再发消息，AI 是静默的，
+        #   队列里那条看起来一点没变，客服会一直停在原来的判断上。
+        ("handover_queue", "new_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("handover_queue", "last_user_at", "TEXT"),
     ]
     for table, col, decl in adds:
         cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if col not in cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
 
 
 def rows(sql: str, params: tuple = ()) -> list[dict[str, Any]]:

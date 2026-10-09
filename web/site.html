@@ -453,7 +453,12 @@ $('#go2').onclick = send;
 $('#q2').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#panel2').classList.remove('on'); });
 
-let waitEl = null;   // ★ 当前那个转圈的等待条（同一时刻只该有一个）
+let waitEl = null;
+// ★★ 当前是不是**人工在管**这个会话。
+//   为什么前端也要记这个：
+//   send() 会无条件把状态文字改成"正在看…"，而人工模式下不该改 ——
+//   客户发完消息看到"正在看…"，然后人工过一会儿才回，他会以为又是机器人在转。
+let humanMode = false;   // ★ 当前那个转圈的等待条（同一时刻只该有一个）
 
 /** ★★ 显示"正在转接人工"的转圈。
  *  用户的要求：转人工时一直转，**人工点了接管才停**。
@@ -533,11 +538,15 @@ function handleMsg(m) {
     return;
   }
   if (m.kind === 'taken') {
+    humanMode = true;   // ★ 人工接管了，后面不再显示"等待人工接入…"
+
     stopWaiting(m.content || '客服已接入');
     $('#st2').textContent = '客服已接入';
     return;
   }
   if (m.kind === 'human') {
+    humanMode = true;   // ★ 客服说话了 = 人工在管
+
     // ★ 真人说话了 —— 不管有没有在转圈，都停掉
     stopWaiting('');
     // ★ 用**真人样式**（绿色气泡），和 AI 的白气泡区分开。
@@ -553,6 +562,11 @@ function handleMsg(m) {
   if (m.kind === 'system') {
     // 一般的系统提示（非等待类）：转圈该停了
     stopWaiting('');
+    // ★ 客服结束接管 → 交还 AI，状态回到"在线"
+    if (humanMode && /结束接管|已结束本次服务/.test(m.content || '')) {
+      humanMode = false;
+      $('#st2').textContent = '在线';
+    }
     add('sys', m.content);
     return;
   }
@@ -573,8 +587,10 @@ async function send() {
       body: JSON.stringify({ session: SESSION, text: q }),
     });
     if (!r.ok) throw new Error(await r.text());
-    // ★ 正在等人工的时候，不要让"正在看…"把状态覆盖掉
-    if (!waitEl) $('#st2').textContent = '正在看…';
+    // ★ 正在等人工、或者人工已经在管的时候，都不要改状态文字
+    //   （人工模式下客户发完消息，客服可能过一会儿才回 ——
+    //    这时候显示"正在看…"会让人以为又是机器人在处理）
+    if (!waitEl && !humanMode) $('#st2').textContent = '正在看…';
     startPoll();
   } catch (e) {
     add('sys', '发送失败：' + String(e.message).slice(0, 60));
