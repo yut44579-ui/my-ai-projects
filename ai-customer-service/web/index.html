@@ -1493,7 +1493,8 @@ async function loadHandover(opts) {
     //     即使列表一条没变，浏览器也要重新解析、重新排版一整块 DOM，
     //     表现出来就是**左边那个列表闪一下**。用户看到的就是"刷新"。
     //   ★ 修法：比一下有没有变（id + 状态），没变就一个字都不动。
-    const sig = d.items.map((x) => x.id + ':' + (x.status || '')).join('|');
+    // ★ 指纹要把 new_count 算进去 —— 不然「客户又说了 N 句」这个提示刷不出来
+    const sig = d.items.map((x) => x.id + ':' + (x.status || '') + ':' + (x.new_count || 0)).join('|');
     if (sig !== _hoListSig) {
       _hoListSig = sig;
       $('#holist').innerHTML = !d.items.length ? '<div class="empty">没有待处理的<br><span style="font-size:11px">AI 能答的都自动回了</span></div>' :
@@ -1548,6 +1549,13 @@ async function renderHo() {
   //   失败不影响看会话（辅助动作不能把主流程带崩）。
   if (h.new_count > 0) {
     try { await post(`/api/handover/${h.id}/seen`, {}); h.new_count = 0; } catch (e) {}
+    // ★ 标完已读，把列表里同一条也同步掉 ——
+    //   不然左边还显示「● 又说了 2 句」，客服以为还有没看的。
+    const inList = (hoItems || []).filter((x) => x.id === h.id)[0];
+    if (inList) inList.new_count = 0;
+    // ★ 有新消息时滚到最底 —— 客服要看的就是最新的那几句。
+    //   从 renderHo 末尾的"恢复滚动位置"逻辑里排除掉（见下面的 _scrollBottom）。
+    window.__hoScrollBottom = true;
   }
 
   // ── 中栏：完整会话 ──
@@ -1627,7 +1635,15 @@ async function renderHo() {
   // ★★ 还原"现场"。这一步是"不刷新页面"的关键 ——
   //   没有它的话，上面那句 innerHTML=... 已经把滚动位置和草稿都清了。
   const nw = $('.tlwrap');
-  if (nw && keep.scroll != null) nw.scrollTop = keep.scroll;
+  // ★★ 有新消息触发的重建：直接滚到最底（客服要看的就是最新那几句），
+  //    不要恢复旧位置 —— 否则新消息在下面看不到，等于白刷了。
+  //    其余情况仍然恢复原位置（这是"不刷新页面"的关键，不能丢）。
+  if (window.__hoScrollBottom) {
+    window.__hoScrollBottom = false;
+    if (nw) nw.scrollTop = nw.scrollHeight;
+  } else if (nw && keep.scroll != null) {
+    nw.scrollTop = keep.scroll;
+  }
   const nt = $('#hoText');
   if (nt) {
     // ★ 草稿优先用"现在的值"（用户可能刚打了一半），没有才用保存的
@@ -1756,8 +1772,14 @@ setInterval(async () => {
   try {
     const d = await api('/api/handover');
     const n = d.counts.open;
-    // 条数变了（来新活了）→ 才重建详情
-    await loadHandover({ detail: n !== _hoLastOpen });
+    // ★★ 详情要不要重建，看的是**当前这条有没有新消息**，
+    //   不是看 open 总数。
+    //   ★ 原来只看 open 总数 → 客户在人工会话里发消息时 open 不变
+    //     → 详情永远不刷新 → 客服看不到客户说的话（用户的反馈）。
+    const cur = hoCur ? d.items.filter((x) => x.id === hoCur.id)[0] : null;
+    const hasNew = !!(cur && cur.new_count > 0);
+    // 有新消息就重建详情（一定要刷新），或者来新活了也刷
+    await loadHandover({ detail: hasNew || n !== _hoLastOpen });
     _hoLastOpen = n;
   } catch (e) {}
   refreshBadge();
